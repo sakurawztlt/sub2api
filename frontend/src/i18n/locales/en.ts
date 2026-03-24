@@ -851,6 +851,7 @@ export default {
     serviceTierFlex: 'Flex',
     serviceTierStandard: 'Standard',
     rate: 'Rate',
+    rateDisplay: '{rate}x Rate',
     original: 'Original',
     billed: 'Billed',
     noRecords: 'No usage records found. Try adjusting your filters.',
