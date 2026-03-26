@@ -476,6 +476,19 @@
       <!-- Batch Add Form -->
       <div v-else class="space-y-5">
         <div>
+          <label class="input-label">{{ t('admin.proxies.batchNamePrefix') }}</label>
+          <input
+            v-model="batchNamePrefix"
+            type="text"
+            class="input"
+            :placeholder="t('admin.proxies.batchNamePrefixPlaceholder')"
+          />
+          <p class="input-hint mt-2">
+            {{ t('admin.proxies.batchNamePrefixHint') }}
+          </p>
+        </div>
+
+        <div>
           <label class="input-label">{{ t('admin.proxies.batchInput') }}</label>
           <textarea
             v-model="batchInput"
@@ -1008,6 +1021,7 @@ const qualityReport = ref<ProxyQualityCheckResult | null>(null)
 
 // Batch import state
 const createMode = ref<'standard' | 'batch'>('standard')
+const batchNamePrefix = ref('')
 const batchInput = ref('')
 const batchParseResult = reactive({
   total: 0,
@@ -1143,6 +1157,7 @@ const closeCreateModal = () => {
   createForm.username = ''
   createForm.password = ''
   createPasswordVisible.value = false
+  batchNamePrefix.value = ''
   batchInput.value = ''
   batchParseResult.total = 0
   batchParseResult.valid = 0
@@ -1222,10 +1237,18 @@ const parseBatchInput = () => {
 
 const handleBatchCreate = async () => {
   if (batchParseResult.valid === 0) return
+  const trimmedNamePrefix = batchNamePrefix.value.trim()
+  if (!trimmedNamePrefix) {
+    appStore.showError(t('admin.proxies.batchNamePrefixRequired'))
+    return
+  }
 
   submitting.value = true
   try {
-    const result = await adminAPI.proxies.batchCreate(batchParseResult.proxies)
+    const result = await adminAPI.proxies.batchCreate({
+      name_prefix: trimmedNamePrefix,
+      proxies: batchParseResult.proxies
+    })
     const created = result.created || 0
     const skipped = result.skipped || 0
 
