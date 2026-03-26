@@ -1053,6 +1053,67 @@ export interface CheckMixedChannelResponse {
   details?: MixedChannelWarningDetails
 }
 
+export interface CodexBulkImportRequest {
+  batch_id?: string
+  name_template?: string
+  refresh_tokens: string[]
+  proxy_pool_ids?: number[]
+  accounts_per_proxy?: number
+  group_ids?: number[]
+  concurrency?: number
+  priority?: number
+  notes?: string | null
+  rate_multiplier?: number | null
+  load_factor?: number | null
+  skip_default_group_bind?: boolean
+}
+
+export interface CodexBulkImportSummary {
+  requested_count: number
+  parsed_count: number
+  created_count?: number
+  failed_count: number
+  selected_proxy_count: number
+  eligible_proxy_count: number
+  accounts_per_proxy: number
+  total_capacity: number
+  remaining_capacity: number
+}
+
+export interface CodexBulkImportItemResult {
+  line_no: number
+  token_hint: string
+  name: string
+  status: 'created' | 'failed'
+  reason?: string
+  proxy_id?: number | null
+  proxy_name?: string
+  account_id?: number | null
+  email?: string
+  plan_type?: string
+}
+
+export interface CodexBulkImportProxyAllocation {
+  proxy_id: number
+  proxy_name: string
+  account_count: number
+  allocatable_capacity: number
+  assigned_count: number
+  total_after_import: number
+  quality_status?: string
+  quality_grade?: string
+  quality_score?: number | null
+  latency_status?: string
+}
+
+export interface CodexBulkImportResult {
+  batch_id: string
+  summary: CodexBulkImportSummary
+  items: CodexBulkImportItemResult[]
+  proxy_allocations: CodexBulkImportProxyAllocation[]
+  accounts?: Account[]
+}
+
 export interface CreateProxyRequest {
   name: string
   protocol: ProxyProtocol

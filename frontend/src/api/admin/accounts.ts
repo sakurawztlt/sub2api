@@ -21,7 +21,9 @@ import type {
   CodexSessionImportResult,
   CheckMixedChannelRequest,
   CheckMixedChannelResponse,
-  BatchAccountTestStreamEvent
+  BatchAccountTestStreamEvent,
+  CodexBulkImportRequest,
+  CodexBulkImportResult
 } from '@/types'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api/v1'
@@ -608,6 +610,17 @@ export async function importCodexSession(payload: CodexSessionImportRequest): Pr
   return data
 }
 
+export async function createCodexBulkImport(
+  payload: CodexBulkImportRequest
+): Promise<CodexBulkImportResult> {
+  const { data } = await apiClient.post<CodexBulkImportResult>(
+    '/admin/openai/codex/bulk-import',
+    payload,
+    { timeout: 120000 }
+  )
+  return data
+}
+
 /**
  * Get Antigravity default model mapping from backend
  * @returns Default model mapping (from -> to)
@@ -796,6 +809,7 @@ export const accountsAPI = {
   exportData,
   importData,
   importCodexSession,
+  createCodexBulkImport,
   getAntigravityDefaultModelMapping,
   batchClearError,
   batchRefresh,

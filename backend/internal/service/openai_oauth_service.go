@@ -200,7 +200,7 @@ func (s *OpenAIOAuthService) ExchangeCode(ctx context.Context, input *OpenAIExch
 		tokenInfo.PlanType = userInfo.PlanType
 	}
 
-	s.enrichTokenInfo(ctx, tokenInfo, proxyURL)
+	s.enrichTokenInfo(ctx, tokenInfo, proxyURL, true)
 
 	return tokenInfo, nil
 }
@@ -210,13 +210,28 @@ func (s *OpenAIOAuthService) RefreshToken(ctx context.Context, refreshToken stri
 	return s.RefreshTokenWithClientID(ctx, refreshToken, proxyURL, "")
 }
 
-// RefreshTokenWithClientID refreshes an OpenAI OAuth token with optional client_id.
+// ValidateRefreshTokenWithClientID validates an OpenAI/Sora OAuth refresh token
+// and enriches token metadata without performing privacy-setting side effects.
+func (s *OpenAIOAuthService) ValidateRefreshTokenWithClientID(ctx context.Context, refreshToken string, proxyURL string, clientID string) (*OpenAITokenInfo, error) {
+	tokenResp, err := s.oauthClient.RefreshTokenWithClientID(ctx, refreshToken, proxyURL, clientID)
+	if err != nil {
+		return nil, err
+	}
+
+	return s.buildTokenInfoFromRefreshResponse(ctx, tokenResp, proxyURL, clientID, false), nil
+}
+
+// RefreshTokenWithClientID refreshes an OpenAI/Sora OAuth token with optional client_id.
 func (s *OpenAIOAuthService) RefreshTokenWithClientID(ctx context.Context, refreshToken string, proxyURL string, clientID string) (*OpenAITokenInfo, error) {
 	tokenResp, err := s.oauthClient.RefreshTokenWithClientID(ctx, refreshToken, proxyURL, clientID)
 	if err != nil {
 		return nil, err
 	}
 
+	return s.buildTokenInfoFromRefreshResponse(ctx, tokenResp, proxyURL, clientID, true), nil
+}
+
+func (s *OpenAIOAuthService) buildTokenInfoFromRefreshResponse(ctx context.Context, tokenResp *openai.TokenResponse, proxyURL string, clientID string, applyPrivacyMode bool) *OpenAITokenInfo {
 	// Parse ID token to get user info
 	var userInfo *openai.UserInfo
 	if tokenResp.IDToken != "" {
@@ -247,15 +262,15 @@ func (s *OpenAIOAuthService) RefreshTokenWithClientID(ctx context.Context, refre
 		tokenInfo.PlanType = userInfo.PlanType
 	}
 
-	s.enrichTokenInfo(ctx, tokenInfo, proxyURL)
+	s.enrichTokenInfo(ctx, tokenInfo, proxyURL, applyPrivacyMode)
 
-	return tokenInfo, nil
+	return tokenInfo
 }
 
 // enrichTokenInfo 通过 ChatGPT backend-api 补全 tokenInfo 并设置隐私（best-effort）。
 // 从 accounts/check 获取最新 plan_type、subscription_expires_at、email，
 // 然后尝试关闭训练数据共享。适用于所有获取/刷新 token 的路径。
-func (s *OpenAIOAuthService) enrichTokenInfo(ctx context.Context, tokenInfo *OpenAITokenInfo, proxyURL string) {
+func (s *OpenAIOAuthService) enrichTokenInfo(ctx context.Context, tokenInfo *OpenAITokenInfo, proxyURL string, applyPrivacyMode bool) {
 	if tokenInfo.AccessToken == "" || s.privacyClientFactory == nil {
 		return
 	}
@@ -284,8 +299,10 @@ func (s *OpenAIOAuthService) enrichTokenInfo(ctx context.Context, tokenInfo *Ope
 		}
 	}
 
-	// 尝试设置隐私（关闭训练数据共享），best-effort
-	tokenInfo.PrivacyMode = disableOpenAITraining(ctx, s.privacyClientFactory, tokenInfo.AccessToken, proxyURL)
+	if applyPrivacyMode {
+		// 尝试设置隐私（关闭训练数据共享），best-effort
+		tokenInfo.PrivacyMode = disableOpenAITraining(ctx, s.privacyClientFactory, tokenInfo.AccessToken, proxyURL)
+	}
 }
 
 func resolveChatGPTSubscriptionAccountID(tokenInfo *OpenAITokenInfo, orgID string) string {
@@ -338,7 +355,7 @@ func (s *OpenAIOAuthService) RefreshAccountToken(ctx context.Context, account *A
 				tokenInfo.ExpiresAt = expiresAt.Unix()
 				tokenInfo.ExpiresIn = int64(time.Until(*expiresAt).Seconds())
 			}
-			s.enrichTokenInfo(ctx, tokenInfo, proxyURL)
+			s.enrichTokenInfo(ctx, tokenInfo, proxyURL, true)
 			return tokenInfo, nil
 		}
 		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_OAUTH_NO_REFRESH_TOKEN", "no refresh token available")
