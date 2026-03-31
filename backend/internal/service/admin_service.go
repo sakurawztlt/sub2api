@@ -801,14 +801,65 @@ func (s *adminServiceImpl) DeleteUser(ctx context.Context, id int64) error {
 	if user.Role == "admin" {
 		return errors.New("cannot delete admin user")
 	}
-	if err := s.userRepo.Delete(ctx, id); err != nil {
+
+	opCtx := ctx
+	var tx *dbent.Tx
+	if s.entClient == nil {
+		logger.LegacyPrintf("service.admin", "Warning: entClient is nil, skipping transaction protection for user deletion")
+	} else {
+		tx, err = s.entClient.Tx(ctx)
+		if err != nil {
+			return fmt.Errorf("begin transaction: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
+		opCtx = dbent.NewTxContext(ctx, tx)
+	}
+
+	userKeys, err := s.listUserAPIKeys(opCtx, id)
+	if err != nil {
+		return fmt.Errorf("list user api keys: %w", err)
+	}
+	for i := range userKeys {
+		if err := s.apiKeyRepo.Delete(opCtx, userKeys[i].ID); err != nil {
+			return fmt.Errorf("delete user api key %d: %w", userKeys[i].ID, err)
+		}
+	}
+
+	if err := s.userRepo.Delete(opCtx, id); err != nil {
 		logger.LegacyPrintf("service.admin", "delete user failed: user_id=%d err=%v", id, err)
 		return err
 	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit transaction: %w", err)
+		}
+	}
 	if s.authCacheInvalidator != nil {
-		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, id)
+		for i := range userKeys {
+			s.authCacheInvalidator.InvalidateAuthCacheByKey(ctx, userKeys[i].Key)
+		}
 	}
 	return nil
+}
+
+func (s *adminServiceImpl) listUserAPIKeys(ctx context.Context, userID int64) ([]APIKey, error) {
+	const pageSize = 100
+
+	params := pagination.PaginationParams{Page: 1, PageSize: pageSize}
+	keys := make([]APIKey, 0)
+	for {
+		pageKeys, page, err := s.apiKeyRepo.ListByUserID(ctx, userID, params, APIKeyListFilters{})
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, pageKeys...)
+		if page == nil || params.Page >= page.Pages || len(pageKeys) == 0 {
+			break
+		}
+		params.Page++
+	}
+
+	return keys, nil
 }
 
 func (s *adminServiceImpl) UpdateUserBalance(ctx context.Context, userID int64, balance float64, operation string, notes string) (*User, error) {

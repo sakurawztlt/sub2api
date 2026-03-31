@@ -32,9 +32,10 @@ func newAPIKeyRepositoryWithSQL(client *dbent.Client, sqlq sqlExecutor) *apiKeyR
 	return &apiKeyRepository{client: client, sql: sqlq}
 }
 
-func (r *apiKeyRepository) activeQuery() *dbent.APIKeyQuery {
+func (r *apiKeyRepository) activeQuery(ctx context.Context) *dbent.APIKeyQuery {
 	// 默认过滤已软删除记录，避免删除后仍被查询到。
-	return r.client.APIKey.Query().Where(apikey.DeletedAtIsNil())
+	client := clientFromContext(ctx, r.client)
+	return client.APIKey.Query().Where(apikey.DeletedAtIsNil())
 }
 
 func (r *apiKeyRepository) Create(ctx context.Context, key *service.APIKey) error {
@@ -70,7 +71,7 @@ func (r *apiKeyRepository) Create(ctx context.Context, key *service.APIKey) erro
 }
 
 func (r *apiKeyRepository) GetByID(ctx context.Context, id int64) (*service.APIKey, error) {
-	m, err := r.activeQuery().
+	m, err := r.activeQuery(ctx).
 		Where(apikey.IDEQ(id)).
 		WithUser().
 		WithGroup().
@@ -90,7 +91,7 @@ func (r *apiKeyRepository) GetByID(ctx context.Context, id int64) (*service.APIK
 //   - 不加载完整的 API Key 实体及其关联数据（User、Group 等）
 //   - 适用于删除等只需 key 与用户 ID 的场景
 func (r *apiKeyRepository) GetKeyAndOwnerID(ctx context.Context, id int64) (string, int64, error) {
-	m, err := r.activeQuery().
+	m, err := r.activeQuery(ctx).
 		Where(apikey.IDEQ(id)).
 		Select(apikey.FieldKey, apikey.FieldUserID).
 		Only(ctx)
@@ -104,7 +105,7 @@ func (r *apiKeyRepository) GetKeyAndOwnerID(ctx context.Context, id int64) (stri
 }
 
 func (r *apiKeyRepository) GetByKey(ctx context.Context, key string) (*service.APIKey, error) {
-	m, err := r.activeQuery().
+	m, err := r.activeQuery(ctx).
 		Where(apikey.KeyEQ(key)).
 		WithUser().
 		WithGroup().
@@ -119,7 +120,7 @@ func (r *apiKeyRepository) GetByKey(ctx context.Context, key string) (*service.A
 }
 
 func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*service.APIKey, error) {
-	m, err := r.activeQuery().
+	m, err := r.activeQuery(ctx).
 		Where(apikey.KeyEQ(key)).
 		Select(
 			apikey.FieldID,
@@ -273,7 +274,8 @@ func (r *apiKeyRepository) Delete(ctx context.Context, id int64) error {
 	// 存在唯一键约束 生成tombstone key 用来释放原key，长度远小于 128，满足 schema 限制
 	tombstoneKey := fmt.Sprintf("__deleted__%d__%d", id, time.Now().UnixNano())
 	// 显式软删除：避免依赖 Hook 行为，确保 deleted_at 一定被设置。
-	affected, err := r.client.APIKey.Update().
+	client := clientFromContext(ctx, r.client)
+	affected, err := client.APIKey.Update().
 		Where(apikey.IDEQ(id), apikey.DeletedAtIsNil()).
 		SetKey(tombstoneKey).
 		SetDeletedAt(time.Now()).
@@ -285,7 +287,7 @@ func (r *apiKeyRepository) Delete(ctx context.Context, id int64) error {
 		return err
 	}
 	if affected == 0 {
-		exists, err := r.client.APIKey.Query().
+		exists, err := client.APIKey.Query().
 			Where(apikey.IDEQ(id)).
 			Exist(mixins.SkipSoftDelete(ctx))
 		if err != nil {
@@ -300,7 +302,7 @@ func (r *apiKeyRepository) Delete(ctx context.Context, id int64) error {
 }
 
 func (r *apiKeyRepository) ListByUserID(ctx context.Context, userID int64, params pagination.PaginationParams, filters service.APIKeyListFilters) ([]service.APIKey, *pagination.PaginationResult, error) {
-	q := r.activeQuery().Where(apikey.UserIDEQ(userID))
+	q := r.activeQuery(ctx).Where(apikey.UserIDEQ(userID))
 
 	// Apply filters
 	if filters.Search != "" {
@@ -361,17 +363,17 @@ func (r *apiKeyRepository) VerifyOwnership(ctx context.Context, userID int64, ap
 }
 
 func (r *apiKeyRepository) CountByUserID(ctx context.Context, userID int64) (int64, error) {
-	count, err := r.activeQuery().Where(apikey.UserIDEQ(userID)).Count(ctx)
+	count, err := r.activeQuery(ctx).Where(apikey.UserIDEQ(userID)).Count(ctx)
 	return int64(count), err
 }
 
 func (r *apiKeyRepository) ExistsByKey(ctx context.Context, key string) (bool, error) {
-	count, err := r.activeQuery().Where(apikey.KeyEQ(key)).Count(ctx)
+	count, err := r.activeQuery(ctx).Where(apikey.KeyEQ(key)).Count(ctx)
 	return count > 0, err
 }
 
 func (r *apiKeyRepository) ListByGroupID(ctx context.Context, groupID int64, params pagination.PaginationParams) ([]service.APIKey, *pagination.PaginationResult, error) {
-	q := r.activeQuery().Where(apikey.GroupIDEQ(groupID))
+	q := r.activeQuery(ctx).Where(apikey.GroupIDEQ(groupID))
 
 	total, err := q.Count(ctx)
 	if err != nil {
@@ -427,7 +429,7 @@ func apiKeyListOrder(params pagination.PaginationParams) []func(*entsql.Selector
 
 // SearchAPIKeys searches API keys by user ID and/or keyword (name)
 func (r *apiKeyRepository) SearchAPIKeys(ctx context.Context, userID int64, keyword string, limit int) ([]service.APIKey, error) {
-	q := r.activeQuery()
+	q := r.activeQuery(ctx)
 	if userID > 0 {
 		q = q.Where(apikey.UserIDEQ(userID))
 	}
@@ -469,12 +471,12 @@ func (r *apiKeyRepository) UpdateGroupIDByUserAndGroup(ctx context.Context, user
 
 // CountByGroupID 获取分组的 API Key 数量
 func (r *apiKeyRepository) CountByGroupID(ctx context.Context, groupID int64) (int64, error) {
-	count, err := r.activeQuery().Where(apikey.GroupIDEQ(groupID)).Count(ctx)
+	count, err := r.activeQuery(ctx).Where(apikey.GroupIDEQ(groupID)).Count(ctx)
 	return int64(count), err
 }
 
 func (r *apiKeyRepository) ListKeysByUserID(ctx context.Context, userID int64) ([]string, error) {
-	keys, err := r.activeQuery().
+	keys, err := r.activeQuery(ctx).
 		Where(apikey.UserIDEQ(userID)).
 		Select(apikey.FieldKey).
 		Strings(ctx)
@@ -485,7 +487,7 @@ func (r *apiKeyRepository) ListKeysByUserID(ctx context.Context, userID int64) (
 }
 
 func (r *apiKeyRepository) ListKeysByGroupID(ctx context.Context, groupID int64) ([]string, error) {
-	keys, err := r.activeQuery().
+	keys, err := r.activeQuery(ctx).
 		Where(apikey.GroupIDEQ(groupID)).
 		Select(apikey.FieldKey).
 		Strings(ctx)
