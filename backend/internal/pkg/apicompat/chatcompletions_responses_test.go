@@ -203,6 +203,126 @@ func TestChatCompletionsToResponses_EmptyBase64ImageURLSkipped(t *testing.T) {
 	assert.Equal(t, "Describe this", parts[0].Text)
 }
 
+func TestChatCompletionsToResponses_FileInlineBase64(t *testing.T) {
+	// OpenAI Chat Completions multi-modal file input:
+	//   {type: "file", file: {filename, file_data}} → input_file
+	content := `[{"type":"text","text":"Summarize"},{"type":"file","file":{"filename":"report.pdf","file_data":"data:application/pdf;base64,JVBERi0x"}}]`
+	req := &ChatCompletionsRequest{
+		Model: "gpt-4o",
+		Messages: []ChatMessage{
+			{Role: "user", Content: json.RawMessage(content)},
+		},
+	}
+	resp, err := ChatCompletionsToResponses(req)
+	require.NoError(t, err)
+
+	var items []ResponsesInputItem
+	require.NoError(t, json.Unmarshal(resp.Input, &items))
+	require.Len(t, items, 1)
+
+	var parts []ResponsesContentPart
+	require.NoError(t, json.Unmarshal(items[0].Content, &parts))
+	require.Len(t, parts, 2)
+	assert.Equal(t, "input_text", parts[0].Type)
+	assert.Equal(t, "input_file", parts[1].Type)
+	assert.Equal(t, "report.pdf", parts[1].Filename)
+	assert.Equal(t, "data:application/pdf;base64,JVBERi0x", parts[1].FileData)
+}
+
+func TestChatCompletionsToResponses_FileByID(t *testing.T) {
+	content := `[{"type":"text","text":"Read this"},{"type":"file","file":{"file_id":"file-abc123"}}]`
+	req := &ChatCompletionsRequest{
+		Model: "gpt-4o",
+		Messages: []ChatMessage{
+			{Role: "user", Content: json.RawMessage(content)},
+		},
+	}
+	resp, err := ChatCompletionsToResponses(req)
+	require.NoError(t, err)
+
+	var items []ResponsesInputItem
+	require.NoError(t, json.Unmarshal(resp.Input, &items))
+	var parts []ResponsesContentPart
+	require.NoError(t, json.Unmarshal(items[0].Content, &parts))
+	require.Len(t, parts, 2)
+	assert.Equal(t, "input_file", parts[1].Type)
+	assert.Equal(t, "file-abc123", parts[1].FileID)
+	assert.Empty(t, parts[1].FileData)
+}
+
+func TestChatCompletionsToResponses_FileEmptyBase64Skipped(t *testing.T) {
+	// Empty base64 payload in a file part should be skipped (same policy as
+	// empty image_url data URIs).
+	content := `[{"type":"text","text":"Hi"},{"type":"file","file":{"filename":"x.pdf","file_data":"data:application/pdf;base64,"}}]`
+	req := &ChatCompletionsRequest{
+		Model: "gpt-4o",
+		Messages: []ChatMessage{
+			{Role: "user", Content: json.RawMessage(content)},
+		},
+	}
+	resp, err := ChatCompletionsToResponses(req)
+	require.NoError(t, err)
+
+	var items []ResponsesInputItem
+	require.NoError(t, json.Unmarshal(resp.Input, &items))
+	var parts []ResponsesContentPart
+	require.NoError(t, json.Unmarshal(items[0].Content, &parts))
+	require.Len(t, parts, 1)
+	assert.Equal(t, "input_text", parts[0].Type)
+}
+
+// ---------------------------------------------------------------------------
+// Reverse conversion tests: input_file → Anthropic document block
+// ---------------------------------------------------------------------------
+
+func TestResponsesInputFileToAnthropicBlock_DataURI(t *testing.T) {
+	part := ResponsesContentPart{
+		Type:     "input_file",
+		Filename: "quarterly.pdf",
+		FileData: "data:application/pdf;base64,JVBERi0x",
+	}
+	block := responsesInputFileToAnthropicBlock(part)
+	assert.Equal(t, "document", block.Type)
+	require.NotNil(t, block.Source)
+	assert.Equal(t, "base64", block.Source.Type)
+	assert.Equal(t, "application/pdf", block.Source.MediaType)
+	assert.Equal(t, "JVBERi0x", block.Source.Data)
+	assert.Equal(t, "quarterly.pdf", block.Title)
+}
+
+func TestResponsesInputFileToAnthropicBlock_FileID(t *testing.T) {
+	// FileID → text placeholder because the raw bytes aren't recoverable.
+	part := ResponsesContentPart{
+		Type:     "input_file",
+		Filename: "report.pdf",
+		FileID:   "file-abc123",
+	}
+	block := responsesInputFileToAnthropicBlock(part)
+	assert.Equal(t, "text", block.Type)
+	assert.Contains(t, block.Text, "report.pdf")
+}
+
+func TestResponsesInputFileToAnthropicBlock_FileIDWithoutFilename(t *testing.T) {
+	part := ResponsesContentPart{
+		Type:   "input_file",
+		FileID: "file-xyz",
+	}
+	block := responsesInputFileToAnthropicBlock(part)
+	assert.Equal(t, "text", block.Type)
+	assert.Contains(t, block.Text, "file-xyz")
+}
+
+func TestResponsesInputFileToAnthropicBlock_MalformedDataURI(t *testing.T) {
+	// A FileData field that isn't a valid data URI falls through to empty text.
+	part := ResponsesContentPart{
+		Type:     "input_file",
+		FileData: "not-a-valid-uri",
+	}
+	block := responsesInputFileToAnthropicBlock(part)
+	assert.Equal(t, "text", block.Type)
+	assert.Empty(t, block.Text)
+}
+
 func TestChatCompletionsToResponses_WhitespaceOnlyBase64ImageURLSkipped(t *testing.T) {
 	content := `[{"type":"text","text":"Describe this"},{"type":"image_url","image_url":{"url":"data:image/png;base64,   "}}]`
 	req := &ChatCompletionsRequest{

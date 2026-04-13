@@ -259,6 +259,8 @@ func convertResponsesUserToAnthropicContent(raw json.RawMessage) (json.RawMessag
 					Source: src,
 				})
 			}
+		case "input_file":
+			blocks = append(blocks, responsesInputFileToAnthropicBlock(p))
 		}
 	}
 
@@ -344,6 +346,43 @@ func dataURIToAnthropicImageSource(dataURI string) *AnthropicImageSource {
 		MediaType: mediaType,
 		Data:      data,
 	}
+}
+
+// responsesInputFileToAnthropicBlock reverses an OpenAI Responses API
+// `input_file` content part into an Anthropic `document` content block.
+//
+//   - FileData (data URI) → document block with base64 source (MediaType
+//     parsed from the data URI; defaults to application/pdf if the URI
+//     lacks a media type)
+//   - FileID (reference only) → text placeholder — the raw bytes are not
+//     available to reconstruct a base64 document block
+//
+// The part's Filename is preserved as the document Title when present.
+func responsesInputFileToAnthropicBlock(p ResponsesContentPart) AnthropicContentBlock {
+	if p.FileData != "" {
+		src := dataURIToAnthropicImageSource(p.FileData)
+		if src != nil {
+			if src.MediaType == "" {
+				src.MediaType = "application/pdf"
+			}
+			return AnthropicContentBlock{
+				Type:   "document",
+				Source: src,
+				Title:  p.Filename,
+			}
+		}
+	}
+	if p.FileID != "" {
+		label := p.Filename
+		if label == "" {
+			label = p.FileID
+		}
+		return AnthropicContentBlock{
+			Type: "text",
+			Text: "[File reference: " + label + "]",
+		}
+	}
+	return AnthropicContentBlock{Type: "text", Text: ""}
 }
 
 // mergeConsecutiveMessages merges consecutive messages with the same role

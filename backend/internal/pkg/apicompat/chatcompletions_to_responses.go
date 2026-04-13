@@ -345,6 +345,26 @@ func convertChatContentPartsToResponses(parts []ChatContentPart) []ResponsesCont
 					ImageURL: p.ImageURL.URL,
 				})
 			}
+		case "file":
+			// OpenAI Chat Completions multimodal file input:
+			//   {type: "file", file: {filename, file_data}}  — inline base64
+			//   {type: "file", file: {file_id}}              — pre-uploaded
+			// Both shapes map directly to Responses API input_file.
+			if p.File == nil {
+				continue
+			}
+			if p.File.FileData != "" && !isEmptyBase64DataURI(p.File.FileData) {
+				responseParts = append(responseParts, ResponsesContentPart{
+					Type:     "input_file",
+					Filename: p.File.Filename,
+					FileData: p.File.FileData,
+				})
+			} else if p.File.FileID != "" {
+				responseParts = append(responseParts, ResponsesContentPart{
+					Type:   "input_file",
+					FileID: p.File.FileID,
+				})
+			}
 		}
 	}
 	return responseParts
