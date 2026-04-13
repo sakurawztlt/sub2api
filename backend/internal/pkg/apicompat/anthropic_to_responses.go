@@ -483,6 +483,11 @@ func convertAnthropicDocumentBlock(b AnthropicContentBlock) []ResponsesContentPa
 		if mediaType == "" {
 			mediaType = "application/pdf"
 		}
+		// Downgrade MIME types that OpenAI's Responses API rejects in its
+		// input_file allowlist (e.g. application/xml, text/tab-separated-values)
+		// to an equivalent type it accepts. See downgradeFileMediaType for the
+		// full map and rationale.
+		mediaType = downgradeFileMediaType(mediaType)
 		filename := b.Title
 		if filename == "" {
 			filename = defaultFilenameForMediaType(mediaType)
@@ -582,12 +587,59 @@ func defaultFilenameForMediaType(mediaType string) string {
 		return "document.md"
 	case "text/csv":
 		return "document.csv"
+	case "text/xml":
+		return "document.xml"
+	case "text/html":
+		return "document.html"
 	case "application/json":
 		return "document.json"
+	case "application/yaml":
+		return "document.yaml"
 	case "application/msword":
 		return "document.doc"
 	case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
 		return "document.docx"
+	case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+		return "document.xlsx"
 	}
 	return "document"
+}
+
+// downgradeFileMediaType maps MIME types that the OpenAI Responses API's
+// input_file allowlist rejects (or accepts but does not parse) to an
+// equivalent MIME type that works end-to-end.
+//
+// Source of truth: live probing against gpt-5.x on 2026-04-13 through
+// gcr → sub2api → OpenAI Responses. For each mapped type the downgrade
+// was verified to return the marker embedded in the test file:
+//
+//   - application/xml → text/xml
+//     Upstream rejects application/xml with "unsupported MIME type" but
+//     accepts and parses text/xml. File contents stay byte-identical.
+//
+//   - text/tab-separated-values → text/plain
+//     Upstream rejects the TSV MIME. TSV is valid UTF-8 plain text so the
+//     model can still extract tab-delimited values when the bytes come in
+//     as text/plain.
+//
+//   - application/rtf / text/rtf → text/plain
+//     Upstream ACCEPTS either RTF MIME but silently does not parse the
+//     content — the model sees no attachment. RTF is ASCII-compatible
+//     enough that forwarding the raw bytes as text/plain lets the model
+//     read the visible strings and ignore \rtf control words; verified
+//     with markers embedded in the body.
+//
+// All other MIME types pass through unchanged. Unsupported types not on
+// this list will still hit upstream and return a proper 400 that now
+// propagates to the client (see handleCompatErrorResponse).
+func downgradeFileMediaType(mediaType string) string {
+	switch mediaType {
+	case "application/xml":
+		return "text/xml"
+	case "text/tab-separated-values":
+		return "text/plain"
+	case "application/rtf", "text/rtf":
+		return "text/plain"
+	}
+	return mediaType
 }

@@ -2,6 +2,7 @@ package apicompat
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1376,6 +1377,46 @@ func TestAnthropicToResponses_DocumentMissingSourceDropped(t *testing.T) {
 	require.NoError(t, json.Unmarshal(items[0].Content, &parts))
 	require.Len(t, parts, 1)
 	assert.Equal(t, "Hi", parts[0].Text)
+}
+
+func TestAnthropicToResponses_DocumentMimeDowngrade(t *testing.T) {
+	cases := []struct {
+		name          string
+		inputMime     string
+		expectedMime  string
+		expectedFname string
+	}{
+		{"application/xml → text/xml", "application/xml", "text/xml", "document.xml"},
+		{"text/tab-separated-values → text/plain", "text/tab-separated-values", "text/plain", "document.txt"},
+		{"application/rtf → text/plain", "application/rtf", "text/plain", "document.txt"},
+		{"text/rtf → text/plain", "text/rtf", "text/plain", "document.txt"},
+		{"application/pdf unchanged", "application/pdf", "application/pdf", "document.pdf"},
+		{"text/plain unchanged", "text/plain", "text/plain", "document.txt"},
+		{"docx unchanged", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "document.docx"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &AnthropicRequest{
+				Model:     "gpt-5.2",
+				MaxTokens: 1024,
+				Messages: []AnthropicMessage{
+					{Role: "user", Content: json.RawMessage(fmt.Sprintf(`[
+						{"type":"document","source":{"type":"base64","media_type":%q,"data":"REFUQQ=="}}
+					]`, tc.inputMime))},
+				},
+			}
+			resp, err := AnthropicToResponses(req)
+			require.NoError(t, err)
+			var items []ResponsesInputItem
+			require.NoError(t, json.Unmarshal(resp.Input, &items))
+			var parts []ResponsesContentPart
+			require.NoError(t, json.Unmarshal(items[0].Content, &parts))
+			require.Len(t, parts, 1)
+			assert.Equal(t, "input_file", parts[0].Type)
+			assert.Equal(t, tc.expectedFname, parts[0].Filename)
+			assert.Equal(t, "data:"+tc.expectedMime+";base64,REFUQQ==", parts[0].FileData)
+		})
+	}
 }
 
 func TestAnthropicToResponses_ToolResultWithDocument(t *testing.T) {
