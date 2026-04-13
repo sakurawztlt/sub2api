@@ -1103,6 +1103,11 @@ func isOpenAITransientProcessingError(upstreamStatusCode int, upstreamMsg string
 	return match(string(upstreamBody))
 }
 
+type AnthropicMessageSessionContext struct {
+	PromptCacheKey string
+	SessionHash    string
+}
+
 // ExtractSessionID extracts the raw session ID from headers or body without hashing.
 // Used by ForwardAsAnthropic to pass as prompt_cache_key for upstream cache.
 func (s *OpenAIGatewayService) ExtractSessionID(c *gin.Context, body []byte) string {
@@ -1113,10 +1118,59 @@ func (s *OpenAIGatewayService) ExtractSessionID(c *gin.Context, body []byte) str
 	if sessionID == "" {
 		sessionID = strings.TrimSpace(c.GetHeader("conversation_id"))
 	}
+	if sessionID == "" {
+		sessionID = strings.TrimSpace(c.GetHeader("X-Claude-Code-Session-Id"))
+	}
 	if sessionID == "" && len(body) > 0 {
 		sessionID = strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String())
 	}
 	return sessionID
+}
+
+func (s *OpenAIGatewayService) ResolveAnthropicMessageSessionContext(c *gin.Context, model string, body []byte) AnthropicMessageSessionContext {
+	resolvedSessionID := s.ExtractSessionID(c, body)
+	sessionHash := s.GenerateSessionHash(c, body)
+	if sessionHash == "" && resolvedSessionID != "" {
+		sessionHash = DeriveSessionHashFromSeed(resolvedSessionID)
+	}
+	sessionCtx := AnthropicMessageSessionContext{
+		PromptCacheKey: resolvedSessionID,
+		SessionHash:    sessionHash,
+	}
+	if len(body) == 0 {
+		return sessionCtx
+	}
+
+	userID := strings.TrimSpace(gjson.GetBytes(body, "metadata.user_id").String())
+	if userID == "" {
+		return sessionCtx
+	}
+
+	if parsedUserID := ParseMetadataUserID(userID); parsedUserID != nil {
+		metadataSessionID := strings.TrimSpace(parsedUserID.SessionID)
+		if metadataSessionID == "" {
+			return sessionCtx
+		}
+		if sessionCtx.PromptCacheKey == "" {
+			sessionCtx.PromptCacheKey = metadataSessionID
+		}
+		if sessionCtx.SessionHash == "" || resolvedSessionID == "" {
+			sessionCtx.SessionHash = DeriveSessionHashFromSeed(metadataSessionID)
+		}
+		return sessionCtx
+	}
+
+	seed := strings.TrimSpace(model) + "-" + userID
+	if strings.TrimSpace(seed) == "-" {
+		return sessionCtx
+	}
+	if sessionCtx.PromptCacheKey == "" {
+		sessionCtx.PromptCacheKey = GenerateSessionUUID(seed)
+	}
+	if sessionCtx.SessionHash == "" || resolvedSessionID == "" {
+		sessionCtx.SessionHash = DeriveSessionHashFromSeed(seed)
+	}
+	return sessionCtx
 }
 
 // GenerateSessionHash generates a sticky-session hash for OpenAI requests.

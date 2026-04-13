@@ -291,6 +291,49 @@ func TestOpenAIGatewayService_GenerateSessionHash_EmptyBodyStillEmpty(t *testing
 	require.Empty(t, svc.GenerateSessionHash(c, nil))
 }
 
+func TestOpenAIGatewayService_ResolveAnthropicMessageSessionContext_UsesParsedMetadataSessionID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	svc := &OpenAIGatewayService{}
+	body := []byte(`{"metadata":{"user_id":"{\"device_id\":\"deadbeef00112233445566778899aabbccddeeff0011223344556677\",\"account_uuid\":\"\",\"session_id\":\"c72554f2-1234-5678-abcd-123456789abc\"}"}}`)
+
+	sessionCtx := svc.ResolveAnthropicMessageSessionContext(c, "gpt-5.4", body)
+	require.Equal(t, "c72554f2-1234-5678-abcd-123456789abc", sessionCtx.PromptCacheKey)
+	require.Equal(t, DeriveSessionHashFromSeed("c72554f2-1234-5678-abcd-123456789abc"), sessionCtx.SessionHash)
+}
+
+func TestOpenAIGatewayService_ResolveAnthropicMessageSessionContext_FallsBackForOpaqueMetadataUserID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	svc := &OpenAIGatewayService{}
+	body := []byte(`{"metadata":{"user_id":"opaque-user-id"}}`)
+
+	sessionCtx := svc.ResolveAnthropicMessageSessionContext(c, "gpt-5.4", body)
+	seed := "gpt-5.4-opaque-user-id"
+	require.Equal(t, GenerateSessionUUID(seed), sessionCtx.PromptCacheKey)
+	require.Equal(t, DeriveSessionHashFromSeed(seed), sessionCtx.SessionHash)
+}
+
+func TestOpenAIGatewayService_ResolveAnthropicMessageSessionContext_UsesClaudeCodeSessionHeader(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Request.Header.Set("X-Claude-Code-Session-Id", "claude-session-header")
+
+	svc := &OpenAIGatewayService{}
+	sessionCtx := svc.ResolveAnthropicMessageSessionContext(c, "gpt-5.4", nil)
+
+	require.Equal(t, "claude-session-header", sessionCtx.PromptCacheKey)
+	require.Equal(t, DeriveSessionHashFromSeed("claude-session-header"), sessionCtx.SessionHash)
+}
+
 func (c stubConcurrencyCache) GetAccountWaitingCount(ctx context.Context, accountID int64) (int, error) {
 	if c.waitCounts != nil {
 		if count, ok := c.waitCounts[accountID]; ok {

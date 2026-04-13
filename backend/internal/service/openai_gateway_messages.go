@@ -17,6 +17,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/sjson"
 	"go.uber.org/zap"
 )
 
@@ -79,6 +80,12 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	if err != nil {
 		return nil, fmt.Errorf("marshal responses request: %w", err)
 	}
+	if promptCacheKey != "" {
+		responsesBody, err = sjson.SetBytes(responsesBody, "prompt_cache_key", promptCacheKey)
+		if err != nil {
+			return nil, fmt.Errorf("inject prompt_cache_key: %w", err)
+		}
+	}
 
 	if account.Type == AccountTypeOAuth {
 		var reqBody map[string]any
@@ -109,7 +116,8 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		}
 		if codexResult.PromptCacheKey != "" {
 			promptCacheKey = codexResult.PromptCacheKey
-		} else if promptCacheKey != "" {
+		}
+		if promptCacheKey != "" {
 			reqBody["prompt_cache_key"] = promptCacheKey
 		}
 		// OAuth codex transform forces stream=true upstream, so always use
@@ -155,8 +163,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		return nil, fmt.Errorf("build upstream request: %w", err)
 	}
 
-	// Override session_id with a deterministic UUID derived from the isolated
-	// session key, ensuring different API keys produce different upstream sessions.
+	// Align /v1/messages OAuth/Codex upstream session headers to a single stable
+	// session_id with the isolated prompt cache key to preserve the legacy
+	// upstream session behavior for OAuth/Codex accounts.
 	if promptCacheKey != "" {
 		apiKeyID := getAPIKeyIDFromContext(c)
 		upstreamReq.Header.Set("session_id", generateSessionUUID(isolateOpenAISessionID(apiKeyID, promptCacheKey)))
