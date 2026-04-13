@@ -497,9 +497,12 @@ func convertAnthropicDocumentBlock(b AnthropicContentBlock) []ResponsesContentPa
 		if src.Data == "" {
 			return nil
 		}
+		// Always wrap with an opening header and closing marker so the model
+		// sees a clear document boundary even when title/context are absent;
+		// otherwise the raw text looks like a continuation of the user prompt.
 		return []ResponsesContentPart{{
 			Type: "input_text",
-			Text: documentHeader(b.Title, b.Context) + src.Data,
+			Text: documentHeader(b.Title, b.Context) + src.Data + "\n[/Document]",
 		}}
 
 	case "content":
@@ -510,9 +513,8 @@ func convertAnthropicDocumentBlock(b AnthropicContentBlock) []ResponsesContentPa
 		if err := json.Unmarshal(src.Content, &inner); err != nil {
 			return nil
 		}
-		var out []ResponsesContentPart
-		if header := documentHeader(b.Title, b.Context); header != "" {
-			out = append(out, ResponsesContentPart{Type: "input_text", Text: header})
+		out := []ResponsesContentPart{
+			{Type: "input_text", Text: documentHeader(b.Title, b.Context)},
 		}
 		for _, ib := range inner {
 			switch ib.Type {
@@ -526,9 +528,11 @@ func convertAnthropicDocumentBlock(b AnthropicContentBlock) []ResponsesContentPa
 				}
 			}
 		}
-		if len(out) == 0 {
+		// Drop if only the header was emitted (no usable inner content).
+		if len(out) <= 1 {
 			return nil
 		}
+		out = append(out, ResponsesContentPart{Type: "input_text", Text: "[/Document]"})
 		return out
 
 	case "url":
@@ -548,11 +552,10 @@ func convertAnthropicDocumentBlock(b AnthropicContentBlock) []ResponsesContentPa
 }
 
 // documentHeader builds an inline header describing the document title and
-// context. Returns empty string when both are empty.
+// context. Always returns a non-empty prefix so the model can distinguish
+// document content from surrounding user text, even when title/context are
+// both empty.
 func documentHeader(title, context string) string {
-	if title == "" && context == "" {
-		return ""
-	}
 	var sb strings.Builder
 	sb.WriteString("[Document")
 	if title != "" {
