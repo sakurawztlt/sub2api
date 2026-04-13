@@ -3447,6 +3447,13 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 
 	// Check custom error codes — if the account does not handle this status,
 	// return a generic error without exposing upstream details.
+	//
+	// Exception: for upstream 400 client-validation errors (invalid request
+	// shape, unsupported MIME type, corrupted file, etc.) we pass the upstream
+	// message through as a 400 invalid_request_error so the client can fix
+	// their payload. These are client-actionable errors; swallowing them
+	// behind a generic 500 makes debugging impossible and is not a security
+	// leak. Other 4xx/5xx keep the existing generic-500 behavior.
 	if !account.ShouldHandleErrorCode(resp.StatusCode) {
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 			Platform:           account.Platform,
@@ -3458,7 +3465,11 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 			Message:            upstreamMsg,
 			Detail:             upstreamDetail,
 		})
-		writeError(c, http.StatusInternalServerError, "api_error", "Upstream gateway error")
+		if resp.StatusCode == http.StatusBadRequest && upstreamMsg != "" {
+			writeError(c, http.StatusBadRequest, "invalid_request_error", upstreamMsg)
+		} else {
+			writeError(c, http.StatusInternalServerError, "api_error", "Upstream gateway error")
+		}
 		if upstreamMsg == "" {
 			return nil, fmt.Errorf("upstream error: %d (not in custom error codes)", resp.StatusCode)
 		}
