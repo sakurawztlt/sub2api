@@ -84,24 +84,68 @@ func ResponsesToAnthropic(resp *ResponsesResponse, model string) *AnthropicRespo
 	out.StopReason = responsesStatusToAnthropicStopReason(resp.Status, resp.IncompleteDetails, blocks)
 
 	if resp.Usage != nil {
-		out.Usage = AnthropicUsage{
-			InputTokens:  resp.Usage.InputTokens,
-			OutputTokens: resp.Usage.OutputTokens,
-		}
+		cached := 0
 		if resp.Usage.InputTokensDetails != nil {
-			out.Usage.CacheReadInputTokens = resp.Usage.InputTokensDetails.CachedTokens
+			cached = resp.Usage.InputTokensDetails.CachedTokens
 		}
-		// CacheCreationInputTokens is intentionally left at 0. OpenAI's
-		// Responses API reports only cache-read (InputTokensDetails.CachedTokens)
-		// with no cache-write signal, so we have no upstream field to source
-		// this from. Filling it with an estimate would trigger NewAPI's fixed
-		// 1.25x cache_creation multiplier and mark users up with no counterpart
-		// on our upstream cost — a net price increase with no real cache-write
-		// billing behind it. Keep at 0; NewAPI users should interpret cache
-		// efficiency via CacheReadInputTokens only.
+		input, creation, read := estimateAnthropicCacheUsage(resp.Usage.InputTokens, cached)
+		out.Usage = AnthropicUsage{
+			InputTokens:              input,
+			OutputTokens:             resp.Usage.OutputTokens,
+			CacheCreationInputTokens: creation,
+			CacheReadInputTokens:     read,
+		}
 	}
 
 	return out
+}
+
+// openaiPrefixCacheMinTokens is the minimum input-token size at which OpenAI's
+// Responses API starts writing entries into its prefix cache. Below this, no
+// cache slot is allocated and the "new" portion of input never becomes a
+// future cache_read hit. Attributing short-request input to cache_creation
+// would over-count both the field and (via NewAPI's 1.25x multiplier) billing.
+const openaiPrefixCacheMinTokens = 1024
+
+// estimateAnthropicCacheUsage maps OpenAI Responses API usage to the three
+// disjoint Anthropic counters (input_tokens, cache_creation, cache_read).
+//
+// OpenAI reports only:
+//   - total = resp.Usage.InputTokens       (all input tokens for this request)
+//   - cached = InputTokensDetails.CachedTokens  (prefix-cache READ hits)
+//
+// The "new" portion (total - cached) is what the request processed uncached.
+// For long-enough requests (≥ openaiPrefixCacheMinTokens) OpenAI will
+// prefix-cache that portion and make it available for future reads, which is
+// semantically the same as Anthropic's cache_creation_input_tokens. For
+// short requests OpenAI skips cache write, so the new portion stays as plain
+// input_tokens.
+//
+// Invariants (matching Anthropic's semantics — all three counters disjoint):
+//   - input + creation + read == total
+//   - creation > 0 implies input == 0 (new portion fully attributed to write)
+//   - creation == 0 for total < openaiPrefixCacheMinTokens
+//   - read always equals cached (exact, not an estimate)
+//   - cached > total (rare upstream accounting drift) clamps read to total,
+//     input/creation to 0
+func estimateAnthropicCacheUsage(total, cached int) (input, creation, read int) {
+	if total <= 0 {
+		return 0, 0, 0
+	}
+	if cached < 0 {
+		cached = 0
+	}
+	if cached > total {
+		// Upstream drift: cached reported greater than total. Trust the
+		// smaller of the two (total) for read so the three counters still
+		// sum consistently, and zero the rest.
+		return 0, 0, total
+	}
+	newPortion := total - cached
+	if newPortion >= openaiPrefixCacheMinTokens {
+		return 0, newPortion, cached
+	}
+	return newPortion, 0, cached
 }
 
 func responsesStatusToAnthropicStopReason(status string, details *ResponsesIncompleteDetails, blocks []AnthropicContentBlock) string {
@@ -138,9 +182,13 @@ type ResponsesEventToAnthropicState struct {
 	// OutputIndexToBlockIdx maps Responses output_index → Anthropic content block index.
 	OutputIndexToBlockIdx map[int]int
 
-	InputTokens          int
+	// Raw OpenAI-side usage as observed on the wire. The Anthropic-side
+	// usage fields (InputTokens / CacheCreation / CacheRead) are derived
+	// from these at emission time via estimateAnthropicCacheUsage so the
+	// stream and non-stream code paths share identical mapping rules.
+	RawTotalInputTokens  int
+	RawCachedInputTokens int
 	OutputTokens         int
-	CacheReadInputTokens int
 
 	ResponseID string
 	Model      string
@@ -197,6 +245,8 @@ func FinalizeResponsesAnthropicStream(state *ResponsesEventToAnthropicState) []A
 	var events []AnthropicStreamEvent
 	events = append(events, closeCurrentBlock(state)...)
 
+	input, creation, read := estimateAnthropicCacheUsage(state.RawTotalInputTokens, state.RawCachedInputTokens)
+
 	events = append(events,
 		AnthropicStreamEvent{
 			Type: "message_delta",
@@ -204,9 +254,10 @@ func FinalizeResponsesAnthropicStream(state *ResponsesEventToAnthropicState) []A
 				StopReason: "end_turn",
 			},
 			Usage: &AnthropicUsage{
-				InputTokens:          state.InputTokens,
-				OutputTokens:         state.OutputTokens,
-				CacheReadInputTokens: state.CacheReadInputTokens,
+				InputTokens:              input,
+				OutputTokens:             state.OutputTokens,
+				CacheCreationInputTokens: creation,
+				CacheReadInputTokens:     read,
 			},
 		},
 		AnthropicStreamEvent{Type: "message_stop"},
@@ -474,10 +525,10 @@ func resToAnthHandleCompleted(evt *ResponsesStreamEvent, state *ResponsesEventTo
 	stopReason := "end_turn"
 	if evt.Response != nil {
 		if evt.Response.Usage != nil {
-			state.InputTokens = evt.Response.Usage.InputTokens
+			state.RawTotalInputTokens = evt.Response.Usage.InputTokens
 			state.OutputTokens = evt.Response.Usage.OutputTokens
 			if evt.Response.Usage.InputTokensDetails != nil {
-				state.CacheReadInputTokens = evt.Response.Usage.InputTokensDetails.CachedTokens
+				state.RawCachedInputTokens = evt.Response.Usage.InputTokensDetails.CachedTokens
 			}
 		}
 		switch evt.Response.Status {
@@ -492,6 +543,8 @@ func resToAnthHandleCompleted(evt *ResponsesStreamEvent, state *ResponsesEventTo
 		}
 	}
 
+	input, creation, read := estimateAnthropicCacheUsage(state.RawTotalInputTokens, state.RawCachedInputTokens)
+
 	events = append(events,
 		AnthropicStreamEvent{
 			Type: "message_delta",
@@ -499,9 +552,10 @@ func resToAnthHandleCompleted(evt *ResponsesStreamEvent, state *ResponsesEventTo
 				StopReason: stopReason,
 			},
 			Usage: &AnthropicUsage{
-				InputTokens:          state.InputTokens,
-				OutputTokens:         state.OutputTokens,
-				CacheReadInputTokens: state.CacheReadInputTokens,
+				InputTokens:              input,
+				OutputTokens:             state.OutputTokens,
+				CacheCreationInputTokens: creation,
+				CacheReadInputTokens:     read,
 			},
 		},
 		AnthropicStreamEvent{Type: "message_stop"},
