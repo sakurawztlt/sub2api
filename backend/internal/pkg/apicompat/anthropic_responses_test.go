@@ -1419,6 +1419,243 @@ func TestAnthropicToResponses_DocumentMimeDowngrade(t *testing.T) {
 	}
 }
 
+func TestAnthropicToResponses_OrphanedToolResultSynthesizesPlaceholder(t *testing.T) {
+	// Regression: a client's conversation history carries a tool_result
+	// whose tool_use_id has no matching tool_use earlier in the history.
+	// sub2api must synthesize a placeholder function_call immediately
+	// before the function_call_output so upstream OpenAI doesn't reject
+	// with "No tool call found for function call output with call_id X".
+
+	t.Run("orphan_tool_result_at_start", func(t *testing.T) {
+		req := &AnthropicRequest{
+			Model:     "gpt-5.2",
+			MaxTokens: 1024,
+			Messages: []AnthropicMessage{
+				{Role: "user", Content: json.RawMessage(`[
+					{"type":"tool_result","tool_use_id":"toolu_orphan_1","content":"555"}
+				]`)},
+				{Role: "assistant", Content: json.RawMessage(`"ok"`)},
+				{Role: "user", Content: json.RawMessage(`"continue"`)},
+			},
+		}
+		resp, err := AnthropicToResponses(req)
+		require.NoError(t, err)
+
+		var items []ResponsesInputItem
+		require.NoError(t, json.Unmarshal(resp.Input, &items))
+
+		// Find the placeholder function_call and the output.
+		var gotPlaceholder, gotOutput bool
+		for i, it := range items {
+			if it.Type == "function_call" && it.CallID == "fc_toolu_orphan_1" {
+				if it.Name != "orphan_tool_call_placeholder" {
+					t.Errorf("expected placeholder name, got %q", it.Name)
+				}
+				gotPlaceholder = true
+				// Next item should be the matching output
+				if i+1 < len(items) && items[i+1].Type == "function_call_output" && items[i+1].CallID == "fc_toolu_orphan_1" {
+					gotOutput = true
+				}
+			}
+		}
+		assert.True(t, gotPlaceholder, "no placeholder function_call synthesized")
+		assert.True(t, gotOutput, "placeholder not immediately before function_call_output")
+	})
+
+	t.Run("orphan_tool_result_after_user_text", func(t *testing.T) {
+		req := &AnthropicRequest{
+			Model:     "gpt-5.2",
+			MaxTokens: 1024,
+			Messages: []AnthropicMessage{
+				{Role: "user", Content: json.RawMessage(`"hi"`)},
+				{Role: "assistant", Content: json.RawMessage(`"hi there"`)},
+				{Role: "user", Content: json.RawMessage(`[
+					{"type":"tool_result","tool_use_id":"toolu_ghost","content":"ghost result"}
+				]`)},
+			},
+		}
+		resp, err := AnthropicToResponses(req)
+		require.NoError(t, err)
+
+		var items []ResponsesInputItem
+		require.NoError(t, json.Unmarshal(resp.Input, &items))
+
+		// Must contain both placeholder and its output, placeholder first.
+		var fcIdx, outIdx = -1, -1
+		for i, it := range items {
+			if it.Type == "function_call" && it.CallID == "fc_toolu_ghost" {
+				fcIdx = i
+			}
+			if it.Type == "function_call_output" && it.CallID == "fc_toolu_ghost" {
+				outIdx = i
+			}
+		}
+		assert.NotEqual(t, -1, fcIdx, "placeholder function_call missing")
+		assert.NotEqual(t, -1, outIdx, "function_call_output missing")
+		assert.Less(t, fcIdx, outIdx, "placeholder must come before output")
+	})
+
+	t.Run("matched_tool_call_no_synthesis", func(t *testing.T) {
+		// Well-formed conversation: one tool_use, one tool_result. No
+		// placeholder should be synthesized.
+		req := &AnthropicRequest{
+			Model:     "gpt-5.2",
+			MaxTokens: 1024,
+			Messages: []AnthropicMessage{
+				{Role: "user", Content: json.RawMessage(`"compute 2+2"`)},
+				{Role: "assistant", Content: json.RawMessage(`[
+					{"type":"tool_use","id":"toolu_real","name":"calc","input":{"expr":"2+2"}}
+				]`)},
+				{Role: "user", Content: json.RawMessage(`[
+					{"type":"tool_result","tool_use_id":"toolu_real","content":"4"}
+				]`)},
+			},
+		}
+		resp, err := AnthropicToResponses(req)
+		require.NoError(t, err)
+
+		var items []ResponsesInputItem
+		require.NoError(t, json.Unmarshal(resp.Input, &items))
+
+		for _, it := range items {
+			if it.Name == "orphan_tool_call_placeholder" {
+				t.Errorf("should not synthesize placeholder for matched tool call")
+			}
+		}
+	})
+
+	t.Run("mixed_matched_and_orphan", func(t *testing.T) {
+		// One matched call, one orphan. Should synthesize placeholder only
+		// for the orphan.
+		req := &AnthropicRequest{
+			Model:     "gpt-5.2",
+			MaxTokens: 1024,
+			Messages: []AnthropicMessage{
+				{Role: "user", Content: json.RawMessage(`"start"`)},
+				{Role: "assistant", Content: json.RawMessage(`[
+					{"type":"tool_use","id":"toolu_good","name":"calc","input":{}}
+				]`)},
+				{Role: "user", Content: json.RawMessage(`[
+					{"type":"tool_result","tool_use_id":"toolu_good","content":"ok1"},
+					{"type":"tool_result","tool_use_id":"toolu_orphan","content":"ok2"}
+				]`)},
+			},
+		}
+		resp, err := AnthropicToResponses(req)
+		require.NoError(t, err)
+
+		var items []ResponsesInputItem
+		require.NoError(t, json.Unmarshal(resp.Input, &items))
+
+		placeholderCount := 0
+		realCount := 0
+		for _, it := range items {
+			if it.Type == "function_call" {
+				if it.Name == "orphan_tool_call_placeholder" {
+					placeholderCount++
+					assert.Equal(t, "fc_toolu_orphan", it.CallID)
+				} else {
+					realCount++
+					assert.Equal(t, "fc_toolu_good", it.CallID)
+				}
+			}
+		}
+		assert.Equal(t, 1, placeholderCount, "expected exactly one placeholder")
+		assert.Equal(t, 1, realCount, "expected exactly one real function_call")
+	})
+
+	t.Run("multiple_orphans", func(t *testing.T) {
+		req := &AnthropicRequest{
+			Model:     "gpt-5.2",
+			MaxTokens: 1024,
+			Messages: []AnthropicMessage{
+				{Role: "user", Content: json.RawMessage(`[
+					{"type":"tool_result","tool_use_id":"toolu_ghost_1","content":"a"},
+					{"type":"tool_result","tool_use_id":"toolu_ghost_2","content":"b"}
+				]`)},
+				{Role: "assistant", Content: json.RawMessage(`"go"`)},
+			},
+		}
+		resp, err := AnthropicToResponses(req)
+		require.NoError(t, err)
+
+		var items []ResponsesInputItem
+		require.NoError(t, json.Unmarshal(resp.Input, &items))
+
+		placeholderCount := 0
+		for _, it := range items {
+			if it.Type == "function_call" && it.Name == "orphan_tool_call_placeholder" {
+				placeholderCount++
+			}
+		}
+		assert.Equal(t, 2, placeholderCount, "expected two placeholders")
+	})
+}
+
+func TestAnthropicToResponses_AnthropicServerSideToolsDropped(t *testing.T) {
+	// Anthropic server-side tools (web_search, computer_, text_editor_,
+	// bash_) cannot be translated to OpenAI Responses API. They must be
+	// dropped from the tools list, not emitted as {"type":"web_search"}
+	// (which upstream rejects with 400 "Invalid schema for function
+	// 'web_search'").
+	cases := []struct {
+		name string
+		tool AnthropicTool
+	}{
+		{"web_search_20250305", AnthropicTool{Type: "web_search_20250305", Name: "web_search"}},
+		{"web_search_20250101", AnthropicTool{Type: "web_search_20250101", Name: "web_search"}},
+		{"computer_20241022", AnthropicTool{Type: "computer_20241022", Name: "computer"}},
+		{"text_editor_20241022", AnthropicTool{Type: "text_editor_20241022", Name: "str_replace_editor"}},
+		{"bash_20241022", AnthropicTool{Type: "bash_20241022", Name: "bash"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &AnthropicRequest{
+				Model:     "gpt-5.2",
+				MaxTokens: 1024,
+				Messages:  []AnthropicMessage{{Role: "user", Content: json.RawMessage(`"hi"`)}},
+				Tools: []AnthropicTool{
+					{Name: "my_custom_tool", Description: "A real tool", InputSchema: json.RawMessage(`{"type":"object","properties":{"x":{"type":"string"}}}`)},
+					tc.tool,
+					{Name: "another_custom", Description: "Another real tool", InputSchema: json.RawMessage(`{"type":"object","properties":{}}`)},
+				},
+			}
+			resp, err := AnthropicToResponses(req)
+			require.NoError(t, err)
+			// Server-side tool should be dropped, leaving only the two custom function tools.
+			require.Len(t, resp.Tools, 2)
+			assert.Equal(t, "function", resp.Tools[0].Type)
+			assert.Equal(t, "my_custom_tool", resp.Tools[0].Name)
+			assert.Equal(t, "function", resp.Tools[1].Type)
+			assert.Equal(t, "another_custom", resp.Tools[1].Name)
+			// Verify neither emitted tool uses "web_search"/"computer"/etc. as its type.
+			for _, rt := range resp.Tools {
+				assert.NotContains(t, rt.Type, "web_search")
+				assert.NotContains(t, rt.Type, "computer_")
+				assert.NotContains(t, rt.Type, "text_editor_")
+				assert.NotContains(t, rt.Type, "bash_")
+			}
+		})
+	}
+}
+
+func TestAnthropicToResponses_OnlyServerSideToolsResultsInEmptyTools(t *testing.T) {
+	// Edge case: request has ONLY a server-side tool. After dropping, the
+	// resulting tools list should be empty (not nil-crashed, and not leaking
+	// the dropped tool back in).
+	req := &AnthropicRequest{
+		Model:     "gpt-5.2",
+		MaxTokens: 1024,
+		Messages:  []AnthropicMessage{{Role: "user", Content: json.RawMessage(`"search for news"`)}},
+		Tools: []AnthropicTool{
+			{Type: "web_search_20250305", Name: "web_search"},
+		},
+	}
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+	assert.Empty(t, resp.Tools)
+}
+
 func TestAnthropicToResponses_ToolResultWithDocument(t *testing.T) {
 	// A document inside tool_result is extracted into a follow-up user message,
 	// mirroring how images inside tool_result are handled (the function_call_output
