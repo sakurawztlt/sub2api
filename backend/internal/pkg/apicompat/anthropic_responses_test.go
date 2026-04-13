@@ -1263,7 +1263,8 @@ func TestAnthropicToResponses_DocumentTextSource(t *testing.T) {
 }
 
 func TestAnthropicToResponses_DocumentContentSourceRecursive(t *testing.T) {
-	// type=content source expands nested text+image blocks into flat parts.
+	// type=content source expands nested text+image blocks into flat parts,
+	// wrapped in [Document...] / [/Document] markers.
 	req := &AnthropicRequest{
 		Model:     "gpt-5.2",
 		MaxTokens: 1024,
@@ -1285,14 +1286,47 @@ func TestAnthropicToResponses_DocumentContentSourceRecursive(t *testing.T) {
 	require.NoError(t, json.Unmarshal(resp.Input, &items))
 	var parts []ResponsesContentPart
 	require.NoError(t, json.Unmarshal(items[0].Content, &parts))
-	// header + Section 1 + image + Section 2 = 4
-	require.Len(t, parts, 4)
+	// header + Section 1 + image + Section 2 + closing = 5
+	require.Len(t, parts, 5)
 	assert.Equal(t, "input_text", parts[0].Type)
 	assert.Contains(t, parts[0].Text, "multi_part")
 	assert.Equal(t, "Section 1", parts[1].Text)
 	assert.Equal(t, "input_image", parts[2].Type)
 	assert.Equal(t, "data:image/png;base64,iVBOR", parts[2].ImageURL)
 	assert.Equal(t, "Section 2", parts[3].Text)
+	assert.Equal(t, "[/Document]", parts[4].Text)
+}
+
+func TestAnthropicToResponses_DocumentTextSourceNoTitle(t *testing.T) {
+	// Regression test: a text-source document with no title/context should
+	// still be wrapped in [Document] / [/Document] markers so the model can
+	// tell it apart from surrounding user text. Previously the header was
+	// omitted when both title and context were empty, causing the model to
+	// see the document content as a continuation of the user prompt.
+	req := &AnthropicRequest{
+		Model:     "gpt-5.2",
+		MaxTokens: 1024,
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: json.RawMessage(`[
+				{"type":"text","text":"Find the marker."},
+				{"type":"document","source":{"type":"text","media_type":"text/plain","data":"marker=ZEBRA_7"}}
+			]`)},
+		},
+	}
+
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+
+	var items []ResponsesInputItem
+	require.NoError(t, json.Unmarshal(resp.Input, &items))
+	var parts []ResponsesContentPart
+	require.NoError(t, json.Unmarshal(items[0].Content, &parts))
+	require.Len(t, parts, 2)
+	assert.Equal(t, "Find the marker.", parts[0].Text)
+	// Second part: header + data + closing marker, even with no title/context.
+	assert.Contains(t, parts[1].Text, "[Document]")
+	assert.Contains(t, parts[1].Text, "marker=ZEBRA_7")
+	assert.Contains(t, parts[1].Text, "[/Document]")
 }
 
 func TestAnthropicToResponses_DocumentURLSource(t *testing.T) {
