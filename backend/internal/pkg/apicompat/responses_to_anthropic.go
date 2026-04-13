@@ -91,6 +91,14 @@ func ResponsesToAnthropic(resp *ResponsesResponse, model string) *AnthropicRespo
 		if resp.Usage.InputTokensDetails != nil {
 			out.Usage.CacheReadInputTokens = resp.Usage.InputTokensDetails.CachedTokens
 		}
+		// CacheCreationInputTokens is intentionally left at 0. OpenAI's
+		// Responses API reports only cache-read (InputTokensDetails.CachedTokens)
+		// with no cache-write signal, so we have no upstream field to source
+		// this from. Filling it with an estimate would trigger NewAPI's fixed
+		// 1.25x cache_creation multiplier and mark users up with no counterpart
+		// on our upstream cost — a net price increase with no real cache-write
+		// billing behind it. Keep at 0; NewAPI users should interpret cache
+		// efficiency via CacheReadInputTokens only.
 	}
 
 	return out
