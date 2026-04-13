@@ -1135,3 +1135,250 @@ func TestAnthropicToResponses_ToolWithNilSchema(t *testing.T) {
 	assert.JSONEq(t, `"object"`, string(params["type"]))
 	assert.JSONEq(t, `{}`, string(params["properties"]))
 }
+
+// ---------------------------------------------------------------------------
+// Document content block tests (PDF and other file types)
+// ---------------------------------------------------------------------------
+
+func TestAnthropicToResponses_DocumentBase64PDF(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:     "gpt-5.2",
+		MaxTokens: 1024,
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: json.RawMessage(`[
+				{"type":"text","text":"Summarize this PDF"},
+				{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"JVBERi0x"}}
+			]`)},
+		},
+	}
+
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+
+	var items []ResponsesInputItem
+	require.NoError(t, json.Unmarshal(resp.Input, &items))
+	require.Len(t, items, 1)
+
+	var parts []ResponsesContentPart
+	require.NoError(t, json.Unmarshal(items[0].Content, &parts))
+	require.Len(t, parts, 2)
+	assert.Equal(t, "input_text", parts[0].Type)
+	assert.Equal(t, "input_file", parts[1].Type)
+	assert.Equal(t, "document.pdf", parts[1].Filename)
+	assert.Equal(t, "data:application/pdf;base64,JVBERi0x", parts[1].FileData)
+}
+
+func TestAnthropicToResponses_DocumentBase64PDFWithTitle(t *testing.T) {
+	// A title on the document block becomes the input_file filename.
+	req := &AnthropicRequest{
+		Model:     "gpt-5.2",
+		MaxTokens: 1024,
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: json.RawMessage(`[
+				{"type":"document","title":"quarterly_report.pdf","source":{"type":"base64","media_type":"application/pdf","data":"JVBERi0x"}}
+			]`)},
+		},
+	}
+
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+
+	var items []ResponsesInputItem
+	require.NoError(t, json.Unmarshal(resp.Input, &items))
+	var parts []ResponsesContentPart
+	require.NoError(t, json.Unmarshal(items[0].Content, &parts))
+	require.Len(t, parts, 1)
+	assert.Equal(t, "input_file", parts[0].Type)
+	assert.Equal(t, "quarterly_report.pdf", parts[0].Filename)
+}
+
+func TestAnthropicToResponses_DocumentBase64EmptyMediaTypeDefaultsToPDF(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:     "gpt-5.2",
+		MaxTokens: 1024,
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: json.RawMessage(`[
+				{"type":"document","source":{"type":"base64","data":"JVBERi0x"}}
+			]`)},
+		},
+	}
+
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+
+	var items []ResponsesInputItem
+	require.NoError(t, json.Unmarshal(resp.Input, &items))
+	var parts []ResponsesContentPart
+	require.NoError(t, json.Unmarshal(items[0].Content, &parts))
+	require.Len(t, parts, 1)
+	assert.Equal(t, "data:application/pdf;base64,JVBERi0x", parts[0].FileData)
+}
+
+func TestAnthropicToResponses_DocumentBase64DocxFilenameExtension(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:     "gpt-5.2",
+		MaxTokens: 1024,
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: json.RawMessage(`[
+				{"type":"document","source":{"type":"base64","media_type":"application/vnd.openxmlformats-officedocument.wordprocessingml.document","data":"UEsDBB"}}
+			]`)},
+		},
+	}
+
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+
+	var items []ResponsesInputItem
+	require.NoError(t, json.Unmarshal(resp.Input, &items))
+	var parts []ResponsesContentPart
+	require.NoError(t, json.Unmarshal(items[0].Content, &parts))
+	require.Len(t, parts, 1)
+	assert.Equal(t, "document.docx", parts[0].Filename)
+}
+
+func TestAnthropicToResponses_DocumentTextSource(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:     "gpt-5.2",
+		MaxTokens: 1024,
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: json.RawMessage(`[
+				{"type":"text","text":"Review:"},
+				{"type":"document","title":"notes","context":"meeting 2026-04-13","source":{"type":"text","media_type":"text/plain","data":"Decisions made today: ship the fix."}}
+			]`)},
+		},
+	}
+
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+
+	var items []ResponsesInputItem
+	require.NoError(t, json.Unmarshal(resp.Input, &items))
+	var parts []ResponsesContentPart
+	require.NoError(t, json.Unmarshal(items[0].Content, &parts))
+	require.Len(t, parts, 2)
+	assert.Equal(t, "input_text", parts[1].Type)
+	assert.Contains(t, parts[1].Text, "notes")
+	assert.Contains(t, parts[1].Text, "meeting 2026-04-13")
+	assert.Contains(t, parts[1].Text, "Decisions made today: ship the fix.")
+}
+
+func TestAnthropicToResponses_DocumentContentSourceRecursive(t *testing.T) {
+	// type=content source expands nested text+image blocks into flat parts.
+	req := &AnthropicRequest{
+		Model:     "gpt-5.2",
+		MaxTokens: 1024,
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: json.RawMessage(`[
+				{"type":"document","title":"multi_part","source":{"type":"content","content":[
+					{"type":"text","text":"Section 1"},
+					{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBOR"}},
+					{"type":"text","text":"Section 2"}
+				]}}
+			]`)},
+		},
+	}
+
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+
+	var items []ResponsesInputItem
+	require.NoError(t, json.Unmarshal(resp.Input, &items))
+	var parts []ResponsesContentPart
+	require.NoError(t, json.Unmarshal(items[0].Content, &parts))
+	// header + Section 1 + image + Section 2 = 4
+	require.Len(t, parts, 4)
+	assert.Equal(t, "input_text", parts[0].Type)
+	assert.Contains(t, parts[0].Text, "multi_part")
+	assert.Equal(t, "Section 1", parts[1].Text)
+	assert.Equal(t, "input_image", parts[2].Type)
+	assert.Equal(t, "data:image/png;base64,iVBOR", parts[2].ImageURL)
+	assert.Equal(t, "Section 2", parts[3].Text)
+}
+
+func TestAnthropicToResponses_DocumentURLSource(t *testing.T) {
+	// URL source → placeholder text (Responses API doesn't accept URL files).
+	req := &AnthropicRequest{
+		Model:     "gpt-5.2",
+		MaxTokens: 1024,
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: json.RawMessage(`[
+				{"type":"document","title":"spec","source":{"type":"url","url":"https://example.com/spec.pdf"}}
+			]`)},
+		},
+	}
+
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+
+	var items []ResponsesInputItem
+	require.NoError(t, json.Unmarshal(resp.Input, &items))
+	var parts []ResponsesContentPart
+	require.NoError(t, json.Unmarshal(items[0].Content, &parts))
+	require.Len(t, parts, 1)
+	assert.Equal(t, "input_text", parts[0].Type)
+	assert.Contains(t, parts[0].Text, "spec")
+	assert.Contains(t, parts[0].Text, "https://example.com/spec.pdf")
+}
+
+func TestAnthropicToResponses_DocumentMissingSourceDropped(t *testing.T) {
+	// Document block without a source is silently dropped (text block stays).
+	req := &AnthropicRequest{
+		Model:     "gpt-5.2",
+		MaxTokens: 1024,
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: json.RawMessage(`[
+				{"type":"text","text":"Hi"},
+				{"type":"document"}
+			]`)},
+		},
+	}
+
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+
+	var items []ResponsesInputItem
+	require.NoError(t, json.Unmarshal(resp.Input, &items))
+	var parts []ResponsesContentPart
+	require.NoError(t, json.Unmarshal(items[0].Content, &parts))
+	require.Len(t, parts, 1)
+	assert.Equal(t, "Hi", parts[0].Text)
+}
+
+func TestAnthropicToResponses_ToolResultWithDocument(t *testing.T) {
+	// A document inside tool_result is extracted into a follow-up user message,
+	// mirroring how images inside tool_result are handled (the function_call_output
+	// text stays "(empty)" because all content was non-text).
+	req := &AnthropicRequest{
+		Model:     "gpt-5.2",
+		MaxTokens: 1024,
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: json.RawMessage(`"read the pdf"`)},
+			{Role: "assistant", Content: json.RawMessage(`[{"type":"tool_use","id":"toolu_pdf","name":"ReadFile","input":{"path":"/tmp/report.pdf"}}]`)},
+			{Role: "user", Content: json.RawMessage(`[
+				{"type":"tool_result","tool_use_id":"toolu_pdf","content":[
+					{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"JVBERi0x"}}
+				]}
+			]`)},
+		},
+	}
+
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+
+	var items []ResponsesInputItem
+	require.NoError(t, json.Unmarshal(resp.Input, &items))
+	// user + function_call + function_call_output + user(document) = 4
+	require.Len(t, items, 4)
+
+	assert.Equal(t, "function_call_output", items[2].Type)
+	assert.Equal(t, "fc_toolu_pdf", items[2].CallID)
+	assert.Equal(t, "(empty)", items[2].Output)
+
+	assert.Equal(t, "user", items[3].Role)
+	var parts []ResponsesContentPart
+	require.NoError(t, json.Unmarshal(items[3].Content, &parts))
+	require.Len(t, parts, 1)
+	assert.Equal(t, "input_file", parts[0].Type)
+	assert.Equal(t, "document.pdf", parts[0].Filename)
+	assert.Equal(t, "data:application/pdf;base64,JVBERi0x", parts[0].FileData)
+}

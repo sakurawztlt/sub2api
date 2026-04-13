@@ -201,8 +201,8 @@ func anthropicUserToResponses(raw json.RawMessage) ([]ResponsesInputItem, error)
 		toolResultImageParts = append(toolResultImageParts, imageParts...)
 	}
 
-	// Remaining text + image blocks → user message with content parts.
-	// Also include images extracted from tool_results so the model can see them.
+	// Remaining text + image + document blocks → user message with content parts.
+	// Also include images/documents extracted from tool_results so the model can see them.
 	var parts []ResponsesContentPart
 	for _, b := range blocks {
 		switch b.Type {
@@ -214,6 +214,8 @@ func anthropicUserToResponses(raw json.RawMessage) ([]ResponsesInputItem, error)
 			if uri := anthropicImageToDataURI(b.Source); uri != "" {
 				parts = append(parts, ResponsesContentPart{Type: "input_image", ImageURL: uri})
 			}
+		case "document":
+			parts = append(parts, convertAnthropicDocumentBlock(b)...)
 		}
 	}
 	parts = append(parts, toolResultImageParts...)
@@ -343,7 +345,9 @@ func convertToolResultOutput(b AnthropicContentBlock) (string, []ResponsesConten
 		return "(empty)", nil
 	}
 
-	// Separate text (for function_call_output) from images (for user message).
+	// Separate text (for function_call_output) from non-text parts (images/
+	// documents, which go into a follow-up user message because
+	// function_call_output.output is string-only).
 	var textParts []string
 	var imageParts []ResponsesContentPart
 	for _, ib := range inner {
@@ -356,6 +360,8 @@ func convertToolResultOutput(b AnthropicContentBlock) (string, []ResponsesConten
 			if uri := anthropicImageToDataURI(ib.Source); uri != "" {
 				imageParts = append(imageParts, ResponsesContentPart{Type: "input_image", ImageURL: uri})
 			}
+		case "document":
+			imageParts = append(imageParts, convertAnthropicDocumentBlock(ib)...)
 		}
 	}
 
@@ -448,4 +454,137 @@ func normalizeToolParameters(schema json.RawMessage) json.RawMessage {
 		return schema
 	}
 	return out
+}
+
+// convertAnthropicDocumentBlock maps an Anthropic `document` content block
+// to one or more Responses API content parts. Anthropic documents have four
+// source sub-types; each maps to the closest OpenAI Responses representation:
+//
+//   - source.type=base64  → input_file with data URI (PDF, docx, etc.)
+//   - source.type=text    → input_text inlined (optionally prefixed with a
+//     title/context header so the model sees the boundary)
+//   - source.type=content → recursively expand nested text/image blocks
+//   - source.type=url     → input_text placeholder (OpenAI Responses API
+//     does not accept URL-referenced files as input)
+//
+// Returns nil when the source is missing or has no usable data; caller
+// should treat that as "drop the block".
+func convertAnthropicDocumentBlock(b AnthropicContentBlock) []ResponsesContentPart {
+	if b.Source == nil {
+		return nil
+	}
+	src := b.Source
+	switch src.Type {
+	case "base64":
+		if src.Data == "" {
+			return nil
+		}
+		mediaType := src.MediaType
+		if mediaType == "" {
+			mediaType = "application/pdf"
+		}
+		filename := b.Title
+		if filename == "" {
+			filename = defaultFilenameForMediaType(mediaType)
+		}
+		return []ResponsesContentPart{{
+			Type:     "input_file",
+			Filename: filename,
+			FileData: "data:" + mediaType + ";base64," + src.Data,
+		}}
+
+	case "text":
+		if src.Data == "" {
+			return nil
+		}
+		return []ResponsesContentPart{{
+			Type: "input_text",
+			Text: documentHeader(b.Title, b.Context) + src.Data,
+		}}
+
+	case "content":
+		if len(src.Content) == 0 {
+			return nil
+		}
+		var inner []AnthropicContentBlock
+		if err := json.Unmarshal(src.Content, &inner); err != nil {
+			return nil
+		}
+		var out []ResponsesContentPart
+		if header := documentHeader(b.Title, b.Context); header != "" {
+			out = append(out, ResponsesContentPart{Type: "input_text", Text: header})
+		}
+		for _, ib := range inner {
+			switch ib.Type {
+			case "text":
+				if ib.Text != "" {
+					out = append(out, ResponsesContentPart{Type: "input_text", Text: ib.Text})
+				}
+			case "image":
+				if uri := anthropicImageToDataURI(ib.Source); uri != "" {
+					out = append(out, ResponsesContentPart{Type: "input_image", ImageURL: uri})
+				}
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
+
+	case "url":
+		if src.URL == "" {
+			return nil
+		}
+		title := b.Title
+		if title == "" {
+			title = "document"
+		}
+		return []ResponsesContentPart{{
+			Type: "input_text",
+			Text: "[Document reference: " + title + " (" + src.URL + ")]",
+		}}
+	}
+	return nil
+}
+
+// documentHeader builds an inline header describing the document title and
+// context. Returns empty string when both are empty.
+func documentHeader(title, context string) string {
+	if title == "" && context == "" {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("[Document")
+	if title != "" {
+		sb.WriteString(": ")
+		sb.WriteString(title)
+	}
+	if context != "" {
+		sb.WriteString(" — ")
+		sb.WriteString(context)
+	}
+	sb.WriteString("]\n\n")
+	return sb.String()
+}
+
+// defaultFilenameForMediaType returns a reasonable filename with extension
+// for a given document MIME type, used when the document block has no title.
+func defaultFilenameForMediaType(mediaType string) string {
+	switch mediaType {
+	case "application/pdf":
+		return "document.pdf"
+	case "text/plain":
+		return "document.txt"
+	case "text/markdown":
+		return "document.md"
+	case "text/csv":
+		return "document.csv"
+	case "application/json":
+		return "document.json"
+	case "application/msword":
+		return "document.doc"
+	case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+		return "document.docx"
+	}
+	return "document"
 }

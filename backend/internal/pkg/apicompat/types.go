@@ -53,8 +53,14 @@ type AnthropicContentBlock struct {
 	// type=thinking
 	Thinking string `json:"thinking,omitempty"`
 
-	// type=image
+	// type=image | type=document
+	// For image: source.type=base64 + media_type image/*.
+	// For document: source.type is one of base64 | text | content | url.
 	Source *AnthropicImageSource `json:"source,omitempty"`
+
+	// type=document only: optional metadata
+	Title   string `json:"title,omitempty"`
+	Context string `json:"context,omitempty"`
 
 	// type=tool_use
 	ID    string          `json:"id,omitempty"`
@@ -67,11 +73,21 @@ type AnthropicContentBlock struct {
 	IsError   bool            `json:"is_error,omitempty"`
 }
 
-// AnthropicImageSource describes the source data for an image content block.
+// AnthropicImageSource describes the source data for an image OR document
+// content block. Despite the historical name, it is reused for document
+// blocks, which support more source shapes:
+//
+//   - image: Type="base64" with MediaType + Data
+//   - document + base64: same as image (Type="base64" + MediaType + Data)
+//   - document + text: Type="text" with MediaType="text/plain" + Data (raw text)
+//   - document + content: Type="content" with Content (nested block array)
+//   - document + url: Type="url" with URL (document URL reference)
 type AnthropicImageSource struct {
-	Type      string `json:"type"` // "base64"
-	MediaType string `json:"media_type"`
-	Data      string `json:"data"`
+	Type      string          `json:"type"` // "base64" | "text" | "content" | "url"
+	MediaType string          `json:"media_type,omitempty"`
+	Data      string          `json:"data,omitempty"`
+	URL       string          `json:"url,omitempty"`
+	Content   json.RawMessage `json:"content,omitempty"` // nested []AnthropicContentBlock
 }
 
 // AnthropicTool describes a tool available to the model.
@@ -193,9 +209,17 @@ type ResponsesInputItem struct {
 
 // ResponsesContentPart is a typed content part in a Responses message.
 type ResponsesContentPart struct {
-	Type     string `json:"type"` // "input_text" | "output_text" | "input_image"
-	Text     string `json:"text,omitempty"`
-	ImageURL string `json:"image_url,omitempty"` // data URI for input_image
+	Type string `json:"type"` // "input_text" | "output_text" | "input_image" | "input_file"
+	Text string `json:"text,omitempty"`
+
+	// type=input_image
+	ImageURL string `json:"image_url,omitempty"` // data URI
+
+	// type=input_file — either FileID (pre-uploaded to OpenAI Files API)
+	// or Filename + FileData (data URI with base64 content).
+	Filename string `json:"filename,omitempty"`
+	FileData string `json:"file_data,omitempty"`
+	FileID   string `json:"file_id,omitempty"`
 }
 
 // ResponsesTool describes a tool in the Responses API.
@@ -374,15 +398,25 @@ type ChatMessage struct {
 
 // ChatContentPart is a typed content part in a multi-modal message.
 type ChatContentPart struct {
-	Type     string        `json:"type"` // "text" | "image_url"
+	Type     string        `json:"type"` // "text" | "image_url" | "file"
 	Text     string        `json:"text,omitempty"`
 	ImageURL *ChatImageURL `json:"image_url,omitempty"`
+	File     *ChatFile     `json:"file,omitempty"`
 }
 
 // ChatImageURL contains the URL for an image content part.
 type ChatImageURL struct {
 	URL    string `json:"url"`
 	Detail string `json:"detail,omitempty"` // "auto" | "low" | "high"
+}
+
+// ChatFile contains file data for a file content part (OpenAI Chat
+// Completions multimodal file input). Either FileID (pre-uploaded) or
+// Filename + FileData (base64 data URI in file_data).
+type ChatFile struct {
+	Filename string `json:"filename,omitempty"`
+	FileData string `json:"file_data,omitempty"`
+	FileID   string `json:"file_id,omitempty"`
 }
 
 // ChatTool describes a tool available to the model.
