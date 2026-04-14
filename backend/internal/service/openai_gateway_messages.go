@@ -318,9 +318,25 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 		}
 	}
 
+	// If the upstream closed the stream without emitting a terminal event
+	// (e.g. Codex EOFs mid-response for web_search or near an output cap),
+	// synthesize a finalResponse from the accumulated delta content. Only
+	// bail out if nothing was streamed at all — otherwise we'd drop a
+	// partially-delivered answer that the client could still use.
 	if finalResponse == nil {
-		writeAnthropicError(c, http.StatusBadGateway, "api_error", "Upstream stream ended without a terminal response event")
-		return nil, fmt.Errorf("upstream stream ended without terminal event")
+		if acc.HasContent() {
+			synthesized := &apicompat.ResponsesResponse{
+				Status: "incomplete",
+				Output: acc.BuildOutput(),
+			}
+			finalResponse = synthesized
+			logger.L().Warn("openai messages buffered: synthesized terminal from accumulator (upstream EOF without terminal event)",
+				zap.String("request_id", requestID),
+			)
+		} else {
+			writeAnthropicError(c, http.StatusBadGateway, "api_error", "Upstream stream ended without a terminal response event")
+			return nil, fmt.Errorf("upstream stream ended without terminal event")
+		}
 	}
 
 	// When the terminal event has an empty output array, reconstruct from
