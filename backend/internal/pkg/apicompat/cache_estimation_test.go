@@ -175,6 +175,131 @@ func TestEstimateAnthropicCacheUsage(t *testing.T) {
 	}
 }
 
+// TestVisibleOutputTokens covers the pure helper that subtracts OpenAI's
+// hidden chain-of-thought (reasoning_tokens) from the total output_tokens
+// counter to match what the Anthropic client actually sees in the response.
+func TestVisibleOutputTokens(t *testing.T) {
+	tests := []struct {
+		name      string
+		total     int
+		reasoning int
+		want      int
+	}{
+		// no reasoning: pass through unchanged
+		{"no_reasoning", 100, 0, 100},
+		{"zero_total_zero_reasoning", 0, 0, 0},
+		// normal case: reasoning > 0, total includes reasoning + visible
+		{"reasoning_half", 200, 100, 100},
+		{"reasoning_90_percent", 1000, 900, 100},
+		{"reasoning_all", 500, 500, 0},
+		// typical gcr "hi" request: 152 total (140 reasoning + 12 visible)
+		{"hi_test_real_numbers", 152, 140, 12},
+		// 10 visible, 5 reasoning
+		{"short_visible_with_small_reasoning", 15, 5, 10},
+		// defensive: reasoning exceeds total (shouldn't happen but handle)
+		{"reasoning_exceeds_total_clamps_zero", 50, 100, 0},
+		// negative reasoning is nonsense: pass through
+		{"negative_reasoning_passthrough", 50, -10, 50},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := visibleOutputTokens(tt.total, tt.reasoning)
+			if got != tt.want {
+				t.Errorf("visibleOutputTokens(%d, %d) = %d, want %d",
+					tt.total, tt.reasoning, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestResponsesToAnthropic_ReasoningSubtraction verifies the end-to-end
+// non-streaming conversion subtracts upstream reasoning_tokens from the
+// output_tokens counter. This is the fix for the "hi returns 152 output
+// tokens" symptom observed in NewAPI.
+func TestResponsesToAnthropic_ReasoningSubtraction(t *testing.T) {
+	mkResp := func(total, cached, outputTotal, reasoning int) *ResponsesResponse {
+		r := &ResponsesResponse{
+			ID:     "resp_reasoning_test",
+			Model:  "gpt-5.4",
+			Status: "completed",
+			Output: []ResponsesOutput{
+				{
+					Type: "message",
+					Content: []ResponsesContentPart{
+						{Type: "output_text", Text: "hi"},
+					},
+				},
+			},
+			Usage: &ResponsesUsage{
+				InputTokens:  total,
+				OutputTokens: outputTotal,
+				TotalTokens:  total + outputTotal,
+			},
+		}
+		if cached > 0 {
+			r.Usage.InputTokensDetails = &ResponsesInputTokensDetails{CachedTokens: cached}
+		}
+		if reasoning > 0 {
+			r.Usage.OutputTokensDetails = &ResponsesOutputTokensDetails{ReasoningTokens: reasoning}
+		}
+		return r
+	}
+
+	cases := []struct {
+		name              string
+		total, cached     int
+		outputTotal       int
+		reasoning         int
+		wantVisibleOutput int
+	}{
+		{
+			name: "hi_with_high_reasoning",
+			// Real observed: 4046 input, 152 output (140 reasoning + 12 visible)
+			total: 4046, cached: 0,
+			outputTotal: 152, reasoning: 140,
+			wantVisibleOutput: 12,
+		},
+		{
+			name: "long_request_mostly_reasoning",
+			// 20k input, 1000 output (800 reasoning + 200 visible)
+			total: 20000, cached: 0,
+			outputTotal: 1000, reasoning: 800,
+			wantVisibleOutput: 200,
+		},
+		{
+			name: "no_reasoning_pass_through",
+			// legacy non-reasoning response, total output is visible
+			total: 50, cached: 0,
+			outputTotal: 15, reasoning: 0,
+			wantVisibleOutput: 15,
+		},
+		{
+			name: "nil_output_tokens_details_pass_through",
+			// No details field at all (low-effort responses)
+			total: 50, cached: 0,
+			outputTotal: 10, reasoning: 0, // reasoning=0 will skip setting details
+			wantVisibleOutput: 10,
+		},
+		{
+			name: "reasoning_exceeds_output_clamp",
+			// Anomalous: shouldn't happen but clamp to 0 without panic
+			total: 50, cached: 0,
+			outputTotal: 5, reasoning: 10,
+			wantVisibleOutput: 0,
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			anth := ResponsesToAnthropic(mkResp(tt.total, tt.cached, tt.outputTotal, tt.reasoning), "claude-opus-4-6")
+			if anth.Usage.OutputTokens != tt.wantVisibleOutput {
+				t.Errorf("OutputTokens = %d, want %d (total=%d reasoning=%d)",
+					anth.Usage.OutputTokens, tt.wantVisibleOutput, tt.outputTotal, tt.reasoning)
+			}
+		})
+	}
+}
+
 // TestResponsesToAnthropic_CacheEstimation exercises the non-streaming code
 // path end to end, verifying the usage block emitted by ResponsesToAnthropic
 // matches the estimation rule for a variety of upstream usage shapes.
@@ -373,6 +498,72 @@ func TestStreamingCacheEstimation_Completed(t *testing.T) {
 	}
 }
 
+// TestStreamingReasoningSubtraction verifies the streaming path subtracts
+// reasoning_tokens from output_tokens at response.completed. Mirror of the
+// non-streaming TestResponsesToAnthropic_ReasoningSubtraction.
+func TestStreamingReasoningSubtraction(t *testing.T) {
+	cases := []struct {
+		name              string
+		outputTotal       int
+		reasoning         int
+		wantVisibleOutput int
+	}{
+		{"hi_high_reasoning", 152, 140, 12},
+		{"long_mostly_reasoning", 1000, 800, 200},
+		{"no_reasoning_passthrough", 15, 0, 15},
+		{"reasoning_exceeds_clamp", 5, 10, 0},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			state := NewResponsesEventToAnthropicState()
+
+			ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+				Type:     "response.created",
+				Response: &ResponsesResponse{ID: "resp_r", Model: "gpt-5.4"},
+			}, state)
+			ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+				Type:        "response.output_item.added",
+				OutputIndex: 0,
+				Item:        &ResponsesOutput{Type: "message"},
+			}, state)
+			ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+				Type:  "response.output_text.delta",
+				Delta: "hi",
+			}, state)
+			ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+				Type: "response.output_text.done",
+			}, state)
+
+			usage := &ResponsesUsage{InputTokens: 100, OutputTokens: tt.outputTotal}
+			if tt.reasoning > 0 {
+				usage.OutputTokensDetails = &ResponsesOutputTokensDetails{ReasoningTokens: tt.reasoning}
+			}
+			events := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+				Type: "response.completed",
+				Response: &ResponsesResponse{
+					Status: "completed",
+					Usage:  usage,
+				},
+			}, state)
+
+			var deltaEvent *AnthropicStreamEvent
+			for i := range events {
+				if events[i].Type == "message_delta" {
+					deltaEvent = &events[i]
+					break
+				}
+			}
+			if deltaEvent == nil || deltaEvent.Usage == nil {
+				t.Fatalf("message_delta event not emitted")
+			}
+			if deltaEvent.Usage.OutputTokens != tt.wantVisibleOutput {
+				t.Errorf("stream OutputTokens = %d, want %d (total=%d reasoning=%d)",
+					deltaEvent.Usage.OutputTokens, tt.wantVisibleOutput, tt.outputTotal, tt.reasoning)
+			}
+		})
+	}
+}
+
 // TestStreamingCacheEstimation_NoUsageAtCompletion covers a defensive case
 // where response.completed arrives without a Usage block. The message_delta
 // should still fire with zero counters rather than dropping the event or
@@ -439,7 +630,7 @@ func TestStreamingCacheEstimation_Finalize(t *testing.T) {
 	// not happen. Here we simulate the case where no usage was captured.
 	state.RawTotalInputTokens = 5000
 	state.RawCachedInputTokens = 1000
-	state.OutputTokens = 20
+	state.RawOutputTokens = 20
 
 	events := FinalizeResponsesAnthropicStream(state)
 	var deltaEvent *AnthropicStreamEvent
