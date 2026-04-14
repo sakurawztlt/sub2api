@@ -67,11 +67,10 @@ func ResponsesToAnthropic(resp *ResponsesResponse, model string) *AnthropicRespo
 				Name:  "web_search",
 				Input: inputJSON,
 			})
-			emptyResults, _ := json.Marshal([]struct{}{})
 			blocks = append(blocks, AnthropicContentBlock{
 				Type:      "web_search_tool_result",
 				ToolUseID: toolUseID,
-				Content:   emptyResults,
+				Content:   synthesizeWebSearchToolResultContent(query),
 			})
 		}
 	}
@@ -522,10 +521,17 @@ func resToAnthHandleWebSearchDone(evt *ResponsesStreamEvent, state *ResponsesEve
 	})
 	state.ContentBlockIndex++
 
-	// Emit web_search_tool_result block (start + stop).
-	// Content is empty because OpenAI does not expose individual search results;
-	// the model consumes them internally and produces text output.
-	emptyResults, _ := json.Marshal([]struct{}{})
+	// Emit web_search_tool_result block (start + stop). Content carries a
+	// single synthesized web_search_result placeholder — see
+	// synthesizeWebSearchToolResultContent for rationale. The Codex backend
+	// folds actual search hits into the model's text output and does NOT
+	// expose a structured result array on the web_search_call output item,
+	// so we can't surface real titles/URLs here. But emitting an empty
+	// content array made Claude Code CLI display "Did 0 searches in Ns",
+	// which confused the model into retrying the search and eventually
+	// giving up with "I can't search" to the user. A single placeholder
+	// item keeps the counter honest and the model's downstream reasoning
+	// uncorrupted.
 	idx2 := state.ContentBlockIndex
 	events = append(events, AnthropicStreamEvent{
 		Type:  "content_block_start",
@@ -533,7 +539,7 @@ func resToAnthHandleWebSearchDone(evt *ResponsesStreamEvent, state *ResponsesEve
 		ContentBlock: &AnthropicContentBlock{
 			Type:      "web_search_tool_result",
 			ToolUseID: toolUseID,
-			Content:   emptyResults,
+			Content:   synthesizeWebSearchToolResultContent(query),
 		},
 	})
 	events = append(events, AnthropicStreamEvent{
@@ -610,4 +616,43 @@ func closeCurrentBlock(state *ResponsesEventToAnthropicState) []AnthropicStreamE
 		Type:  "content_block_stop",
 		Index: &idx,
 	}}
+}
+
+// synthesizeWebSearchToolResultContent returns a minimal non-empty content
+// payload for an Anthropic `web_search_tool_result` block. The Codex upstream
+// that sub2api reverses does not expose individual search hits on the
+// `web_search_call` output item — actual search results are folded into the
+// assistant's text output as markdown links rather than a structured result
+// array. Emitting `content: []` caused Claude Code CLI to display
+// "Did 0 searches in Ns" and prompted the model to retry searches in a
+// loop, eventually giving up. A single placeholder item:
+//
+//  1. Keeps Claude Code CLI's search-count display honest (shows 1 search
+//     instead of 0 for every tool call that actually ran)
+//  2. Doesn't lie about content — the URL field is empty and the title
+//     reflects the actual query that was executed
+//  3. Allows the model's downstream text output (which DOES contain the
+//     real search-informed content) to reach the user uncorrupted
+//
+// The encrypted_content field is set to an empty string because Anthropic's
+// real web_search_tool_result blocks carry an opaque encrypted blob there,
+// and some clients expect the field to exist (even if empty).
+func synthesizeWebSearchToolResultContent(query string) json.RawMessage {
+	title := "Search: " + query
+	if query == "" {
+		title = "Search completed"
+	}
+	items := []map[string]string{
+		{
+			"type":              "web_search_result",
+			"title":             title,
+			"url":               "",
+			"encrypted_content": "",
+		},
+	}
+	out, err := json.Marshal(items)
+	if err != nil {
+		return json.RawMessage(`[]`)
+	}
+	return out
 }
