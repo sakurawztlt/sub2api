@@ -88,16 +88,42 @@ func ResponsesToAnthropic(resp *ResponsesResponse, model string) *AnthropicRespo
 		if resp.Usage.InputTokensDetails != nil {
 			cached = resp.Usage.InputTokensDetails.CachedTokens
 		}
+		reasoning := 0
+		if resp.Usage.OutputTokensDetails != nil {
+			reasoning = resp.Usage.OutputTokensDetails.ReasoningTokens
+		}
 		input, creation, read := estimateAnthropicCacheUsage(resp.Usage.InputTokens, cached)
 		out.Usage = AnthropicUsage{
 			InputTokens:              input,
-			OutputTokens:             resp.Usage.OutputTokens,
+			OutputTokens:             visibleOutputTokens(resp.Usage.OutputTokens, reasoning),
 			CacheCreationInputTokens: creation,
 			CacheReadInputTokens:     read,
 		}
 	}
 
 	return out
+}
+
+// visibleOutputTokens computes the visible-output portion of an OpenAI
+// Responses API `output_tokens` counter. OpenAI reports the total including
+// hidden reasoning (chain-of-thought) tokens; Anthropic non-thinking
+// `output_tokens` should cover only text the client actually sees in the
+// response content. Subtract reasoning_tokens and clamp to zero.
+//
+// For Anthropic-thinking clients, the reasoning content is separately
+// surfaced as thinking_delta events in the stream, whose summary text is
+// NOT counted by OpenAI's reasoning_tokens (OpenAI accounts the full hidden
+// chain there). Counting only the visible text matches what the client can
+// actually render and audit in the response.
+func visibleOutputTokens(total, reasoning int) int {
+	if reasoning <= 0 {
+		return total
+	}
+	v := total - reasoning
+	if v < 0 {
+		return 0
+	}
+	return v
 }
 
 // openaiPrefixCacheMinTokens is the minimum input-token size at which OpenAI's
@@ -183,12 +209,16 @@ type ResponsesEventToAnthropicState struct {
 	OutputIndexToBlockIdx map[int]int
 
 	// Raw OpenAI-side usage as observed on the wire. The Anthropic-side
-	// usage fields (InputTokens / CacheCreation / CacheRead) are derived
-	// from these at emission time via estimateAnthropicCacheUsage so the
-	// stream and non-stream code paths share identical mapping rules.
+	// usage fields (InputTokens / CacheCreation / CacheRead / OutputTokens)
+	// are derived from these at emission time via estimateAnthropicCacheUsage
+	// and visibleOutputTokens so the stream and non-stream code paths share
+	// identical mapping rules. RawReasoningTokens is OpenAI's hidden chain-
+	// of-thought counter which is subtracted from RawOutputTokens before the
+	// value is surfaced to Anthropic clients.
 	RawTotalInputTokens  int
 	RawCachedInputTokens int
-	OutputTokens         int
+	RawOutputTokens      int
+	RawReasoningTokens   int
 
 	ResponseID string
 	Model      string
@@ -246,6 +276,7 @@ func FinalizeResponsesAnthropicStream(state *ResponsesEventToAnthropicState) []A
 	events = append(events, closeCurrentBlock(state)...)
 
 	input, creation, read := estimateAnthropicCacheUsage(state.RawTotalInputTokens, state.RawCachedInputTokens)
+	outputTokens := visibleOutputTokens(state.RawOutputTokens, state.RawReasoningTokens)
 
 	events = append(events,
 		AnthropicStreamEvent{
@@ -255,7 +286,7 @@ func FinalizeResponsesAnthropicStream(state *ResponsesEventToAnthropicState) []A
 			},
 			Usage: &AnthropicUsage{
 				InputTokens:              input,
-				OutputTokens:             state.OutputTokens,
+				OutputTokens:             outputTokens,
 				CacheCreationInputTokens: creation,
 				CacheReadInputTokens:     read,
 			},
@@ -526,9 +557,12 @@ func resToAnthHandleCompleted(evt *ResponsesStreamEvent, state *ResponsesEventTo
 	if evt.Response != nil {
 		if evt.Response.Usage != nil {
 			state.RawTotalInputTokens = evt.Response.Usage.InputTokens
-			state.OutputTokens = evt.Response.Usage.OutputTokens
+			state.RawOutputTokens = evt.Response.Usage.OutputTokens
 			if evt.Response.Usage.InputTokensDetails != nil {
 				state.RawCachedInputTokens = evt.Response.Usage.InputTokensDetails.CachedTokens
+			}
+			if evt.Response.Usage.OutputTokensDetails != nil {
+				state.RawReasoningTokens = evt.Response.Usage.OutputTokensDetails.ReasoningTokens
 			}
 		}
 		switch evt.Response.Status {
@@ -544,6 +578,7 @@ func resToAnthHandleCompleted(evt *ResponsesStreamEvent, state *ResponsesEventTo
 	}
 
 	input, creation, read := estimateAnthropicCacheUsage(state.RawTotalInputTokens, state.RawCachedInputTokens)
+	outputTokens := visibleOutputTokens(state.RawOutputTokens, state.RawReasoningTokens)
 
 	events = append(events,
 		AnthropicStreamEvent{
@@ -553,7 +588,7 @@ func resToAnthHandleCompleted(evt *ResponsesStreamEvent, state *ResponsesEventTo
 			},
 			Usage: &AnthropicUsage{
 				InputTokens:              input,
-				OutputTokens:             state.OutputTokens,
+				OutputTokens:             outputTokens,
 				CacheCreationInputTokens: creation,
 				CacheReadInputTokens:     read,
 			},
