@@ -1593,17 +1593,14 @@ func TestAnthropicToResponses_OrphanedToolResultSynthesizesPlaceholder(t *testin
 }
 
 func TestAnthropicToResponses_AnthropicServerSideToolsDropped(t *testing.T) {
-	// Anthropic server-side tools (web_search, computer_, text_editor_,
-	// bash_) cannot be translated to OpenAI Responses API. They must be
-	// dropped from the tools list, not emitted as {"type":"web_search"}
-	// (which upstream rejects with 400 "Invalid schema for function
-	// 'web_search'").
+	// Anthropic server-side tools that have NO equivalent hosted tool in
+	// OpenAI Responses API must be dropped at conversion time. This covers
+	// computer_*, text_editor_*, and bash_*. web_search_* is handled
+	// separately — see TestAnthropicToResponses_WebSearchTranslatedToPreview.
 	cases := []struct {
 		name string
 		tool AnthropicTool
 	}{
-		{"web_search_20250305", AnthropicTool{Type: "web_search_20250305", Name: "web_search"}},
-		{"web_search_20250101", AnthropicTool{Type: "web_search_20250101", Name: "web_search"}},
 		{"computer_20241022", AnthropicTool{Type: "computer_20241022", Name: "computer"}},
 		{"text_editor_20241022", AnthropicTool{Type: "text_editor_20241022", Name: "str_replace_editor"}},
 		{"bash_20241022", AnthropicTool{Type: "bash_20241022", Name: "bash"}},
@@ -1622,15 +1619,12 @@ func TestAnthropicToResponses_AnthropicServerSideToolsDropped(t *testing.T) {
 			}
 			resp, err := AnthropicToResponses(req)
 			require.NoError(t, err)
-			// Server-side tool should be dropped, leaving only the two custom function tools.
 			require.Len(t, resp.Tools, 2)
 			assert.Equal(t, "function", resp.Tools[0].Type)
 			assert.Equal(t, "my_custom_tool", resp.Tools[0].Name)
 			assert.Equal(t, "function", resp.Tools[1].Type)
 			assert.Equal(t, "another_custom", resp.Tools[1].Name)
-			// Verify neither emitted tool uses "web_search"/"computer"/etc. as its type.
 			for _, rt := range resp.Tools {
-				assert.NotContains(t, rt.Type, "web_search")
 				assert.NotContains(t, rt.Type, "computer_")
 				assert.NotContains(t, rt.Type, "text_editor_")
 				assert.NotContains(t, rt.Type, "bash_")
@@ -1639,16 +1633,88 @@ func TestAnthropicToResponses_AnthropicServerSideToolsDropped(t *testing.T) {
 	}
 }
 
-func TestAnthropicToResponses_OnlyServerSideToolsResultsInEmptyTools(t *testing.T) {
-	// Edge case: request has ONLY a server-side tool. After dropping, the
-	// resulting tools list should be empty (not nil-crashed, and not leaking
-	// the dropped tool back in).
+func TestAnthropicToResponses_WebSearchTranslatedToPreview(t *testing.T) {
+	// Anthropic's web_search_* tool family translates to OpenAI Responses
+	// API's hosted `web_search_preview` tool. Output items of type
+	// web_search_call emitted by OpenAI get converted back to
+	// server_tool_use + web_search_tool_result by responses_to_anthropic.go.
+	cases := []struct {
+		name string
+		tool AnthropicTool
+	}{
+		{"web_search_20250305", AnthropicTool{Type: "web_search_20250305", Name: "web_search"}},
+		{"web_search_20250101", AnthropicTool{Type: "web_search_20250101", Name: "web_search"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &AnthropicRequest{
+				Model:     "gpt-5.2",
+				MaxTokens: 1024,
+				Messages:  []AnthropicMessage{{Role: "user", Content: json.RawMessage(`"search for news"`)}},
+				Tools: []AnthropicTool{
+					{Name: "my_custom_tool", Description: "A real tool", InputSchema: json.RawMessage(`{"type":"object","properties":{"x":{"type":"string"}}}`)},
+					tc.tool,
+				},
+			}
+			resp, err := AnthropicToResponses(req)
+			require.NoError(t, err)
+			require.Len(t, resp.Tools, 2)
+			assert.Equal(t, "function", resp.Tools[0].Type)
+			assert.Equal(t, "my_custom_tool", resp.Tools[0].Name)
+			assert.Equal(t, "web_search", resp.Tools[1].Type, "Codex hosted search uses the bare name")
+			assert.Empty(t, resp.Tools[1].Name, "hosted tools should not carry a function name")
+			assert.Nil(t, resp.Tools[1].Parameters, "hosted tools should not carry parameters")
+		})
+	}
+}
+
+func TestAnthropicToResponses_EmptyAssistantStringIsSkipped(t *testing.T) {
+	// Regression guard for "Missing required parameter: 'input[N].content[0].text'"
+	// observed ~500+ times/hour on backup prod channel 15 before fix. When a
+	// client sends {"role":"assistant","content":""} (empty string form —
+	// possible during conversation replay / resume), the old path emitted
+	// [{"type":"output_text","text":""}] which Go's json.Marshal serializes
+	// as [{"type":"output_text"}] because Text has json:"text,omitempty".
+	// Codex upstream then 400s on the missing text field. The fix skips the
+	// message entirely when the content string is empty.
 	req := &AnthropicRequest{
 		Model:     "gpt-5.2",
 		MaxTokens: 1024,
-		Messages:  []AnthropicMessage{{Role: "user", Content: json.RawMessage(`"search for news"`)}},
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: json.RawMessage(`"hi"`)},
+			{Role: "assistant", Content: json.RawMessage(`""`)},
+			{Role: "user", Content: json.RawMessage(`"are you there?"`)},
+		},
+	}
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+
+	var items []ResponsesInputItem
+	require.NoError(t, json.Unmarshal(resp.Input, &items))
+	// Empty assistant message is dropped — expect only the 2 user messages.
+	require.Len(t, items, 2, "empty assistant string should be skipped entirely")
+	assert.Equal(t, "user", items[0].Role)
+	assert.Equal(t, "user", items[1].Role)
+
+	// Belt-and-suspenders: make sure the serialized request body does NOT
+	// contain the exact malformed shape `{"type":"output_text"}` (missing
+	// text field) anywhere.
+	raw, err := json.Marshal(resp)
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), `{"type":"output_text"}`,
+		"must not emit output_text without a text field")
+}
+
+func TestAnthropicToResponses_OnlyDroppedServerSideToolsResultsInEmptyTools(t *testing.T) {
+	// Edge case: request has ONLY a dropped server-side tool. After dropping,
+	// the resulting tools list should be empty (not nil-crashed, and not
+	// leaking the dropped tool back in).
+	req := &AnthropicRequest{
+		Model:     "gpt-5.2",
+		MaxTokens: 1024,
+		Messages:  []AnthropicMessage{{Role: "user", Content: json.RawMessage(`"hi"`)}},
 		Tools: []AnthropicTool{
-			{Type: "web_search_20250305", Name: "web_search"},
+			{Type: "computer_20241022", Name: "computer"},
 		},
 	}
 	resp, err := AnthropicToResponses(req)
