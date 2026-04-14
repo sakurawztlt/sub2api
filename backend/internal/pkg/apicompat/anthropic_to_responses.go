@@ -300,9 +300,16 @@ func anthropicUserToResponses(raw json.RawMessage) ([]ResponsesInputItem, error)
 // tool_use blocks → function_call items.
 // thinking blocks → ignored (OpenAI doesn't accept them as input).
 func anthropicAssistantToResponses(raw json.RawMessage) ([]ResponsesInputItem, error) {
-	// Try plain string.
+	// Try plain string. An empty string MUST be skipped entirely: emitting
+	// {Type:"output_text", Text:""} serializes to {"type":"output_text"}
+	// (the Text field has `omitempty`), which the Responses upstream rejects
+	// as `Missing required parameter: 'input[N].content[0].text'`. Observed
+	// ~500+ times/hour on backup prod channel 15 before this guard.
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
+		if s == "" {
+			return nil, nil
+		}
 		parts := []ResponsesContentPart{{Type: "output_text", Text: s}}
 		partsJSON, err := json.Marshal(parts)
 		if err != nil {
@@ -467,28 +474,31 @@ func mapAnthropicEffortToResponses(effort string) string {
 }
 
 // convertAnthropicToolsToResponses maps Anthropic tool definitions to
-// Responses API tools. Regular (function) tools are translated to OpenAI
-// function tools. Anthropic server-side tools (web_search_*, computer_*,
-// text_editor_*, bash_*) are DROPPED because OpenAI Responses API has no
-// equivalent hosted tools on gpt-5.x:
+// Responses API tools.
 //
-// Historical behavior: used to emit {"type":"web_search"} which OpenAI's
-// Responses API validator parsed as an unknown type and fell through to
-// function-tool schema validation, yielding:
-//
-//	400 Invalid schema for function 'web_search': None is not of type 'object'
-//
-// (observed ~650 times over 3 days on production NewAPI).
-//
-// Keeping the tool as a function-shaped stub would succeed schema-wise
-// but would surface tool_use blocks to the client that the client expected
-// Anthropic to handle server-side, confusing client-side handlers. Dropping
-// is the least-broken fallback: the upstream model responds without the
-// server tool, which is identical to "the tool produced no useful result".
+//  1. Regular (function) tools → Responses function tools with their schema.
+//  2. Anthropic `web_search_*` (e.g. web_search_20250305) → sub2api Codex
+//     hosted `web_search` tool. The Codex wire protocol uses the bare name
+//     `web_search`, confirmed by:
+//       - types.go:212 ResponsesTool.Type comment listing `"web_search"`
+//       - responses_to_anthropic_request.go:432 reverse mapping
+//         `web_search` → `web_search_20250305`
+//       - responses_to_anthropic.go:57 output-item handler for
+//         `web_search_call` → server_tool_use + web_search_tool_result
+//     Earlier attempts that emitted `{"type":"web_search_preview"}` (the
+//     OpenAI public Responses API name) were rejected by Codex upstream
+//     with "Unsupported tool type" — Codex uses the bare name.
+//  3. Other Anthropic server-side tools (`computer_*`, `text_editor_*`,
+//     `bash_*`) are still DROPPED because sub2api's Codex path has no
+//     matching hosted tool in the Responses output side.
 func convertAnthropicToolsToResponses(tools []AnthropicTool) []ResponsesTool {
 	var out []ResponsesTool
 	for _, t := range tools {
-		if isAnthropicServerSideTool(t.Type) {
+		if strings.HasPrefix(t.Type, "web_search") {
+			out = append(out, ResponsesTool{Type: "web_search"})
+			continue
+		}
+		if isAnthropicDroppedServerTool(t.Type) {
 			continue
 		}
 		out = append(out, ResponsesTool{
@@ -501,17 +511,16 @@ func convertAnthropicToolsToResponses(tools []AnthropicTool) []ResponsesTool {
 	return out
 }
 
-// isAnthropicServerSideTool reports whether a tool Type matches an Anthropic
-// server-side hosted tool — web_search_*, computer_*, text_editor_*, bash_*.
-// These cannot be translated to OpenAI Responses API tools and are dropped
-// at conversion time.
-func isAnthropicServerSideTool(toolType string) bool {
+// isAnthropicDroppedServerTool reports whether a tool Type is an Anthropic
+// server-side hosted tool that has NO equivalent in OpenAI Responses API and
+// must be silently dropped at conversion time. `web_search_*` is handled
+// separately by convertAnthropicToolsToResponses and is NOT included here.
+func isAnthropicDroppedServerTool(toolType string) bool {
 	if toolType == "" {
 		return false
 	}
 	switch {
-	case strings.HasPrefix(toolType, "web_search"),
-		strings.HasPrefix(toolType, "computer_"),
+	case strings.HasPrefix(toolType, "computer_"),
 		strings.HasPrefix(toolType, "text_editor_"),
 		strings.HasPrefix(toolType, "bash_"):
 		return true
