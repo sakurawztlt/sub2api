@@ -130,6 +130,22 @@ func TestApplyCodexOAuthTransform_ExplicitStoreTrueForcedFalse(t *testing.T) {
 	require.False(t, store)
 }
 
+func TestApplyCodexOAuthTransform_StripsUnsupportedFlexServiceTier(t *testing.T) {
+	reqBody := map[string]any{
+		"model":        "gpt-5.2",
+		"service_tier": "flex",
+		"input": []any{
+			map[string]any{"type": "message", "role": "user", "content": "hi"},
+		},
+	}
+
+	result := applyCodexOAuthTransform(reqBody, false, false)
+
+	_, hasServiceTier := reqBody["service_tier"]
+	require.False(t, hasServiceTier)
+	require.True(t, result.Modified)
+}
+
 func TestApplyCodexOAuthTransform_CompactForcesNonStreaming(t *testing.T) {
 	reqBody := map[string]any{
 		"model":  "gpt-5.1-codex",

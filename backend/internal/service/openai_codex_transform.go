@@ -139,6 +139,10 @@ func applyCodexOAuthTransform(reqBody map[string]any, isCodexCLI bool, isCompact
 		}
 	}
 
+	if stripUnsupportedOpenAIOAuthServiceTier(reqBody) {
+		result.Modified = true
+	}
+
 	// 兼容遗留的 functions 和 function_call，转换为 tools 和 tool_choice
 	if functionsRaw, ok := reqBody["functions"]; ok {
 		if functions, k := functionsRaw.([]any); k {
