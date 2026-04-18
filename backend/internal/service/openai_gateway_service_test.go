@@ -154,7 +154,8 @@ func TestOpenAIGatewayService_GenerateSessionHash_Priority(t *testing.T) {
 
 	bodyWithKey := []byte(`{"prompt_cache_key":"ses_aaa"}`)
 
-	// 1) session_id header wins
+	// 1) conversation_id should win when both headers are present because it is
+	// conversation-scoped while session_id may span multiple conversations.
 	c.Request.Header.Set("session_id", "sess-123")
 	c.Request.Header.Set("conversation_id", "conv-456")
 	h1 := svc.GenerateSessionHash(c, bodyWithKey)
@@ -162,29 +163,39 @@ func TestOpenAIGatewayService_GenerateSessionHash_Priority(t *testing.T) {
 		t.Fatalf("expected non-empty hash")
 	}
 
-	// 2) conversation_id used when session_id absent
-	c.Request.Header.Del("session_id")
+	c.Request.Header.Del("conversation_id")
 	h2 := svc.GenerateSessionHash(c, bodyWithKey)
 	if h2 == "" {
 		t.Fatalf("expected non-empty hash")
 	}
 	if h1 == h2 {
-		t.Fatalf("expected different hashes for different keys")
+		t.Fatalf("expected conversation_id to take precedence over session_id")
 	}
 
-	// 3) prompt_cache_key used when both headers absent
-	c.Request.Header.Del("conversation_id")
+	// 2) conversation_id used when session_id absent
+	c.Request.Header.Del("session_id")
+	c.Request.Header.Set("conversation_id", "conv-456")
 	h3 := svc.GenerateSessionHash(c, bodyWithKey)
 	if h3 == "" {
 		t.Fatalf("expected non-empty hash")
 	}
-	if h2 == h3 {
+	if h1 != h3 {
+		t.Fatalf("expected same hash when conversation_id is the effective signal")
+	}
+
+	// 3) prompt_cache_key used when both headers absent
+	c.Request.Header.Del("conversation_id")
+	h4 := svc.GenerateSessionHash(c, bodyWithKey)
+	if h4 == "" {
+		t.Fatalf("expected non-empty hash")
+	}
+	if h3 == h4 {
 		t.Fatalf("expected different hashes for different keys")
 	}
 
 	// 4) empty when no signals
-	h4 := svc.GenerateSessionHash(c, []byte(`{}`))
-	if h4 != "" {
+	hEmpty := svc.GenerateSessionHash(c, []byte(`{}`))
+	if hEmpty != "" {
 		t.Fatalf("expected empty hash when no signals")
 	}
 }
@@ -201,6 +212,26 @@ func TestOpenAIGatewayService_GenerateSessionHash_UsesXXHash64(t *testing.T) {
 	got := svc.GenerateSessionHash(c, nil)
 	want := fmt.Sprintf("%016x", xxhash.Sum64String("sess-fixed-value"))
 	require.Equal(t, want, got)
+}
+
+func TestOpenAIGatewayService_GenerateSessionHash_ConversationIDOverridesStableSessionID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	c.Request.Header.Set("session_id", "stable-session")
+
+	svc := &OpenAIGatewayService{}
+
+	c.Request.Header.Set("conversation_id", "conv-1")
+	hash1 := svc.GenerateSessionHash(c, nil)
+	require.NotEmpty(t, hash1)
+
+	c.Request.Header.Set("conversation_id", "conv-2")
+	hash2 := svc.GenerateSessionHash(c, nil)
+	require.NotEmpty(t, hash2)
+
+	require.NotEqual(t, hash1, hash2, "different conversation_id values must not collapse into one sticky session")
 }
 
 func TestOpenAIGatewayService_GenerateSessionHash_AttachesLegacyHashToContext(t *testing.T) {
@@ -1623,6 +1654,36 @@ func TestOpenAIBuildUpstreamRequestOpenAIPassthroughPreservesCompactPath(t *test
 	require.Equal(t, "application/json", req.Header.Get("Accept"))
 	require.Equal(t, codexCLIVersion, req.Header.Get("Version"))
 	require.NotEmpty(t, req.Header.Get("Session_Id"))
+}
+
+func TestOpenAIBuildUpstreamRequestOpenAIPassthroughPrefersConversationIDForSessionID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader([]byte(`{"model":"gpt-5"}`)))
+	c.Request.Header.Set("session_id", "stable-session")
+	c.Request.Header.Set("conversation_id", "conv-fresh")
+
+	svc := &OpenAIGatewayService{}
+	account := &Account{Type: AccountTypeOAuth}
+
+	req, err := svc.buildUpstreamRequestOpenAIPassthrough(c.Request.Context(), c, account, []byte(`{"model":"gpt-5"}`), "token")
+	require.NoError(t, err)
+
+	expected := isolateOpenAISessionID(0, "conv-fresh")
+	require.Equal(t, expected, req.Header.Get("Conversation_Id"))
+	require.Equal(t, expected, req.Header.Get("Session_Id"), "passthrough upstream session_id should follow conversation_id")
+}
+
+func TestResolveOpenAICompactSessionIDPrefersConversationID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/compact", nil)
+	c.Request.Header.Set("session_id", "stable-session")
+	c.Request.Header.Set("conversation_id", "conv-fresh")
+
+	require.Equal(t, "conv-fresh", resolveOpenAICompactSessionID(c))
 }
 
 func TestOpenAIBuildUpstreamRequestCompactForcesJSONAcceptForOAuth(t *testing.T) {

@@ -456,9 +456,76 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthStoreFalseByDefault(t *testing.T
 	require.True(t, gjson.Get(requestJSON, "stream").Bool(), "OAuth Codex 规范化后应强制 stream=true")
 	require.Equal(t, openAIWSBetaV2Value, captureDialer.lastHeaders.Get("OpenAI-Beta"))
 	// OAuth 账号的 session_id/conversation_id 应被 isolateOpenAISessionID 隔离，
+	// 且当同时存在 conversation_id 时，应由 conversation_id 主导上游 session_id。
 	// 测试中未设置 api_key 到 context，apiKeyID=0。
-	require.Equal(t, isolateOpenAISessionID(0, "sess-oauth-1"), captureDialer.lastHeaders.Get("session_id"))
+	require.Equal(t, isolateOpenAISessionID(0, "conv-oauth-1"), captureDialer.lastHeaders.Get("session_id"))
 	require.Equal(t, isolateOpenAISessionID(0, "conv-oauth-1"), captureDialer.lastHeaders.Get("conversation_id"))
+}
+
+func TestOpenAIGatewayService_Forward_WSv2_OAuthPrefersConversationIDForUpstreamSession(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.98.0")
+	c.Request.Header.Set("session_id", "stable-session")
+	c.Request.Header.Set("conversation_id", "conv-fresh")
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.AllowStoreRecovery = false
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+
+	captureConn := &openAIWSCaptureConn{
+		events: [][]byte{
+			[]byte(`{"type":"response.completed","response":{"id":"resp_oauth_conv_pref","model":"gpt-5.1","usage":{"input_tokens":3,"output_tokens":2}}}`),
+		},
+	}
+	captureDialer := &openAIWSCaptureDialer{conn: captureConn}
+	pool := newOpenAIWSConnPool(cfg)
+	pool.setClientDialerForTest(captureDialer)
+
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		httpUpstream:     &httpUpstreamRecorder{},
+		cache:            &stubGatewayCache{},
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:    NewCodexToolCorrector(),
+		openaiWSPool:     pool,
+	}
+	account := &Account{
+		ID:          30,
+		Name:        "openai-oauth-conv-pref",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "oauth-token-1",
+		},
+		Extra: map[string]any{
+			"responses_websockets_v2_enabled": true,
+		},
+	}
+
+	body := []byte(`{"model":"gpt-5.1","stream":false,"store":true,"input":[{"type":"input_text","text":"hello"}]}`)
+	result, err := svc.Forward(context.Background(), c, account, body)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "resp_oauth_conv_pref", result.RequestID)
+
+	expected := isolateOpenAISessionID(0, "conv-fresh")
+	require.Equal(t, expected, captureDialer.lastHeaders.Get("conversation_id"))
+	require.Equal(t, expected, captureDialer.lastHeaders.Get("session_id"), "upstream session_id should follow conversation_id to avoid reviving stale conversations")
 }
 
 func TestOpenAIGatewayService_Forward_WSv2_OAuthOriginatorCompatibility(t *testing.T) {
@@ -783,6 +850,118 @@ func TestOpenAIGatewayService_Forward_WSv2_TurnStateAndMetadataReplayOnReconnect
 	require.Equal(t, "turn_meta_1", firstHandshakeHeaders.Get("X-Codex-Turn-Metadata"))
 	require.Equal(t, "turn_meta_2", secondHandshakeHeaders.Get("X-Codex-Turn-Metadata"))
 	require.Equal(t, "turn_state_first", secondHandshakeHeaders.Get("X-Codex-Turn-State"))
+}
+
+func TestOpenAIGatewayService_Forward_WSv2_DoesNotReplayTurnStateAcrossConversationChange(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	var connIndex atomic.Int64
+	headersCh := make(chan http.Header, 4)
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		idx := connIndex.Add(1)
+		headersCh <- cloneHeader(r.Header)
+
+		respHeader := http.Header{}
+		if idx == 1 {
+			respHeader.Set("x-codex-turn-state", "turn_state_first")
+		}
+		conn, err := upgrader.Upgrade(w, r, respHeader)
+		if err != nil {
+			t.Errorf("upgrade websocket failed: %v", err)
+			return
+		}
+		defer func() {
+			_ = conn.Close()
+		}()
+
+		var request map[string]any
+		if err := conn.ReadJSON(&request); err != nil {
+			t.Errorf("read ws request failed: %v", err)
+			return
+		}
+		responseID := "resp_turn_conv_" + strconv.FormatInt(idx, 10)
+		if err := conn.WriteJSON(map[string]any{
+			"type": "response.completed",
+			"response": map[string]any{
+				"id":    responseID,
+				"model": "gpt-5.1",
+				"usage": map[string]any{
+					"input_tokens":  2,
+					"output_tokens": 1,
+				},
+			},
+		}); err != nil {
+			t.Errorf("write response.completed failed: %v", err)
+			return
+		}
+	}))
+	defer wsServer.Close()
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.OAuthEnabled = true
+	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 0
+
+	svc := &OpenAIGatewayService{
+		cfg:              cfg,
+		httpUpstream:     &httpUpstreamRecorder{},
+		cache:            &stubGatewayCache{},
+		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
+		toolCorrector:    NewCodexToolCorrector(),
+	}
+
+	account := &Account{
+		ID:          50,
+		Name:        "openai-turn-state-isolation",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":  "sk-test",
+			"base_url": wsServer.URL,
+		},
+		Extra: map[string]any{
+			"responses_websockets_v2_enabled": true,
+		},
+	}
+
+	reqBody := []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
+	rec1 := httptest.NewRecorder()
+	c1, _ := gin.CreateTestContext(rec1)
+	c1.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	c1.Request.Header.Set("session_id", "stable_session")
+	c1.Request.Header.Set("conversation_id", "conv-A")
+	result1, err := svc.Forward(context.Background(), c1, account, reqBody)
+	require.NoError(t, err)
+	require.NotNil(t, result1)
+
+	connID, hasConn := svc.getOpenAIWSStateStore().GetResponseConn(result1.RequestID)
+	require.True(t, hasConn)
+	svc.getOpenAIWSConnPool().evictConn(account.ID, connID)
+
+	rec2 := httptest.NewRecorder()
+	c2, _ := gin.CreateTestContext(rec2)
+	c2.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	c2.Request.Header.Set("session_id", "stable_session")
+	c2.Request.Header.Set("conversation_id", "conv-B")
+	result2, err := svc.Forward(context.Background(), c2, account, reqBody)
+	require.NoError(t, err)
+	require.NotNil(t, result2)
+
+	firstHandshakeHeaders := <-headersCh
+	secondHandshakeHeaders := <-headersCh
+	require.Equal(t, "conv-A", firstHandshakeHeaders.Get("conversation_id"))
+	require.Equal(t, "conv-B", secondHandshakeHeaders.Get("conversation_id"))
+	require.Empty(t, secondHandshakeHeaders.Get("X-Codex-Turn-State"), "new conversation must not inherit stale turn state")
 }
 
 func TestOpenAIGatewayService_Forward_WSv2_GeneratePrewarm(t *testing.T) {
