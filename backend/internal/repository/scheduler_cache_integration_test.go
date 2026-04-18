@@ -4,6 +4,7 @@ package repository
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -85,4 +86,74 @@ func TestSchedulerCacheSnapshotUsesSlimMetadataButKeepsFullAccount(t *testing.T)
 	require.NotNil(t, full)
 	require.Equal(t, "secret-access-token", full.GetCredential("access_token"))
 	require.Equal(t, strings.Repeat("x", 4096), full.GetCredential("huge_blob"))
+}
+
+func TestSchedulerCacheUpdateLastUsedUsesSideKeyAndKeepsAccountJSON(t *testing.T) {
+	ctx := context.Background()
+	rdb := testRedis(t)
+	cache := NewSchedulerCache(rdb)
+
+	initialUsedAt := time.Now().UTC().Truncate(time.Second)
+	account := &service.Account{
+		ID:          202,
+		Name:        "hot-field-account",
+		Platform:    service.PlatformOpenAI,
+		Type:        service.AccountTypeAPIKey,
+		Status:      service.StatusActive,
+		Schedulable: true,
+		Concurrency: 2,
+		LastUsedAt:  &initialUsedAt,
+		Credentials: map[string]any{
+			"api_key":   "k-1",
+			"huge_blob": strings.Repeat("a", 2048),
+		},
+		Extra: map[string]any{
+			"quota_limit": 100,
+			"notes_blob":  strings.Repeat("b", 2048),
+		},
+	}
+	require.NoError(t, cache.SetAccount(ctx, account))
+
+	id := strconv.FormatInt(account.ID, 10)
+	accountBefore, err := rdb.Get(ctx, schedulerAccountKey(id)).Result()
+	require.NoError(t, err)
+	metaBefore, err := rdb.Get(ctx, schedulerAccountMetaKey(id)).Result()
+	require.NoError(t, err)
+
+	latestUsedAt := initialUsedAt.Add(37 * time.Second)
+	require.NoError(t, cache.UpdateLastUsed(ctx, map[int64]time.Time{
+		account.ID: latestUsedAt,
+	}))
+
+	accountAfter, err := rdb.Get(ctx, schedulerAccountKey(id)).Result()
+	require.NoError(t, err)
+	metaAfter, err := rdb.Get(ctx, schedulerAccountMetaKey(id)).Result()
+	require.NoError(t, err)
+	require.Equal(t, accountBefore, accountAfter, "更新 LastUsedAt 不应重写完整账号 JSON")
+	require.Equal(t, metaBefore, metaAfter, "更新 LastUsedAt 不应重写快照元数据 JSON")
+
+	lastUsedRaw, err := rdb.Get(ctx, schedulerLastUsedKey(id)).Result()
+	require.NoError(t, err)
+	require.Equal(t, strconv.FormatInt(latestUsedAt.UTC().UnixNano(), 10), lastUsedRaw)
+
+	cached, err := cache.GetAccount(ctx, account.ID)
+	require.NoError(t, err)
+	require.NotNil(t, cached)
+	require.NotNil(t, cached.LastUsedAt)
+	require.WithinDuration(t, latestUsedAt.UTC(), *cached.LastUsedAt, time.Nanosecond)
+
+	bucket := service.SchedulerBucket{GroupID: 9, Platform: service.PlatformOpenAI, Mode: service.SchedulerModeSingle}
+	require.NoError(t, cache.SetSnapshot(ctx, bucket, []service.Account{*account}))
+
+	latestForSnapshot := latestUsedAt.Add(13 * time.Second)
+	require.NoError(t, cache.UpdateLastUsed(ctx, map[int64]time.Time{
+		account.ID: latestForSnapshot,
+	}))
+
+	snapshot, hit, err := cache.GetSnapshot(ctx, bucket)
+	require.NoError(t, err)
+	require.True(t, hit)
+	require.Len(t, snapshot, 1)
+	require.NotNil(t, snapshot[0].LastUsedAt)
+	require.WithinDuration(t, latestForSnapshot.UTC(), *snapshot[0].LastUsedAt, time.Nanosecond)
 }
