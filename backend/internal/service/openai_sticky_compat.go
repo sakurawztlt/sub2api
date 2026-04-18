@@ -199,6 +199,14 @@ func (s *OpenAIGatewayService) refreshStickySessionTTL(ctx context.Context, grou
 	return err
 }
 
+// DeleteStickySession is the exported wrapper for handlers to break a
+// sticky binding on wait-queue saturation, preventing the session from
+// re-pinning the same account forever (sub2api_sticky_429_trap). Just
+// delegates to deleteStickySessionAccountID.
+func (s *OpenAIGatewayService) DeleteStickySession(ctx context.Context, groupID *int64, sessionHash string) error {
+	return s.deleteStickySessionAccountID(ctx, groupID, sessionHash)
+}
+
 func (s *OpenAIGatewayService) deleteStickySessionAccountID(ctx context.Context, groupID *int64, sessionHash string) error {
 	if s == nil || s.cache == nil {
 		return nil

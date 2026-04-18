@@ -971,6 +971,15 @@ func (h *OpenAIGatewayHandler) acquireResponsesAccountSlot(
 			zap.Int64("account_id", account.ID),
 			zap.Int("max_waiting", selection.WaitPlan.MaxWaiting),
 		)
+		// Break the sticky binding: if we return 429 while sessionHash is
+		// still pointing to this saturated account, the very next request
+		// from the same session re-hashes to the same account and hits the
+		// same wall — the sub2api_sticky_429_trap death spiral. Clearing
+		// the binding here lets the retry fall through to load-aware
+		// selection. Best-effort; failure here must not block the 429.
+		if sessionHash != "" {
+			_ = h.gatewayService.DeleteStickySession(ctx, groupID, sessionHash)
+		}
 		h.handleStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", "Too many pending requests, please retry later", *streamStarted)
 		return nil, false
 	}
