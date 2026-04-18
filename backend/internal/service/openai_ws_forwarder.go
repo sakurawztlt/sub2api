@@ -272,6 +272,10 @@ func resolveOpenAIWSSessionHeaders(c *gin.Context, promptCacheKey string) openAI
 		if conversationID := strings.TrimSpace(c.Request.Header.Get("conversation_id")); conversationID != "" {
 			resolution.ConversationID = conversationID
 			resolution.ConversationSource = "header_conversation_id"
+			// The upstream WS handshake must treat a new conversation_id as a brand-new
+			// conversation boundary even if the client keeps reusing session_id. This
+			// prevents the server from replaying a stale turn_state or reattaching to a
+			// continuation flow that belongs to the previous conversation.
 			resolution.SessionID = conversationID
 			resolution.SessionSource = "header_conversation_id"
 		}
