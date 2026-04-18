@@ -122,7 +122,7 @@ describe('AccountStatusIndicator', () => {
       }
     })
 
-    expect(wrapper.text()).toContain('account.creditsExhausted')
+    expect(wrapper.text()).toContain('admin.accounts.status.creditsExhausted')
   })
 
   it('模型限流 + overages 启用 + AICredits key 生效 → 普通限流样式（积分耗尽，无 ⚡）', () => {
@@ -157,6 +157,65 @@ describe('AccountStatusIndicator', () => {
     expect(wrapper.text()).toContain('CSon45')
     expect(wrapper.text()).not.toContain('⚡')
     // AICredits 积分耗尽状态应显示
-    expect(wrapper.text()).toContain('account.creditsExhausted')
+    expect(wrapper.text()).toContain('admin.accounts.status.creditsExhausted')
+  })
+
+  it('quota 超限时优先显示 quota exceeded，而不是 paused', () => {
+    const wrapper = mount(AccountStatusIndicator, {
+      props: {
+        account: makeAccount({
+          schedulable: false,
+          quota_daily_limit: 10,
+          quota_daily_used: 10,
+        })
+      },
+      global: {
+        stubs: {
+          Icon: true
+        }
+      }
+    })
+
+    expect(wrapper.text()).toContain('admin.accounts.status.quotaExceeded')
+    expect(wrapper.text()).not.toContain('admin.accounts.status.paused')
+  })
+
+  it('非 quota 原因的不可调度继续显示 paused', () => {
+    const wrapper = mount(AccountStatusIndicator, {
+      props: {
+        account: makeAccount({
+          schedulable: false,
+          quota_daily_limit: 10,
+          quota_daily_used: 0,
+        })
+      },
+      global: {
+        stubs: {
+          Icon: true
+        }
+      }
+    })
+
+    expect(wrapper.text()).toContain('admin.accounts.status.paused')
+    expect(wrapper.text()).not.toContain('admin.accounts.status.quotaExceeded')
+  })
+
+  it('inactive 账号保持显示 inactive，而不是 paused', () => {
+    const wrapper = mount(AccountStatusIndicator, {
+      props: {
+        account: makeAccount({
+          status: 'inactive',
+          schedulable: false,
+        })
+      },
+      global: {
+        stubs: {
+          Icon: true
+        }
+      }
+    })
+
+    expect(wrapper.text()).toContain('admin.accounts.status.inactive')
+    expect(wrapper.text()).not.toContain('admin.accounts.status.paused')
   })
 })

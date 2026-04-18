@@ -217,6 +217,18 @@ const activeModelStatuses = computed<AccountModelStatusItem[]>(() => {
   return items
 })
 
+const isQuotaExceeded = computed(() => {
+  const exceedsQuota = (used?: number | null, limit?: number | null) => {
+    return typeof limit === 'number' && limit > 0 && typeof used === 'number' && used >= limit
+  }
+
+  return (
+    exceedsQuota(props.account.quota_used, props.account.quota_limit) ||
+    exceedsQuota(props.account.quota_daily_used, props.account.quota_daily_limit) ||
+    exceedsQuota(props.account.quota_weekly_used, props.account.quota_weekly_limit)
+  )
+})
+
 const formatScopeName = (scope: string): string => {
   const aliases: Record<string, string> = {
     // Claude 系列
@@ -307,19 +319,23 @@ const statusClass = computed(() => {
   if (isTempUnschedulable.value) {
     return 'badge-warning'
   }
+  if (props.account.status !== 'active') {
+    switch (props.account.status) {
+      case 'inactive':
+        return 'badge-gray'
+      case 'error':
+        return 'badge-danger'
+      default:
+        return 'badge-gray'
+    }
+  }
+  if (isQuotaExceeded.value) {
+    return 'badge-warning'
+  }
   if (!props.account.schedulable) {
     return 'badge-gray'
   }
-  switch (props.account.status) {
-    case 'active':
-      return 'badge-success'
-    case 'inactive':
-      return 'badge-gray'
-    case 'error':
-      return 'badge-danger'
-    default:
-      return 'badge-gray'
-  }
+  return 'badge-success'
 })
 
 // Computed: status text
@@ -329,6 +345,12 @@ const statusText = computed(() => {
   }
   if (isTempUnschedulable.value) {
     return t('admin.accounts.status.tempUnschedulable')
+  }
+  if (props.account.status !== 'active') {
+    return t(`admin.accounts.status.${props.account.status}`)
+  }
+  if (isQuotaExceeded.value) {
+    return t('admin.accounts.status.quotaExceeded')
   }
   if (!props.account.schedulable) {
     return t('admin.accounts.status.paused')

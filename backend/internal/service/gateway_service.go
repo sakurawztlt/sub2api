@@ -435,14 +435,15 @@ func prefetchedStickyAccountIDFromContext(ctx context.Context, groupID *int64) i
 }
 
 // shouldClearStickySession 检查账号是否处于不可调度状态，需要清理粘性会话绑定。
-// 当账号状态为错误、禁用、不可调度、处于临时不可调度期间，
+// 当账号状态为错误/禁用、手动不可调度、处于临时不可调度期间、配额超限，
 // 或请求的模型处于限流状态时，返回 true。
 // 这确保后续请求不会继续使用不可用的账号。
 //
 // shouldClearStickySession checks if an account is in an unschedulable state
 // and the sticky session binding should be cleared.
 // Returns true when account status is error/disabled, schedulable is false,
-// within temporary unschedulable period, or the requested model is rate-limited.
+// within temporary unschedulable period, quota is exceeded, or the requested
+// model is rate-limited.
 // This ensures subsequent requests won't continue using unavailable accounts.
 func shouldClearStickySession(account *Account, requestedModel string) bool {
 	if account == nil {
@@ -452,6 +453,9 @@ func shouldClearStickySession(account *Account, requestedModel string) bool {
 		return true
 	}
 	if account.TempUnschedulableUntil != nil && time.Now().Before(*account.TempUnschedulableUntil) {
+		return true
+	}
+	if account.IsAPIKeyOrBedrock() && account.IsQuotaExceeded() {
 		return true
 	}
 	// 检查模型限流和 scope 限流，有限流即清除粘性会话
