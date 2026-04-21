@@ -291,7 +291,14 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 	}
 
 	if finalResp == nil {
-		writeGatewayCCError(c, http.StatusBadGateway, "server_error", "Upstream stream ended without a response")
+		// Upstream dropped before message_start — no Anthropic content was
+		// ever accumulated into finalResp, so we have nothing to salvage.
+		// Use a generic Anthropic-style message to avoid leaking the
+		// internal phrasing via the response body.
+		logger.L().Warn("forward_as_cc buffered: upstream EOF without message_start",
+			zap.String("request_id", requestID),
+		)
+		writeGatewayCCError(c, http.StatusBadGateway, "server_error", "Internal server error")
 		return nil, fmt.Errorf("upstream stream ended without response")
 	}
 

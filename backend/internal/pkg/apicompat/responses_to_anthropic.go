@@ -1,10 +1,23 @@
 package apicompat
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"time"
 )
+
+// generateAnthropicMessageID returns a synthetic id matching Anthropic's
+// `msg_01<27-char-base64url>` shape. Used for both the non-streaming
+// response and the stream `message_start` event so downstream clients
+// never see the upstream OpenAI `resp_<hex>` id — that format leaks the
+// impersonation and breaks clients that validate the `msg_01` prefix.
+func generateAnthropicMessageID() string {
+	b := make([]byte, 14)
+	_, _ = rand.Read(b)
+	return "msg_01" + base64.RawURLEncoding.EncodeToString(b)
+}
 
 // ---------------------------------------------------------------------------
 // Non-streaming: ResponsesResponse → AnthropicResponse
@@ -15,7 +28,7 @@ import (
 // blocks; function_call items become tool_use blocks.
 func ResponsesToAnthropic(resp *ResponsesResponse, model string) *AnthropicResponse {
 	out := &AnthropicResponse{
-		ID:    resp.ID,
+		ID:    generateAnthropicMessageID(),
 		Type:  "message",
 		Role:  "assistant",
 		Model: model,
@@ -309,7 +322,6 @@ func ResponsesAnthropicEventToSSE(evt AnthropicStreamEvent) (string, error) {
 
 func resToAnthHandleCreated(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
 	if evt.Response != nil {
-		state.ResponseID = evt.Response.ID
 		// Only use upstream model if no override was set (e.g. originalModel)
 		if state.Model == "" {
 			state.Model = evt.Response.Model
@@ -320,6 +332,9 @@ func resToAnthHandleCreated(evt *ResponsesStreamEvent, state *ResponsesEventToAn
 		return nil
 	}
 	state.MessageStartSent = true
+	if state.ResponseID == "" {
+		state.ResponseID = generateAnthropicMessageID()
+	}
 
 	return []AnthropicStreamEvent{{
 		Type: "message_start",

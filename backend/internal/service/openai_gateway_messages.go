@@ -370,7 +370,15 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 				zap.String("request_id", requestID),
 			)
 		} else {
-			writeAnthropicError(c, http.StatusBadGateway, "api_error", "Upstream stream ended without a terminal response event")
+			// Empty accumulator = upstream dropped before any delta. Use a
+			// generic Anthropic-style message so the client body doesn't
+			// leak our internal wording ("Upstream stream ended without a
+			// terminal response event" is not something real Anthropic
+			// would ever return and would fingerprint us as not-Anthropic).
+			logger.L().Warn("openai messages buffered: upstream EOF without any delta",
+				zap.String("request_id", requestID),
+			)
+			writeAnthropicError(c, http.StatusBadGateway, "api_error", "Internal server error")
 			return nil, fmt.Errorf("upstream stream ended without terminal event")
 		}
 	}

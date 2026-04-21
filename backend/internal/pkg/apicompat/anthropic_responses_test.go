@@ -3,6 +3,7 @@ package apicompat
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -172,7 +173,10 @@ func TestResponsesToAnthropic_TextOnly(t *testing.T) {
 	}
 
 	anth := ResponsesToAnthropic(resp, "claude-opus-4-6")
-	assert.Equal(t, "resp_123", anth.ID)
+	// The Anthropic-facing id is synthesised (msg_01...), NOT the upstream
+	// OpenAI resp_<hex>. Leaking resp_ would reveal B-track impersonation.
+	assert.True(t, strings.HasPrefix(anth.ID, "msg_01"), "id should start with msg_01, got %s", anth.ID)
+	assert.NotEqual(t, "resp_123", anth.ID)
 	assert.Equal(t, "claude-opus-4-6", anth.Model)
 	assert.Equal(t, "end_turn", anth.StopReason)
 	require.Len(t, anth.Content, 1)
@@ -784,6 +788,83 @@ func TestAnthropicToResponses_OutputConfigWithoutEffort(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp.Reasoning)
 	assert.Equal(t, "high", resp.Reasoning.Effort)
+}
+
+// ---------------------------------------------------------------------------
+// SUB2API_GATE_REASONING_SUMMARY tests
+// ---------------------------------------------------------------------------
+
+func TestAnthropicToResponses_SummaryGateOff_NoThinking(t *testing.T) {
+	// Flag unset → historical behaviour: Summary="auto" even without thinking.
+	t.Setenv("SUB2API_GATE_REASONING_SUMMARY", "")
+	req := &AnthropicRequest{
+		Model:     "gpt-5.2",
+		MaxTokens: 1024,
+		Messages:  []AnthropicMessage{{Role: "user", Content: json.RawMessage(`"Hi"`)}},
+	}
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+	require.NotNil(t, resp.Reasoning)
+	assert.Equal(t, "auto", resp.Reasoning.Summary)
+}
+
+func TestAnthropicToResponses_SummaryGateOn_NoThinking(t *testing.T) {
+	// Flag on + no thinking field → Summary="" so Codex skips summary text.
+	t.Setenv("SUB2API_GATE_REASONING_SUMMARY", "1")
+	req := &AnthropicRequest{
+		Model:     "gpt-5.2",
+		MaxTokens: 1024,
+		Messages:  []AnthropicMessage{{Role: "user", Content: json.RawMessage(`"Hi"`)}},
+	}
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+	require.NotNil(t, resp.Reasoning)
+	assert.Equal(t, "", resp.Reasoning.Summary)
+}
+
+func TestAnthropicToResponses_SummaryGateOn_DisabledThinking(t *testing.T) {
+	// Flag on + thinking.type="disabled" → Summary="".
+	t.Setenv("SUB2API_GATE_REASONING_SUMMARY", "1")
+	req := &AnthropicRequest{
+		Model:     "gpt-5.2",
+		MaxTokens: 1024,
+		Messages:  []AnthropicMessage{{Role: "user", Content: json.RawMessage(`"Hi"`)}},
+		Thinking:  &AnthropicThinking{Type: "disabled"},
+	}
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+	require.NotNil(t, resp.Reasoning)
+	assert.Equal(t, "", resp.Reasoning.Summary)
+}
+
+func TestAnthropicToResponses_SummaryGateOn_EnabledThinking(t *testing.T) {
+	// Flag on + thinking.type="enabled" → Summary stays "auto".
+	t.Setenv("SUB2API_GATE_REASONING_SUMMARY", "1")
+	req := &AnthropicRequest{
+		Model:     "gpt-5.2",
+		MaxTokens: 1024,
+		Messages:  []AnthropicMessage{{Role: "user", Content: json.RawMessage(`"Hi"`)}},
+		Thinking:  &AnthropicThinking{Type: "enabled", BudgetTokens: 8192},
+	}
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+	require.NotNil(t, resp.Reasoning)
+	assert.Equal(t, "auto", resp.Reasoning.Summary)
+}
+
+func TestAnthropicToResponses_SummaryGateOn_AdaptiveThinking(t *testing.T) {
+	// Flag on + thinking.type="adaptive" (opus-4.7 default) → Summary stays "auto".
+	t.Setenv("SUB2API_GATE_REASONING_SUMMARY", "1")
+	req := &AnthropicRequest{
+		Model:     "gpt-5.2",
+		MaxTokens: 1024,
+		Messages:  []AnthropicMessage{{Role: "user", Content: json.RawMessage(`"Hi"`)}},
+		Thinking:  &AnthropicThinking{Type: "adaptive"},
+	}
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+	require.NotNil(t, resp.Reasoning)
+	assert.Equal(t, "auto", resp.Reasoning.Summary)
 }
 
 // ---------------------------------------------------------------------------

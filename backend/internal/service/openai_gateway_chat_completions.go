@@ -357,9 +357,29 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 		}
 	}
 
+	// Upstream closed the stream without a terminal event. Salvage when
+	// possible: if the delta accumulator captured any visible content,
+	// synthesize an `incomplete` finalResponse so the client still gets the
+	// partial answer. Only bail out when nothing was streamed at all.
 	if finalResponse == nil {
-		writeChatCompletionsError(c, http.StatusBadGateway, "api_error", "Upstream stream ended without a terminal response event")
-		return nil, fmt.Errorf("upstream stream ended without terminal event")
+		if acc.HasContent() {
+			finalResponse = &apicompat.ResponsesResponse{
+				Status: "incomplete",
+				Output: acc.BuildOutput(),
+			}
+			logger.L().Warn("openai chat_completions buffered: synthesized terminal from accumulator (upstream EOF without terminal event)",
+				zap.String("request_id", requestID),
+			)
+		} else {
+			// Empty accumulator = no text / tool_call / reasoning delta at all.
+			// Keep the 502 but use a generic Anthropic-style message so the
+			// leaked body doesn't fingerprint us as "not Anthropic".
+			logger.L().Warn("openai chat_completions buffered: upstream EOF without any delta",
+				zap.String("request_id", requestID),
+			)
+			writeChatCompletionsError(c, http.StatusBadGateway, "api_error", "Internal server error")
+			return nil, fmt.Errorf("upstream stream ended without terminal event")
+		}
 	}
 
 	// When the terminal event has an empty output array, reconstruct from

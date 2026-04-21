@@ -3,8 +3,21 @@ package apicompat
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 )
+
+// reasoningSummaryGateEnabled reports whether Summary emission should be
+// gated on the client's Anthropic `thinking` field. Default: off (Summary
+// stays unconditionally "auto", preserving historical behaviour for 97.9%
+// of B-track traffic). Flip the env var to "1" on a single environment
+// first (test2) and observe for 24h before rolling to prod, because the
+// change hides reasoning-summary thinking blocks from non-thinking
+// clients — matches real Anthropic behaviour but is a visible output-
+// shape change.
+func reasoningSummaryGateEnabled() bool {
+	return os.Getenv("SUB2API_GATE_REASONING_SUMMARY") == "1"
+}
 
 // AnthropicToResponses converts an Anthropic Messages request directly into
 // a Responses API request. This preserves fields that would be lost in a
@@ -53,9 +66,22 @@ func AnthropicToResponses(req *AnthropicRequest) (*ResponsesRequest, error) {
 	if req.OutputConfig != nil && req.OutputConfig.Effort != "" {
 		effort = req.OutputConfig.Effort
 	}
+	// Summary emission: default "auto" (historical behaviour). When the
+	// opt-in env gate is on AND the client did not enable thinking, set
+	// Summary="" so Codex stops emitting reasoning_summary_text. That text
+	// otherwise becomes an Anthropic thinking block and inflates the
+	// visible portion of output_tokens (see customer bug 2026-04-21:
+	// output_tokens=198 on ~10 tokens of actual text). Hidden chain-of-
+	// thought is already subtracted via visibleOutputTokens regardless.
+	summary := "auto"
+	if reasoningSummaryGateEnabled() {
+		if req.Thinking == nil || req.Thinking.Type == "" || req.Thinking.Type == "disabled" {
+			summary = ""
+		}
+	}
 	out.Reasoning = &ResponsesReasoning{
 		Effort:  mapAnthropicEffortToResponses(effort),
-		Summary: "auto",
+		Summary: summary,
 	}
 
 	// Convert tool_choice
