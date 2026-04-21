@@ -435,30 +435,19 @@ func prefetchedStickyAccountIDFromContext(ctx context.Context, groupID *int64) i
 }
 
 // shouldClearStickySession 检查账号是否处于不可调度状态，需要清理粘性会话绑定。
-// 当账号状态为错误/禁用、手动不可调度、处于临时不可调度期间、配额超限，
-// 或请求的模型处于限流状态时，返回 true。
-// 这确保后续请求不会继续使用不可用的账号。
+// 委托 IsSchedulable() 判断账号级可调度性（状态、配额、过载、限流等），
+// 额外检查模型级限流。
 //
 // shouldClearStickySession checks if an account is in an unschedulable state
 // and the sticky session binding should be cleared.
-// Returns true when account status is error/disabled, schedulable is false,
-// within temporary unschedulable period, quota is exceeded, or the requested
-// model is rate-limited.
-// This ensures subsequent requests won't continue using unavailable accounts.
+// Delegates to IsSchedulable() for account-level checks, plus model-level rate limiting.
 func shouldClearStickySession(account *Account, requestedModel string) bool {
 	if account == nil {
 		return false
 	}
-	if account.Status == StatusError || account.Status == StatusDisabled || !account.Schedulable {
+	if !account.IsSchedulable() {
 		return true
 	}
-	if account.TempUnschedulableUntil != nil && time.Now().Before(*account.TempUnschedulableUntil) {
-		return true
-	}
-	if account.IsAPIKeyOrBedrock() && account.IsQuotaExceeded() {
-		return true
-	}
-	// 检查模型限流和 scope 限流，有限流即清除粘性会话
 	if remaining := account.GetRateLimitRemainingTimeWithContext(context.Background(), requestedModel); remaining > 0 {
 		return true
 	}
@@ -4080,14 +4069,6 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		account.ID, account.Name, account.Platform, account.Type, tlsProfile, proxyURL)
 	// Pre-filter: strip empty text blocks (including nested in tool_result) to prevent upstream 400.
 	body = StripEmptyTextBlocks(body)
-	// Pre-filter: remove thinking blocks with missing/invalid signatures before forwarding.
-	// Clients (e.g. Claude Code) sometimes send multi-turn conversations where a historical
-	// assistant message contains a thinking block that is missing the required "signature" field,
-	// causing upstream to reject the request with 400 "thinking.signature: Field required".
-	// FilterThinkingBlocks removes only the invalid blocks; thinking blocks with valid signatures
-	// are preserved. This avoids relying solely on the post-error retry path, which can time out
-	// (maxRetryElapsed = 10s) for long conversations before the retry budget is exhausted.
-	body = FilterThinkingBlocks(body)
 
 	// 重试间复用同一请求体，避免每次 string(body) 产生额外分配。
 	setOpsUpstreamRequestBody(c, body)
@@ -7329,8 +7310,10 @@ func postUsageBilling(ctx context.Context, p *postUsageBillingParams, deps *bill
 	cost := p.Cost
 
 	if p.IsSubscriptionBill {
-		if cost.TotalCost > 0 {
-			if err := deps.userSubRepo.IncrementUsage(billingCtx, p.Subscription.ID, cost.TotalCost); err != nil {
+		// Subscription usage tracked by ActualCost so group rate multiplier
+		// consumes the quota at the expected speed.
+		if cost.ActualCost > 0 {
+			if err := deps.userSubRepo.IncrementUsage(billingCtx, p.Subscription.ID, cost.ActualCost); err != nil {
 				slog.Error("increment subscription usage failed", "subscription_id", p.Subscription.ID, "error", err)
 			}
 		}
@@ -7429,9 +7412,13 @@ func buildUsageBillingCommand(requestID string, usageLog *UsageLog, p *postUsage
 		}
 	}
 
+	// Record subscription / balance cost using ActualCost so the group (and any
+	// user-specific) rate multiplier consumes subscription quota at the expected
+	// speed. TotalCost remains the raw (pre-multiplier) value; downstream guards
+	// on "> 0" still correctly skip free subscriptions (RateMultiplier == 0).
 	if p.IsSubscriptionBill && p.Subscription != nil && p.Cost.TotalCost > 0 {
 		cmd.SubscriptionID = &p.Subscription.ID
-		cmd.SubscriptionCost = p.Cost.TotalCost
+		cmd.SubscriptionCost = p.Cost.ActualCost
 	} else if p.Cost.ActualCost > 0 {
 		cmd.BalanceCost = p.Cost.ActualCost
 	}
@@ -7490,8 +7477,8 @@ func finalizePostUsageBilling(p *postUsageBillingParams, deps *billingDeps, resu
 	}
 
 	if p.IsSubscriptionBill {
-		if p.Cost.TotalCost > 0 && p.User != nil && p.APIKey != nil && p.APIKey.GroupID != nil {
-			deps.billingCacheService.QueueUpdateSubscriptionUsage(p.User.ID, *p.APIKey.GroupID, p.Cost.TotalCost)
+		if p.Cost.ActualCost > 0 && p.User != nil && p.APIKey != nil && p.APIKey.GroupID != nil {
+			deps.billingCacheService.QueueUpdateSubscriptionUsage(p.User.ID, *p.APIKey.GroupID, p.Cost.ActualCost)
 		}
 	} else if p.Cost.ActualCost > 0 && p.User != nil {
 		deps.billingCacheService.QueueDeductBalance(p.User.ID, p.Cost.ActualCost)

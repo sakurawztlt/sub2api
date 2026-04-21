@@ -217,18 +217,6 @@ const activeModelStatuses = computed<AccountModelStatusItem[]>(() => {
   return items
 })
 
-const isQuotaExceeded = computed(() => {
-  const exceedsQuota = (used?: number | null, limit?: number | null) => {
-    return typeof limit === 'number' && limit > 0 && typeof used === 'number' && used >= limit
-  }
-
-  return (
-    exceedsQuota(props.account.quota_used, props.account.quota_limit) ||
-    exceedsQuota(props.account.quota_daily_used, props.account.quota_daily_limit) ||
-    exceedsQuota(props.account.quota_weekly_used, props.account.quota_weekly_limit)
-  )
-})
-
 const formatScopeName = (scope: string): string => {
   const aliases: Record<string, string> = {
     // Claude 系列
@@ -296,6 +284,16 @@ const hasError = computed(() => {
   return props.account.status === 'error'
 })
 
+const isQuotaExceeded = computed(() => {
+  const exceeded = (used?: number | null, limit?: number | null) =>
+    typeof limit === 'number' && limit > 0 && typeof used === 'number' && used >= limit
+  return (
+    exceeded(props.account.quota_used, props.account.quota_limit) ||
+    exceeded(props.account.quota_daily_used, props.account.quota_daily_limit) ||
+    exceeded(props.account.quota_weekly_used, props.account.quota_weekly_limit)
+  )
+})
+
 // Computed: countdown text for rate limit (429)
 const rateLimitCountdown = computed(() => {
   return formatCountdown(props.account.rate_limit_reset_at)
@@ -320,14 +318,7 @@ const statusClass = computed(() => {
     return 'badge-warning'
   }
   if (props.account.status !== 'active') {
-    switch (props.account.status) {
-      case 'inactive':
-        return 'badge-gray'
-      case 'error':
-        return 'badge-danger'
-      default:
-        return 'badge-gray'
-    }
+    return props.account.status === 'error' ? 'badge-danger' : 'badge-gray'
   }
   if (isQuotaExceeded.value) {
     return 'badge-warning'
