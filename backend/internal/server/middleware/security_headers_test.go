@@ -131,7 +131,11 @@ func TestSecurityHeaders(t *testing.T) {
 		assert.Contains(t, csp, CloudflareInsightsDomain)
 	})
 
-	t.Run("api_route_skips_csp_nonce_generation", func(t *testing.T) {
+	t.Run("api_route_skips_browser_security_headers_and_csp", func(t *testing.T) {
+		// /v1/messages (and other API routes) impersonate Anthropic's API.
+		// Real Anthropic never sends X-Content-Type-Options / X-Frame-Options /
+		// Referrer-Policy on /v1/messages responses, so setting them would
+		// fingerprint us as a web-app-backed relay. Assert they are absent.
 		cfg := config.CSPConfig{
 			Enabled: true,
 			Policy:  "default-src 'self'; script-src 'self' __CSP_NONCE__",
@@ -144,9 +148,9 @@ func TestSecurityHeaders(t *testing.T) {
 
 		middleware(c)
 
-		assert.Equal(t, "nosniff", w.Header().Get("X-Content-Type-Options"))
-		assert.Equal(t, "DENY", w.Header().Get("X-Frame-Options"))
-		assert.Equal(t, "strict-origin-when-cross-origin", w.Header().Get("Referrer-Policy"))
+		assert.Empty(t, w.Header().Get("X-Content-Type-Options"))
+		assert.Empty(t, w.Header().Get("X-Frame-Options"))
+		assert.Empty(t, w.Header().Get("Referrer-Policy"))
 		assert.Empty(t, w.Header().Get("Content-Security-Policy"))
 		assert.Empty(t, GetNonceFromContext(c))
 	})

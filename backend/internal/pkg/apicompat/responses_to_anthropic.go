@@ -9,12 +9,20 @@ import (
 )
 
 // generateAnthropicMessageID returns a synthetic id matching Anthropic's
-// `msg_01<27-char-base64url>` shape. Used for both the non-streaming
-// response and the stream `message_start` event so downstream clients
-// never see the upstream OpenAI `resp_<hex>` id — that format leaks the
-// impersonation and breaks clients that validate the `msg_01` prefix.
+// `msg_01<22-char-base64url>` shape (28 chars total). Used for both the
+// non-streaming response and the stream `message_start` event so downstream
+// clients never see the upstream OpenAI `resp_<hex>` id — that format leaks
+// the impersonation and breaks clients that validate the `msg_01` prefix.
+//
+// Byte count 2026-04-21: bumped from 14 to 16 so the base64url body is 22
+// chars (total 28 chars), matching real Anthropic ids like
+// `msg_01XFDUDYJgAACzvnptvVoYEL`. The previous 14-byte version produced a
+// 19-char body (25 chars total) that was 3 chars short of Anthropic's
+// format — detectable by any client doing a simple length check. Must stay
+// in sync with cc-api/main.go generateMessageID so A-track and B-track
+// synthetic ids share the same shape.
 func generateAnthropicMessageID() string {
-	b := make([]byte, 14)
+	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	return "msg_01" + base64.RawURLEncoding.EncodeToString(b)
 }

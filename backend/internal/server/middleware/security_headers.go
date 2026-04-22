@@ -64,13 +64,22 @@ func SecurityHeaders(cfg config.CSPConfig, getFrameSrcOrigins func() []string) g
 			}
 		}
 
-		c.Header("X-Content-Type-Options", "nosniff")
-		c.Header("X-Frame-Options", "DENY")
-		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
+		// Short-circuit BEFORE setting browser-security headers: /v1/*,
+		// /antigravity/*, /responses and the v1beta family are machine-to-
+		// machine API surfaces. Real Anthropic `/v1/messages` responses
+		// do NOT include `X-Content-Type-Options`, `X-Frame-Options`, or
+		// `Referrer-Policy` — these are web-admin-panel artefacts and
+		// their presence fingerprints us as "proxy behind a Go web app"
+		// rather than "Anthropic API". Only the admin UI / OAuth login /
+		// setup pages need these headers.
 		if isAPIRoutePath(c) {
 			c.Next()
 			return
 		}
+
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Header("X-Frame-Options", "DENY")
+		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
 
 		if cfg.Enabled {
 			// Generate nonce for this request

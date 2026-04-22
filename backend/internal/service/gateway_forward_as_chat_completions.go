@@ -135,7 +135,9 @@ func (s *GatewayService) ForwardAsChatCompletions(
 			Kind:               "request_error",
 			Message:            safeErr,
 		})
-		writeGatewayCCError(c, http.StatusBadGateway, "server_error", "Upstream request failed")
+		// Generic message — "Upstream request failed" leaks our relay wording.
+		// Detail is already recorded via appendOpsUpstreamError above.
+		writeGatewayCCError(c, http.StatusBadGateway, "server_error", "Internal server error")
 		return nil, fmt.Errorf("upstream request failed: %s", safeErr)
 	}
 	defer func() { _ = resp.Body.Close() }()

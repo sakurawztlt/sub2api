@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/googleapi"
@@ -69,10 +70,98 @@ func NewErrorResponse(code, message string) ErrorResponse {
 	}
 }
 
-// AbortWithError 中断请求并返回JSON错误
+// AbortWithError 中断请求并返回JSON错误。
+//
+// For public Anthropic-pretending API paths (/v1/messages, /v1/complete) the
+// body is emitted in real Anthropic's error shape —
+// `{"type":"error","error":{"type":<anthropic-type>,"message":<msg>}}` — so
+// auth failures / quota denials / etc. are indistinguishable from real
+// Anthropic responses. For OpenAI-format paths (/v1/chat/completions,
+// /v1/responses) the body is OpenAI-shape so clients don't get confused.
+// Google paths and admin/other paths fall through to the legacy
+// {code, message} shape.
+//
+// `code` is preserved only on the legacy path; on the Anthropic/OpenAI
+// paths it is translated to a status-appropriate error type.
 func AbortWithError(c *gin.Context, statusCode int, code, message string) {
+	if c != nil && c.Request != nil && c.Request.URL != nil {
+		path := c.Request.URL.Path
+		switch {
+		case strings.HasPrefix(path, "/v1/messages"),
+			strings.HasPrefix(path, "/v1/complete"):
+			c.JSON(statusCode, gin.H{
+				"type": "error",
+				"error": gin.H{
+					"type":    anthropicErrorTypeForStatus(statusCode),
+					"message": message,
+				},
+			})
+			c.Abort()
+			return
+		case strings.HasPrefix(path, "/v1/chat/completions"),
+			strings.HasPrefix(path, "/v1/responses"):
+			c.JSON(statusCode, gin.H{
+				"error": gin.H{
+					"type":    openaiErrorTypeForStatus(statusCode),
+					"message": message,
+					"code":    nil,
+				},
+			})
+			c.Abort()
+			return
+		case strings.HasPrefix(path, "/v1beta/"):
+			GoogleErrorWriter(c, statusCode, message)
+			c.Abort()
+			return
+		}
+	}
 	c.JSON(statusCode, NewErrorResponse(code, message))
 	c.Abort()
+}
+
+// anthropicErrorTypeForStatus maps HTTP status → Anthropic error.type enum.
+// Matches the values real Anthropic returns in its error body.
+func anthropicErrorTypeForStatus(s int) string {
+	switch s {
+	case http.StatusBadRequest:
+		return "invalid_request_error"
+	case http.StatusUnauthorized:
+		return "authentication_error"
+	case http.StatusForbidden:
+		return "permission_error"
+	case http.StatusNotFound:
+		return "not_found_error"
+	case http.StatusTooManyRequests:
+		return "rate_limit_error"
+	case 529:
+		return "overloaded_error"
+	default:
+		if s >= 500 {
+			return "api_error"
+		}
+		return "invalid_request_error"
+	}
+}
+
+// openaiErrorTypeForStatus maps HTTP status → OpenAI error.type enum.
+func openaiErrorTypeForStatus(s int) string {
+	switch s {
+	case http.StatusBadRequest:
+		return "invalid_request_error"
+	case http.StatusUnauthorized:
+		return "authentication_error"
+	case http.StatusForbidden:
+		return "permission_error"
+	case http.StatusTooManyRequests:
+		return "rate_limit_exceeded"
+	case http.StatusNotFound:
+		return "not_found"
+	default:
+		if s >= 500 {
+			return "server_error"
+		}
+		return "invalid_request_error"
+	}
 }
 
 // ──────────────────────────────────────────────────────────

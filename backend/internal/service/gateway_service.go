@@ -714,6 +714,29 @@ func (s *GatewayService) BindStickySession(ctx context.Context, groupID *int64, 
 	return s.cache.SetSessionAccountID(ctx, derefGroupID(groupID), sessionHash, accountID, stickySessionTTL)
 }
 
+// DeleteStickySession removes the session -> account binding, so the next
+// request for the same session is free to pick any account via the
+// load-balancer (Layer 2) instead of being routed back to the previously
+// sticky account.
+//
+// Used by the handler layer when a 429 is being returned specifically
+// because the bound account's wait queue is full (NOT because the
+// account is actually rate-limited upstream). Leaving sticky intact in
+// that case creates the deadlock described in memory
+// sub2api_sticky_429_trap.md — client retries hit the same saturated
+// account and get 429 forever while 15+ other accounts sit idle.
+//
+// Name mirrors OpenAIGatewayService.DeleteStickySession so both Anthropic
+// and OpenAI handler paths call the same-named helper.
+//
+// No-op when sessionHash is empty or cache is disabled.
+func (s *GatewayService) DeleteStickySession(ctx context.Context, groupID *int64, sessionHash string) error {
+	if sessionHash == "" || s.cache == nil {
+		return nil
+	}
+	return s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
+}
+
 // GetCachedSessionAccountID retrieves the account ID bound to a sticky session.
 // Returns 0 if no binding exists or on error.
 func (s *GatewayService) GetCachedSessionAccountID(ctx context.Context, groupID *int64, sessionHash string) (int64, error) {

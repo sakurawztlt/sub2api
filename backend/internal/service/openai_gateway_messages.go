@@ -193,7 +193,10 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			Kind:               "request_error",
 			Message:            safeErr,
 		})
-		writeAnthropicError(c, http.StatusBadGateway, "api_error", "Upstream request failed")
+		// Generic Anthropic-style message — "Upstream request failed" leaks
+		// our relay wording to clients. Specific cause is already logged
+		// upstream + recorded via appendOpsUpstreamError above.
+		writeAnthropicError(c, http.StatusBadGateway, "api_error", "Internal server error")
 		return nil, fmt.Errorf("upstream request failed: %s", safeErr)
 	}
 	defer func() { _ = resp.Body.Close() }()

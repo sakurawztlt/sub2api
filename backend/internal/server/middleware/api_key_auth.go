@@ -53,14 +53,17 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			apiKeyString = c.GetHeader("x-api-key")
 		}
 
-		// 如果x-api-key header中没有，尝试从x-goog-api-key header中提取（Gemini CLI兼容）
-		if apiKeyString == "" {
-			apiKeyString = c.GetHeader("x-goog-api-key")
-		}
+		// 2026-04-21: Anthropic-facing middleware 不再接收 x-goog-api-key
+		// header。原来接受它是为了兼容 Gemini CLI（upstream sub2api 多协议
+		// 设计），但这使得一个探测请求 (带 x-goog-api-key 又命中 /v1/messages)
+		// 能通过认证 —— 真 Anthropic 会直接返 401，这个差异就能被用作指纹。
+		// Gemini 专用路径 (/v1beta/*) 另有 api_key_auth_google.go 处理，
+		// 不受影响。
 
 		// 如果所有header都没有API key
+		// 错误消息对齐真 Anthropic 的 401 文案。
 		if apiKeyString == "" {
-			AbortWithError(c, 401, "API_KEY_REQUIRED", "API key is required in Authorization header (Bearer scheme), x-api-key header, or x-goog-api-key header")
+			AbortWithError(c, 401, "API_KEY_REQUIRED", "Missing `x-api-key` header or Bearer token")
 			return
 		}
 

@@ -356,6 +356,15 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						zap.Int64("account_id", account.ID),
 						zap.Int("max_waiting", selection.WaitPlan.MaxWaiting),
 					)
+					// Clear sticky so the client's retry goes through
+					// Layer 2 load-balance instead of hammering the same
+					// saturated account forever (sub2api_sticky_429_trap).
+					if sessionKey != "" {
+						if err := h.gatewayService.DeleteStickySession(c.Request.Context(), apiKey.GroupID, sessionKey); err != nil {
+							reqLog.Warn("gateway.clear_sticky_session_failed",
+								zap.Int64("account_id", account.ID), zap.Error(err))
+						}
+					}
 					h.handleStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", "Too many pending requests, please retry later", streamStarted)
 					return
 				}
@@ -580,6 +589,15 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						zap.Int64("account_id", account.ID),
 						zap.Int("max_waiting", selection.WaitPlan.MaxWaiting),
 					)
+					// Sticky-trap break: same as above path — clear the
+					// session binding so the client retry lands on a
+					// different account.
+					if sessionKey != "" {
+						if err := h.gatewayService.DeleteStickySession(c.Request.Context(), apiKey.GroupID, sessionKey); err != nil {
+							reqLog.Warn("gateway.clear_sticky_session_failed",
+								zap.Int64("account_id", account.ID), zap.Error(err))
+						}
+					}
 					h.handleStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", "Too many pending requests, please retry later", streamStarted)
 					return
 				}

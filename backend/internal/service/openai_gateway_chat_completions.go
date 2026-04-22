@@ -204,7 +204,9 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 			Kind:               "request_error",
 			Message:            safeErr,
 		})
-		writeChatCompletionsError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
+		// Generic message — "Upstream request failed" leaks our relay wording.
+		// Detail is already recorded via appendOpsUpstreamError above.
+		writeChatCompletionsError(c, http.StatusBadGateway, "upstream_error", "Internal server error")
 		return nil, fmt.Errorf("upstream request failed: %s", safeErr)
 	}
 	defer func() { _ = resp.Body.Close() }()

@@ -110,12 +110,16 @@ type AnthropicResponse struct {
 	Usage        AnthropicUsage          `json:"usage"`
 }
 
-// AnthropicUsage holds token counts in Anthropic format.
+// AnthropicUsage holds token counts in Anthropic format. Field declaration
+// order MUST match real Anthropic response ordering so byte-level signature
+// checks on the response body cannot distinguish us from the real thing.
+// Real Anthropic order: input_tokens → cache_creation_input_tokens →
+// cache_read_input_tokens → output_tokens. Do not reorder.
 type AnthropicUsage struct {
 	InputTokens              int `json:"input_tokens"`
-	OutputTokens             int `json:"output_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
 }
 
 // ---------------------------------------------------------------------------
