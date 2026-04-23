@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -23,6 +24,7 @@ const (
 	updateCacheKey = "update_check_cache"
 	updateCacheTTL = 1200 // 20 minutes
 	githubRepo     = "Wei-Shaw/sub2api"
+	relaySuffix    = "-relay"
 
 	// Security: allowed download domains for updates
 	allowedDownloadHost = "github.com"
@@ -31,6 +33,8 @@ const (
 	// Security: max download size (500MB)
 	maxDownloadSize = 500 * 1024 * 1024
 )
+
+var errRelayUpdateDisabled = errors.New("relay build disables GitHub update checks and self-update")
 
 // UpdateCache defines cache operations for update service
 type UpdateCache interface {
@@ -108,6 +112,9 @@ type GitHubAsset struct {
 
 // CheckUpdate checks for available updates
 func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInfo, error) {
+	if s.isRelayBuild() {
+		return s.currentInfo("Relay build: update checks are disabled."), nil
+	}
 	// Try cache first
 	if !force {
 		if cached, err := s.getFromCache(ctx); err == nil && cached != nil {
@@ -140,6 +147,9 @@ func (s *UpdateService) CheckUpdate(ctx context.Context, force bool) (*UpdateInf
 // PerformUpdate downloads and applies the update
 // Uses atomic file replacement pattern for safe in-place updates
 func (s *UpdateService) PerformUpdate(ctx context.Context) error {
+	if s.isRelayBuild() {
+		return errRelayUpdateDisabled
+	}
 	info, err := s.CheckUpdate(ctx, true)
 	if err != nil {
 		return err
@@ -251,6 +261,9 @@ func (s *UpdateService) PerformUpdate(ctx context.Context) error {
 
 // Rollback restores the previous version
 func (s *UpdateService) Rollback() error {
+	if s.isRelayBuild() {
+		return errRelayUpdateDisabled
+	}
 	exePath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("failed to get executable path: %w", err)
@@ -509,6 +522,21 @@ func (s *UpdateService) saveToCache(ctx context.Context, info *UpdateInfo) {
 
 	data, _ := json.Marshal(cacheData)
 	_ = s.cache.SetUpdateInfo(ctx, string(data), time.Duration(updateCacheTTL)*time.Second)
+}
+
+func (s *UpdateService) isRelayBuild() bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(s.currentVersion)), relaySuffix)
+}
+
+func (s *UpdateService) currentInfo(warning string) *UpdateInfo {
+	return &UpdateInfo{
+		CurrentVersion: s.currentVersion,
+		LatestVersion:  s.currentVersion,
+		HasUpdate:      false,
+		Cached:         false,
+		Warning:        warning,
+		BuildType:      s.buildType,
+	}
 }
 
 // compareVersions compares two semantic versions
