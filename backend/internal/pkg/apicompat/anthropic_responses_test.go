@@ -1900,3 +1900,63 @@ func TestAnthropicToResponses_ToolResultWithDocument(t *testing.T) {
 	assert.Equal(t, "document.pdf", parts[0].Filename)
 	assert.Equal(t, "data:application/pdf;base64,JVBERi0x", parts[0].FileData)
 }
+
+func TestSanitizeOpenAIName(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "legal unchanged", in: "get_weather-1", want: "get_weather-1"},
+		{name: "spaces replaced", in: "Read File", want: "Read_File"},
+		{name: "unicode replaced", in: "天气", want: "__"},
+		{name: "special chars replaced", in: "calc(*)", want: "calc___"},
+		{name: "empty fallback", in: "", want: openAINameFallback},
+		{name: "trim to max len", in: strings.Repeat("a", openAINameMaxLen+8), want: strings.Repeat("a", openAINameMaxLen)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sanitizeOpenAIName(tt.in)
+			assert.Equal(t, tt.want, got)
+			assert.True(t, isValidOpenAIName(got))
+			assert.LessOrEqual(t, len(got), openAINameMaxLen)
+		})
+	}
+}
+
+func TestAnthropicToResponses_InvalidToolNamesSanitized(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:     "gpt-5.2",
+		MaxTokens: 1024,
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: json.RawMessage(`"use the tool"`)},
+			{Role: "assistant", Content: json.RawMessage(`[{"type":"tool_use","id":"call_1","name":"Read File!","input":{"path":"/tmp/a.txt"}}]`)},
+			{Role: "user", Content: json.RawMessage(`[{"type":"tool_result","tool_use_id":"call_1","content":"done"}]`)},
+		},
+		Tools: []AnthropicTool{
+			{Name: "Read File!", Description: "Read a file", InputSchema: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}}}`)},
+		},
+		ToolChoice: json.RawMessage(`{"type":"tool","name":"Read File!"}`),
+	}
+
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+
+	require.Len(t, resp.Tools, 1)
+	assert.Equal(t, "Read_File_", resp.Tools[0].Name)
+	assert.True(t, isValidOpenAIName(resp.Tools[0].Name))
+
+	var toolChoice map[string]any
+	require.NoError(t, json.Unmarshal(resp.ToolChoice, &toolChoice))
+	assert.Equal(t, "function", toolChoice["type"])
+	assert.Equal(t, "Read_File_", toolChoice["name"])
+
+	var items []ResponsesInputItem
+	require.NoError(t, json.Unmarshal(resp.Input, &items))
+	require.Len(t, items, 3)
+	assert.Equal(t, "function_call", items[1].Type)
+	assert.Equal(t, "Read_File_", items[1].Name)
+	assert.True(t, isValidOpenAIName(items[1].Name))
+	assert.Equal(t, "function_call_output", items[2].Type)
+}

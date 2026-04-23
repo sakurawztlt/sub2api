@@ -7,6 +7,11 @@ import (
 	"strings"
 )
 
+const (
+	openAINameMaxLen   = 64
+	openAINameFallback = "unknown_tool"
+)
+
 // reasoningSummaryGateEnabled reports whether Summary emission should be
 // gated on the client's Anthropic `thinking` field. Default: off (Summary
 // stays unconditionally "auto", preserving historical behaviour for 97.9%
@@ -121,7 +126,7 @@ func convertAnthropicToolChoiceToResponses(raw json.RawMessage) (json.RawMessage
 	case "tool":
 		return json.Marshal(map[string]string{
 			"type": "function",
-			"name": tc.Name,
+			"name": sanitizeOpenAIName(tc.Name),
 		})
 	default:
 		// Pass through unknown types as-is
@@ -375,12 +380,70 @@ func anthropicAssistantToResponses(raw json.RawMessage) ([]ResponsesInputItem, e
 		items = append(items, ResponsesInputItem{
 			Type:      "function_call",
 			CallID:    fcID,
-			Name:      b.Name,
+			Name:      sanitizeOpenAIName(b.Name),
 			Arguments: args,
 		})
 	}
 
 	return items, nil
+}
+
+// sanitizeOpenAIName preserves already-valid OpenAI names verbatim and
+// rewrites only illegal names into the narrow ASCII charset that Responses
+// accepts for tool/function names.
+func sanitizeOpenAIName(name string) string {
+	if isValidOpenAIName(name) {
+		return name
+	}
+
+	var b strings.Builder
+	b.Grow(openAINameMaxLen)
+	for _, r := range name {
+		if b.Len() >= openAINameMaxLen {
+			break
+		}
+		if isAllowedOpenAINameRune(r) {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+
+	if b.Len() == 0 {
+		return openAINameFallback
+	}
+	return b.String()
+}
+
+func isValidOpenAIName(name string) bool {
+	if name == "" || len(name) > openAINameMaxLen {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		if !isAllowedOpenAINameByte(name[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func isAllowedOpenAINameRune(r rune) bool {
+	return r <= 0x7f && isAllowedOpenAINameByte(byte(r))
+}
+
+func isAllowedOpenAINameByte(b byte) bool {
+	switch {
+	case b >= 'a' && b <= 'z':
+		return true
+	case b >= 'A' && b <= 'Z':
+		return true
+	case b >= '0' && b <= '9':
+		return true
+	case b == '_' || b == '-':
+		return true
+	default:
+		return false
+	}
 }
 
 // toResponsesCallID converts an Anthropic tool ID (toolu_xxx / call_xxx) to a
@@ -529,7 +592,7 @@ func convertAnthropicToolsToResponses(tools []AnthropicTool) []ResponsesTool {
 		}
 		out = append(out, ResponsesTool{
 			Type:        "function",
-			Name:        t.Name,
+			Name:        sanitizeOpenAIName(t.Name),
 			Description: t.Description,
 			Parameters:  normalizeToolParameters(t.InputSchema),
 		})
