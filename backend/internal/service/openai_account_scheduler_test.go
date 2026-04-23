@@ -578,8 +578,9 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionStickyQuotaExcee
 		accountRepo:        stubOpenAIAccountRepo{accounts: []Account{dbSticky, dbBackup}},
 		cache:              cache,
 		cfg:                &config.Config{},
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
 		schedulerSnapshot:  snapshotService,
-		concurrencyService: NewConcurrencyService(stubConcurrencyCache{}),
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
 	}
 
 	selection, decision, err := svc.SelectAccountWithScheduler(ctx, &groupID, "", "session_hash_quota_runtime_recheck", "gpt-5.1", nil, OpenAIUpstreamTransportAny)
