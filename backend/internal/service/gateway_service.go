@@ -484,9 +484,13 @@ type ForwardResult struct {
 	RequestID string
 	Usage     ClaudeUsage
 	Model     string
+	// BillingModel is the model used for cost calculation when it differs from
+	// the client-facing model, such as OpenAI compatibility forwarding.
+	BillingModel string
 	// UpstreamModel is the actual upstream model after mapping.
 	// Prefer empty when it is identical to Model; persistence normalizes equal values away as no-op mappings.
 	UpstreamModel    string
+	ServiceTier      *string
 	Stream           bool
 	Duration         time.Duration
 	FirstTokenMs     *int // 首字时间（流式请求）
@@ -1393,7 +1397,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 				filteredExcluded++
 				continue
 			}
-			account, ok := accountByID[routingAccountID]
+			account, ok := s.resolveExplicitModelRoutingAccount(ctx, group, groupID, routingAccountID, accountByID)
 			if !ok || !s.isAccountSchedulableForSelection(account) {
 				if !ok {
 					filteredMissing++
@@ -1402,7 +1406,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 				}
 				continue
 			}
-			if !s.isAccountAllowedForPlatform(account, platform, useMixed) {
+			if !s.isExplicitModelRoutingAccountAllowed(group, groupID, account, platform, useMixed) {
 				filteredPlatform++
 				continue
 			}
@@ -1446,11 +1450,11 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 			if sessionHash != "" && stickyAccountID > 0 {
 				if containsInt64(routingAccountIDs, stickyAccountID) && !isExcluded(stickyAccountID) {
 					// 粘性账号在路由列表中，优先使用
-					if stickyAccount, ok := accountByID[stickyAccountID]; ok {
+					if stickyAccount, ok := s.resolveExplicitModelRoutingAccount(ctx, group, groupID, stickyAccountID, accountByID); ok {
 						var stickyCacheMissReason string
 
 						gatePass := s.isAccountSchedulableForSelection(stickyAccount) &&
-							s.isAccountAllowedForPlatform(stickyAccount, platform, useMixed) &&
+							s.isExplicitModelRoutingAccountAllowed(group, groupID, stickyAccount, platform, useMixed) &&
 							(requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, stickyAccount, requestedModel)) &&
 							s.isAccountSchedulableForModelSelection(ctx, stickyAccount, requestedModel) &&
 							s.isAccountSchedulableForQuota(stickyAccount) &&
@@ -2070,6 +2074,48 @@ func (s *GatewayService) isAccountAllowedForPlatform(account *Account, platform 
 		return account.Platform == PlatformAntigravity && account.IsMixedSchedulingEnabled()
 	}
 	return account.Platform == platform
+}
+
+func (s *GatewayService) isExplicitModelRoutingOpenAIOAuthAccount(group *Group, account *Account) bool {
+	return group != nil && group.Platform == PlatformAnthropic && account != nil && account.IsOpenAIOAuth()
+}
+
+func (s *GatewayService) isExplicitModelRoutingAccountAllowed(group *Group, groupID *int64, account *Account, platform string, useMixed bool) bool {
+	if account == nil {
+		return false
+	}
+	if s.isExplicitModelRoutingOpenAIOAuthAccount(group, account) {
+		return s.isAccountInGroup(account, groupID)
+	}
+	return s.isAccountAllowedForPlatform(account, platform, useMixed)
+}
+
+func (s *GatewayService) resolveExplicitModelRoutingAccount(
+	ctx context.Context,
+	group *Group,
+	groupID *int64,
+	accountID int64,
+	accountByID map[int64]*Account,
+) (*Account, bool) {
+	if accountByID != nil {
+		if account, ok := accountByID[accountID]; ok && account != nil {
+			return account, true
+		}
+	}
+	if group == nil || group.Platform != PlatformAnthropic || accountID <= 0 {
+		return nil, false
+	}
+	account, err := s.getSchedulableAccount(ctx, accountID)
+	if err != nil || account == nil {
+		return nil, false
+	}
+	if !account.IsOpenAIOAuth() || !s.isAccountInGroup(account, groupID) {
+		return nil, false
+	}
+	if accountByID != nil {
+		accountByID[accountID] = account
+	}
+	return account, true
 }
 
 func (s *GatewayService) isAccountSchedulableForSelection(account *Account) bool {
@@ -2729,6 +2775,10 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 	if groupID != nil && s.groupRepo != nil {
 		schedGroup, _ = s.groupRepo.GetByID(ctx, *groupID)
 	}
+	routingGroup := schedGroup
+	if routingGroup == nil && groupID != nil {
+		routingGroup, _ = s.resolveGroupByID(ctx, *groupID)
+	}
 
 	var accounts []Account
 	accountsLoaded := false
@@ -2753,7 +2803,7 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 						if clearSticky {
 							_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 						}
-						if !clearSticky && s.isAccountInGroup(account, groupID) && account.Platform == platform && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) && !s.isStickyAccountUpstreamRestricted(ctx, groupID, account, requestedModel) {
+						if !clearSticky && s.isAccountInGroup(account, groupID) && s.isExplicitModelRoutingAccountAllowed(routingGroup, groupID, account, platform, false) && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) && !s.isStickyAccountUpstreamRestricted(ctx, groupID, account, requestedModel) {
 							if s.debugModelRoutingEnabled() {
 								logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] legacy routed sticky hit: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), accountID)
 							}
@@ -2780,17 +2830,15 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 		ctx = s.withWindowCostPrefetch(ctx, accounts)
 		ctx = s.withRPMPrefetch(ctx, accounts)
 
-		routingSet := make(map[int64]struct{}, len(routingAccountIDs))
-		for _, id := range routingAccountIDs {
-			if id > 0 {
-				routingSet[id] = struct{}{}
-			}
+		accountByID := make(map[int64]*Account, len(accounts))
+		for i := range accounts {
+			accountByID[accounts[i].ID] = &accounts[i]
 		}
 
 		var selected *Account
-		for i := range accounts {
-			acc := &accounts[i]
-			if _, ok := routingSet[acc.ID]; !ok {
+		for _, routingAccountID := range routingAccountIDs {
+			acc, ok := s.resolveExplicitModelRoutingAccount(ctx, routingGroup, groupID, routingAccountID, accountByID)
+			if !ok {
 				continue
 			}
 			if _, excluded := excludedIDs[acc.ID]; excluded {
@@ -2805,6 +2853,9 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 			if schedGroup != nil && schedGroup.RequirePrivacySet && !acc.IsPrivacySet() {
 				_ = s.accountRepo.SetError(ctx, acc.ID,
 					fmt.Sprintf("Privacy not set, required by group [%s]", schedGroup.Name))
+				continue
+			}
+			if !s.isExplicitModelRoutingAccountAllowed(routingGroup, groupID, acc, platform, false) {
 				continue
 			}
 			if requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, acc, requestedModel) {
@@ -2989,6 +3040,10 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 	if groupID != nil && s.groupRepo != nil {
 		schedGroup, _ = s.groupRepo.GetByID(ctx, *groupID)
 	}
+	routingGroup := schedGroup
+	if routingGroup == nil && groupID != nil {
+		routingGroup, _ = s.resolveGroupByID(ctx, *groupID)
+	}
 
 	var accounts []Account
 	accountsLoaded := false
@@ -3012,7 +3067,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 							_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 						}
 						if !clearSticky && s.isAccountInGroup(account, groupID) && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) {
-							if account.Platform == nativePlatform || (account.Platform == PlatformAntigravity && account.IsMixedSchedulingEnabled()) {
+							if s.isExplicitModelRoutingAccountAllowed(routingGroup, groupID, account, nativePlatform, true) {
 								if s.debugModelRoutingEnabled() {
 									logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] legacy mixed routed sticky hit: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), accountID)
 								}
@@ -3036,17 +3091,15 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 		ctx = s.withWindowCostPrefetch(ctx, accounts)
 		ctx = s.withRPMPrefetch(ctx, accounts)
 
-		routingSet := make(map[int64]struct{}, len(routingAccountIDs))
-		for _, id := range routingAccountIDs {
-			if id > 0 {
-				routingSet[id] = struct{}{}
-			}
+		accountByID := make(map[int64]*Account, len(accounts))
+		for i := range accounts {
+			accountByID[accounts[i].ID] = &accounts[i]
 		}
 
 		var selected *Account
-		for i := range accounts {
-			acc := &accounts[i]
-			if _, ok := routingSet[acc.ID]; !ok {
+		for _, routingAccountID := range routingAccountIDs {
+			acc, ok := s.resolveExplicitModelRoutingAccount(ctx, routingGroup, groupID, routingAccountID, accountByID)
+			if !ok {
 				continue
 			}
 			if _, excluded := excludedIDs[acc.ID]; excluded {
@@ -3063,8 +3116,7 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 					fmt.Sprintf("Privacy not set, required by group [%s]", schedGroup.Name))
 				continue
 			}
-			// 过滤：原生平台直接通过，antigravity 需要启用混合调度
-			if acc.Platform == PlatformAntigravity && !acc.IsMixedSchedulingEnabled() {
+			if !s.isExplicitModelRoutingAccountAllowed(routingGroup, groupID, acc, nativePlatform, true) {
 				continue
 			}
 			if requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, acc, requestedModel) {
@@ -6933,9 +6985,9 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			if time.Since(lastDataAt) < keepaliveInterval {
 				continue
 			}
-			// SSE ping 事件：Anthropic 原生格式，客户端会正确处理，
-			// 同时保持连接活跃防止 Cloudflare Tunnel 等代理断开
-			if _, werr := fmt.Fprint(w, "event: ping\ndata: {\"type\": \"ping\"}\n\n"); werr != nil {
+			// SSE 注释格式 keepalive：在 HTTP 层保持连接活跃（防止 Cloudflare Tunnel 等代理因空闲断开），
+			// 但不会被 Anthropic SDK yield 给消费者，不干扰客户端（如 Claude Code）的 idle watchdog。
+			if _, werr := fmt.Fprint(w, ": keepalive\n\n"); werr != nil {
 				clientDisconnected = true
 				logger.LegacyPrintf("service.gateway", "Client disconnected during keepalive ping, continuing to drain upstream for billing")
 				continue
@@ -7788,6 +7840,9 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 
 	// 确定计费模型
 	billingModel := forwardResultBillingModel(result.Model, result.UpstreamModel)
+	if result.BillingModel != "" {
+		billingModel = strings.TrimSpace(result.BillingModel)
+	}
 	if input.BillingModelSource == BillingModelSourceChannelMapped && input.ChannelMappedModel != "" {
 		billingModel = input.ChannelMappedModel
 	}
@@ -7957,6 +8012,10 @@ func (s *GatewayService) calculateTokenCost(
 
 	var cost *CostBreakdown
 	var err error
+	serviceTier := ""
+	if result.ServiceTier != nil {
+		serviceTier = strings.TrimSpace(*result.ServiceTier)
+	}
 
 	// 优先尝试渠道定价 → CalculateCostUnified
 	if resolved := s.resolveChannelPricing(ctx, billingModel, apiKey); resolved != nil {
@@ -7968,6 +8027,7 @@ func (s *GatewayService) calculateTokenCost(
 			Tokens:         tokens,
 			RequestCount:   1,
 			RateMultiplier: multiplier,
+			ServiceTier:    serviceTier,
 			Resolver:       s.resolver,
 			Resolved:       resolved,
 		})
@@ -7977,6 +8037,8 @@ func (s *GatewayService) calculateTokenCost(
 			billingModel, tokens, multiplier,
 			opts.LongContextThreshold, opts.LongContextMultiplier,
 		)
+	} else if serviceTier != "" {
+		cost, err = s.billingService.CalculateCostWithServiceTier(billingModel, tokens, multiplier, serviceTier)
 	} else {
 		cost, err = s.billingService.CalculateCost(billingModel, tokens, multiplier)
 	}
@@ -8014,6 +8076,7 @@ func (s *GatewayService) buildRecordUsageLog(
 		Model:                 result.Model,
 		RequestedModel:        requestedModel,
 		UpstreamModel:         optionalNonEqualStringPtr(result.UpstreamModel, result.Model),
+		ServiceTier:           result.ServiceTier,
 		ReasoningEffort:       result.ReasoningEffort,
 		InboundEndpoint:       optionalTrimmedStringPtr(input.InboundEndpoint),
 		UpstreamEndpoint:      optionalTrimmedStringPtr(input.UpstreamEndpoint),

@@ -101,7 +101,7 @@ func AnthropicToResponses(req *AnthropicRequest) (*ResponsesRequest, error) {
 //	{"type":"auto"}            → "auto"
 //	{"type":"any"}             → "required"
 //	{"type":"none"}            → "none"
-//	{"type":"tool","name":"X"} → {"type":"function","function":{"name":"X"}}
+//	{"type":"tool","name":"X"} → {"type":"function","name":"X"}
 func convertAnthropicToolChoiceToResponses(raw json.RawMessage) (json.RawMessage, error) {
 	var tc struct {
 		Type string `json:"type"`
@@ -119,9 +119,9 @@ func convertAnthropicToolChoiceToResponses(raw json.RawMessage) (json.RawMessage
 	case "none":
 		return json.Marshal("none")
 	case "tool":
-		return json.Marshal(map[string]any{
-			"type":     "function",
-			"function": map[string]string{"name": tc.Name},
+		return json.Marshal(map[string]string{
+			"type": "function",
+			"name": tc.Name,
 		})
 	default:
 		// Pass through unknown types as-is
@@ -506,11 +506,11 @@ func mapAnthropicEffortToResponses(effort string) string {
 //  2. Anthropic `web_search_*` (e.g. web_search_20250305) → sub2api Codex
 //     hosted `web_search` tool. The Codex wire protocol uses the bare name
 //     `web_search`, confirmed by:
-//       - types.go:212 ResponsesTool.Type comment listing `"web_search"`
-//       - responses_to_anthropic_request.go:432 reverse mapping
-//         `web_search` → `web_search_20250305`
-//       - responses_to_anthropic.go:57 output-item handler for
-//         `web_search_call` → server_tool_use + web_search_tool_result
+//     - types.go:212 ResponsesTool.Type comment listing `"web_search"`
+//     - responses_to_anthropic_request.go:432 reverse mapping
+//     `web_search` → `web_search_20250305`
+//     - responses_to_anthropic.go:57 output-item handler for
+//     `web_search_call` → server_tool_use + web_search_tool_result
 //     Earlier attempts that emitted `{"type":"web_search_preview"}` (the
 //     OpenAI public Responses API name) were rejected by Codex upstream
 //     with "Unsupported tool type" — Codex uses the bare name.

@@ -37,6 +37,7 @@ var gatewayCompatibilityMetricsLogCounter atomic.Uint64
 // GatewayHandler handles API gateway requests
 type GatewayHandler struct {
 	gatewayService            *service.GatewayService
+	openAIGatewayService      *service.OpenAIGatewayService
 	geminiCompatService       *service.GeminiMessagesCompatService
 	antigravityGatewayService *service.AntigravityGatewayService
 	userService               *service.UserService
@@ -56,6 +57,7 @@ type GatewayHandler struct {
 // NewGatewayHandler creates a new GatewayHandler
 func NewGatewayHandler(
 	gatewayService *service.GatewayService,
+	openAIGatewayService *service.OpenAIGatewayService,
 	geminiCompatService *service.GeminiMessagesCompatService,
 	antigravityGatewayService *service.AntigravityGatewayService,
 	userService *service.UserService,
@@ -90,6 +92,7 @@ func NewGatewayHandler(
 
 	return &GatewayHandler{
 		gatewayService:            gatewayService,
+		openAIGatewayService:      openAIGatewayService,
 		geminiCompatService:       geminiCompatService,
 		antigravityGatewayService: antigravityGatewayService,
 		userService:               userService,
@@ -104,6 +107,52 @@ func NewGatewayHandler(
 		maxAccountSwitchesGemini:  maxAccountSwitchesGemini,
 		cfg:                       cfg,
 		settingService:            settingService,
+	}
+}
+
+type messagesForwardRoute int
+
+const (
+	messagesForwardRouteAnthropicNative messagesForwardRoute = iota
+	messagesForwardRouteOpenAICompat
+	messagesForwardRouteAntigravity
+)
+
+func messagesForwardRouteKind(group *service.Group, account *service.Account) messagesForwardRoute {
+	if group != nil && group.Platform == service.PlatformAnthropic && account != nil && account.IsOpenAIOAuth() {
+		return messagesForwardRouteOpenAICompat
+	}
+	if account != nil && account.Platform == service.PlatformAntigravity && account.Type != service.AccountTypeAPIKey {
+		return messagesForwardRouteAntigravity
+	}
+	return messagesForwardRouteAnthropicNative
+}
+
+func openAICompatForwardResult(result *service.OpenAIForwardResult) *service.ForwardResult {
+	if result == nil {
+		return nil
+	}
+	inputTokens := result.Usage.InputTokens - result.Usage.CacheReadInputTokens
+	if inputTokens < 0 {
+		inputTokens = 0
+	}
+	return &service.ForwardResult{
+		RequestID: result.RequestID,
+		Usage: service.ClaudeUsage{
+			InputTokens:              inputTokens,
+			OutputTokens:             result.Usage.OutputTokens,
+			CacheCreationInputTokens: result.Usage.CacheCreationInputTokens,
+			CacheReadInputTokens:     result.Usage.CacheReadInputTokens,
+			ImageOutputTokens:        result.Usage.ImageOutputTokens,
+		},
+		Model:           result.Model,
+		BillingModel:    result.BillingModel,
+		UpstreamModel:   result.UpstreamModel,
+		ServiceTier:     result.ServiceTier,
+		Stream:          result.Stream,
+		Duration:        result.Duration,
+		FirstTokenMs:    result.FirstTokenMs,
+		ReasoningEffort: result.ReasoningEffort,
 	}
 }
 
@@ -702,9 +751,32 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 			// 记录 Forward 前已写入字节数，Forward 后若增加则说明 SSE 内容已发，禁止 failover
 			writerSizeBeforeForward := c.Writer.Size()
-			if account.Platform == service.PlatformAntigravity && account.Type != service.AccountTypeAPIKey {
+			switch messagesForwardRouteKind(currentAPIKey.Group, account) {
+			case messagesForwardRouteAntigravity:
 				result, err = h.antigravityGatewayService.Forward(requestCtx, c, account, body, hasBoundSession)
-			} else {
+			case messagesForwardRouteOpenAICompat:
+				if h.openAIGatewayService == nil {
+					err = errors.New("openai gateway service unavailable")
+					break
+				}
+				defaultMappedModel := ""
+				if currentAPIKey.Group != nil {
+					defaultMappedModel = strings.TrimSpace(currentAPIKey.Group.ResolveMessagesDispatchModel(reqModel))
+					if defaultMappedModel == "" {
+						defaultMappedModel = strings.TrimSpace(currentAPIKey.Group.ResolveMessagesDispatchModel(parsedReq.Model))
+					}
+				}
+				openAIResult, forwardErr := h.openAIGatewayService.ForwardAsAnthropic(
+					requestCtx,
+					c,
+					account,
+					body,
+					sessionKey,
+					defaultMappedModel,
+				)
+				err = forwardErr
+				result = openAICompatForwardResult(openAIResult)
+			default:
 				result, err = h.gatewayService.Forward(requestCtx, c, account, parsedReq)
 			}
 

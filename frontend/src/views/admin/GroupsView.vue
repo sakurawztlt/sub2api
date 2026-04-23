@@ -1332,7 +1332,7 @@
                         :key="account.id"
                         class="inline-flex items-center gap-1 rounded-full bg-primary-100 px-2.5 py-1 text-xs font-medium text-primary-700 dark:bg-primary-900/30 dark:text-primary-300"
                       >
-                        {{ account.name }}
+                        {{ formatModelRoutingAccountLabel(account) }}
                         <button
                           type="button"
                           @click="removeSelectedAccount(rule, account.id)"
@@ -1384,7 +1384,9 @@
                             rule.accounts.some((a) => a.id === account.id)
                           "
                         >
-                          <span>{{ account.name }}</span>
+                          <span>{{
+                            formatModelRoutingAccountLabel(account)
+                          }}</span>
                           <span class="ml-2 text-xs text-gray-400"
                             >#{{ account.id }}</span
                           >
@@ -2450,7 +2452,7 @@
                         :key="account.id"
                         class="inline-flex items-center gap-1 rounded-full bg-primary-100 px-2.5 py-1 text-xs font-medium text-primary-700 dark:bg-primary-900/30 dark:text-primary-300"
                       >
-                        {{ account.name }}
+                        {{ formatModelRoutingAccountLabel(account) }}
                         <button
                           type="button"
                           @click="removeSelectedAccount(rule, account.id, true)"
@@ -2502,7 +2504,9 @@
                             rule.accounts.some((a) => a.id === account.id)
                           "
                         >
-                          <span>{{ account.name }}</span>
+                          <span>{{
+                            formatModelRoutingAccountLabel(account)
+                          }}</span>
                           <span class="ml-2 text-xs text-gray-400"
                             >#{{ account.id }}</span
                           >
@@ -2723,6 +2727,10 @@ import {
   resetMessagesDispatchFormState,
   type MessagesDispatchMappingRow,
 } from "./groupsMessagesDispatch";
+import {
+  fetchModelRoutingAccountCandidates,
+  formatModelRoutingAccountLabel,
+} from "./groupsModelRoutingAccounts";
 
 const { t } = useI18n();
 const appStore = useAppStore();
@@ -2996,6 +3004,8 @@ const createForm = reactive({
 interface SimpleAccount {
   id: number;
   name: string;
+  platform?: string;
+  type?: string;
 }
 
 // 模型路由规则类型
@@ -3061,18 +3071,8 @@ const clearAllAccountSearchState = () => {
 
 const accountSearchRunner = useKeyedDebouncedSearch<SimpleAccount[]>({
   delay: 300,
-  search: async (keyword, { signal }) => {
-    const res = await adminAPI.accounts.list(
-      1,
-      20,
-      {
-        search: keyword,
-        platform: "anthropic",
-      },
-      { signal },
-    );
-    return res.items.map((account) => ({ id: account.id, name: account.name }));
-  },
+  search: async (keyword, { signal }) =>
+    fetchModelRoutingAccountCandidates(keyword, signal, adminAPI.accounts.list),
   onSuccess: (key, result) => {
     accountSearchResults.value[key] = result;
   },
@@ -3081,7 +3081,7 @@ const accountSearchRunner = useKeyedDebouncedSearch<SimpleAccount[]>({
   },
 });
 
-// 搜索账号（仅限 anthropic 平台）
+// 搜索账号（Anthropic + Codex/OpenAI OAuth）
 const searchAccounts = (key: string) => {
   accountSearchRunner.trigger(key, accountSearchKeyword.value[key] || "");
 };
@@ -3223,7 +3223,12 @@ const convertApiFormatToRoutingRules = async (
     for (const id of accountIds) {
       try {
         const account = await adminAPI.accounts.getById(id);
-        accounts.push({ id: account.id, name: account.name });
+        accounts.push({
+          id: account.id,
+          name: account.name,
+          platform: account.platform,
+          type: account.type,
+        });
       } catch {
         // 如果账号不存在，仍然显示 ID
         accounts.push({ id, name: `#${id}` });

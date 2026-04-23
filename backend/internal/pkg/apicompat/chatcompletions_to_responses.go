@@ -1,6 +1,7 @@
 package apicompat
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -9,6 +10,26 @@ import (
 type chatMessageContent struct {
 	Text  *string
 	Parts []ChatContentPart
+}
+
+type chatResponseFormat struct {
+	Type       string                  `json:"type"`
+	JSONSchema *chatResponseJSONSchema `json:"json_schema,omitempty"`
+}
+
+type chatResponseJSONSchema struct {
+	Name        string          `json:"name,omitempty"`
+	Description string          `json:"description,omitempty"`
+	Schema      json.RawMessage `json:"schema,omitempty"`
+	Strict      *bool           `json:"strict,omitempty"`
+}
+
+type responsesTextFormat struct {
+	Type        string          `json:"type"`
+	Name        string          `json:"name,omitempty"`
+	Description string          `json:"description,omitempty"`
+	Schema      json.RawMessage `json:"schema,omitempty"`
+	Strict      *bool           `json:"strict,omitempty"`
 }
 
 // ChatCompletionsToResponses converts a Chat Completions request into a
@@ -64,15 +85,32 @@ func ChatCompletionsToResponses(req *ChatCompletionsRequest) (*ResponsesRequest,
 		}
 	}
 
+	// Chat Completions structured outputs use response_format; Responses uses
+	// text.format with a different shape. Convert json_schema requests from
+	// response_format.json_schema.* into text.format.* while preserving the raw
+	// nested schema payload ordering.
+	if len(req.ResponseFormat) > 0 {
+		format, err := convertChatResponseFormat(req.ResponseFormat)
+		if err != nil {
+			return nil, fmt.Errorf("convert response_format: %w", err)
+		}
+		out.Text = &ResponsesText{Format: format}
+	}
+
 	// tools[] and legacy functions[] → ResponsesTool[]
 	if len(req.Tools) > 0 || len(req.Functions) > 0 {
 		out.Tools = convertChatToolsToResponses(req.Tools, req.Functions)
 	}
 
-	// tool_choice: already compatible format — pass through directly.
-	// Legacy function_call needs mapping.
+	// tool_choice: Chat Completions uses nested {"type":"function","function":{"name":"X"}},
+	// Responses API uses flat {"type":"function","name":"X"}. Strings (auto/none/required)
+	// and already-flat objects pass through.
 	if len(req.ToolChoice) > 0 {
-		out.ToolChoice = req.ToolChoice
+		tc, err := remapChatToolChoiceToResponses(req.ToolChoice)
+		if err != nil {
+			return nil, fmt.Errorf("convert tool_choice: %w", err)
+		}
+		out.ToolChoice = tc
 	} else if len(req.FunctionCall) > 0 {
 		tc, err := convertChatFunctionCallToToolChoice(req.FunctionCall)
 		if err != nil {
@@ -82,6 +120,35 @@ func ChatCompletionsToResponses(req *ChatCompletionsRequest) (*ResponsesRequest,
 	}
 
 	return out, nil
+}
+
+func convertChatResponseFormat(raw json.RawMessage) (json.RawMessage, error) {
+	var format chatResponseFormat
+	if err := json.Unmarshal(raw, &format); err != nil {
+		return nil, err
+	}
+
+	switch format.Type {
+	case "json_schema":
+		if format.JSONSchema == nil {
+			return nil, fmt.Errorf("response_format.json_schema is required")
+		}
+		return json.Marshal(responsesTextFormat{
+			Type:        "json_schema",
+			Name:        format.JSONSchema.Name,
+			Description: format.JSONSchema.Description,
+			Schema:      format.JSONSchema.Schema,
+			Strict:      format.JSONSchema.Strict,
+		})
+	case "json_object":
+		return json.Marshal(struct {
+			Type string `json:"type"`
+		}{Type: "json_object"})
+	default:
+		// Keep unknown formats untouched so upstream validation remains the
+		// source of truth for newer response_format shapes.
+		return raw, nil
+	}
 }
 
 // convertChatMessagesToResponsesInput converts the Chat Completions messages
@@ -436,11 +503,11 @@ func convertChatToolsToResponses(tools []ChatTool, functions []ChatFunction) []R
 }
 
 // convertChatFunctionCallToToolChoice maps the legacy function_call field to a
-// Responses API tool_choice value.
+// Responses API tool_choice value (flat format).
 //
 //	"auto" → "auto"
 //	"none" → "none"
-//	{"name":"X"} → {"type":"function","function":{"name":"X"}}
+//	{"name":"X"} → {"type":"function","name":"X"}
 func convertChatFunctionCallToToolChoice(raw json.RawMessage) (json.RawMessage, error) {
 	// Try string first ("auto", "none", etc.) — pass through as-is.
 	var s string
@@ -455,8 +522,49 @@ func convertChatFunctionCallToToolChoice(raw json.RawMessage) (json.RawMessage, 
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return nil, err
 	}
-	return json.Marshal(map[string]any{
-		"type":     "function",
-		"function": map[string]string{"name": obj.Name},
+	return json.Marshal(map[string]string{
+		"type": "function",
+		"name": obj.Name,
 	})
+}
+
+// remapChatToolChoiceToResponses converts Chat Completions tool_choice into the
+// Responses API flat format. Chat Completions wraps the function name in a
+// nested object ({"type":"function","function":{"name":"X"}}), whereas the
+// Responses API expects it flattened ({"type":"function","name":"X"}).
+// Strings ("auto","none","required") and already-flat objects are returned
+// unchanged. Unknown shapes are preserved to avoid breaking future tool types.
+func remapChatToolChoiceToResponses(raw json.RawMessage) (json.RawMessage, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		// Not an object (string / null / unexpected) — pass through.
+		return raw, nil
+	}
+
+	var probe struct {
+		Type     string `json:"type"`
+		Name     string `json:"name"`
+		Function *struct {
+			Name string `json:"name"`
+		} `json:"function"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return nil, err
+	}
+
+	// Function tool choice: always strip nested "function" field to guarantee Responses
+	// API compliance. Prefer explicit top-level name, fall back to nested function.name.
+	if probe.Type == "function" && (probe.Function != nil || probe.Name != "") {
+		name := probe.Name
+		if name == "" && probe.Function != nil {
+			name = probe.Function.Name
+		}
+		return json.Marshal(map[string]string{
+			"type": "function",
+			"name": name,
+		})
+	}
+
+	// Other tool types (e.g. allowed_tools, file_search) — pass through.
+	return raw, nil
 }

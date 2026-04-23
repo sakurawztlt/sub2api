@@ -73,6 +73,34 @@ type AnthropicContentBlock struct {
 	IsError   bool            `json:"is_error,omitempty"`
 }
 
+// MarshalJSON ensures text/thinking blocks keep their required payload fields
+// even when the value is an empty string. The Anthropic streaming protocol
+// expects content_block_start for these block types to include text/thinking,
+// and some SDKs break if the field is omitted entirely.
+func (b AnthropicContentBlock) MarshalJSON() ([]byte, error) {
+	type alias AnthropicContentBlock
+	switch b.Type {
+	case "text":
+		return json.Marshal(struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}{
+			Type: b.Type,
+			Text: b.Text,
+		})
+	case "thinking":
+		return json.Marshal(struct {
+			Type     string `json:"type"`
+			Thinking string `json:"thinking"`
+		}{
+			Type:     b.Type,
+			Thinking: b.Thinking,
+		})
+	default:
+		return json.Marshal(alias(b))
+	}
+}
+
 // AnthropicImageSource describes the source data for an image OR document
 // content block. Despite the historical name, it is reused for document
 // blocks, which support more source shapes:
@@ -178,12 +206,18 @@ type ResponsesRequest struct {
 	Temperature     *float64            `json:"temperature,omitempty"`
 	TopP            *float64            `json:"top_p,omitempty"`
 	Stream          bool                `json:"stream,omitempty"`
+	Text            *ResponsesText      `json:"text,omitempty"`
 	Tools           []ResponsesTool     `json:"tools,omitempty"`
 	Include         []string            `json:"include,omitempty"`
 	Store           *bool               `json:"store,omitempty"`
 	Reasoning       *ResponsesReasoning `json:"reasoning,omitempty"`
 	ToolChoice      json.RawMessage     `json:"tool_choice,omitempty"`
 	ServiceTier     string              `json:"service_tier,omitempty"`
+}
+
+// ResponsesText configures structured text output for the Responses API.
+type ResponsesText struct {
+	Format json.RawMessage `json:"format,omitempty"`
 }
 
 // ResponsesReasoning configures reasoning effort in the Responses API.
@@ -375,6 +409,7 @@ type ChatCompletionsRequest struct {
 	StreamOptions       *ChatStreamOptions `json:"stream_options,omitempty"`
 	Tools               []ChatTool         `json:"tools,omitempty"`
 	ToolChoice          json.RawMessage    `json:"tool_choice,omitempty"`
+	ResponseFormat      json.RawMessage    `json:"response_format,omitempty"`
 	ReasoningEffort     string             `json:"reasoning_effort,omitempty"` // "low" | "medium" | "high" | "xhigh"
 	ServiceTier         string             `json:"service_tier,omitempty"`
 	Stop                json.RawMessage    `json:"stop,omitempty"` // string or []string

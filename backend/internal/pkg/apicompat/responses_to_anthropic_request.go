@@ -464,10 +464,11 @@ func normalizeAnthropicInputSchema(schema json.RawMessage) json.RawMessage {
 // convertResponsesToAnthropicToolChoice maps Responses tool_choice to Anthropic format.
 // Reverse of convertAnthropicToolChoiceToResponses.
 //
-//	"auto"                                     → {"type":"auto"}
-//	"required"                                 → {"type":"any"}
-//	"none"                                     → {"type":"none"}
-//	{"type":"function","function":{"name":"X"}} → {"type":"tool","name":"X"}
+//	"auto"                               → {"type":"auto"}
+//	"required"                           → {"type":"any"}
+//	"none"                               → {"type":"none"}
+//	{"type":"function","name":"X"}       → {"type":"tool","name":"X"}   (Responses native)
+//	{"type":"function","function":{...}} → {"type":"tool","name":"X"}   (legacy nested, defensive)
 func convertResponsesToAnthropicToolChoice(raw json.RawMessage) (json.RawMessage, error) {
 	// Try as string first
 	var s string
@@ -484,18 +485,25 @@ func convertResponsesToAnthropicToolChoice(raw json.RawMessage) (json.RawMessage
 		}
 	}
 
-	// Try as object with type=function
+	// Try as object. Accept both flat (Responses native) and nested (legacy) shapes.
 	var tc struct {
 		Type     string `json:"type"`
-		Function struct {
+		Name     string `json:"name"`
+		Function *struct {
 			Name string `json:"name"`
 		} `json:"function"`
 	}
-	if err := json.Unmarshal(raw, &tc); err == nil && tc.Type == "function" && tc.Function.Name != "" {
-		return json.Marshal(map[string]string{
-			"type": "tool",
-			"name": tc.Function.Name,
-		})
+	if err := json.Unmarshal(raw, &tc); err == nil && tc.Type == "function" {
+		name := tc.Name
+		if name == "" && tc.Function != nil {
+			name = tc.Function.Name
+		}
+		if name != "" {
+			return json.Marshal(map[string]string{
+				"type": "tool",
+				"name": name,
+			})
+		}
 	}
 
 	// Pass through unknown

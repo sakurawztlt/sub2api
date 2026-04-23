@@ -540,6 +540,64 @@ func TestResponsesAnthropicEventToSSE(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// AnthropicContentBlock JSON serialization tests
+// ---------------------------------------------------------------------------
+
+func TestAnthropicContentBlock_TextAlwaysPresent(t *testing.T) {
+	block := AnthropicContentBlock{Type: "text", Text: ""}
+	data, err := json.Marshal(block)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"text":""`,
+		"text field must be present even when empty")
+}
+
+func TestAnthropicContentBlock_ThinkingAlwaysPresent(t *testing.T) {
+	block := AnthropicContentBlock{Type: "thinking", Thinking: ""}
+	data, err := json.Marshal(block)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"thinking":""`,
+		"thinking field must be present even when empty")
+}
+
+func TestAnthropicContentBlock_ToolUseOmitsTextAndThinking(t *testing.T) {
+	block := AnthropicContentBlock{
+		Type:  "tool_use",
+		ID:    "tool_1",
+		Name:  "get_weather",
+		Input: json.RawMessage(`{}`),
+	}
+	data, err := json.Marshal(block)
+	require.NoError(t, err)
+	s := string(data)
+	assert.NotContains(t, s, `"text"`, "tool_use block must not include text field")
+	assert.NotContains(t, s, `"thinking"`, "tool_use block must not include thinking field")
+	assert.Contains(t, s, `"id":"tool_1"`)
+	assert.Contains(t, s, `"name":"get_weather"`)
+}
+
+func TestStreamingContentBlockStartTextJSON(t *testing.T) {
+	state := NewResponsesEventToAnthropicState()
+
+	ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:     "response.created",
+		Response: &ResponsesResponse{ID: "resp_x", Model: "gpt-5.4"},
+	}, state)
+
+	events := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:  "response.output_text.delta",
+		Delta: "ok",
+	}, state)
+	require.GreaterOrEqual(t, len(events), 1)
+	blockStart := events[0]
+	require.Equal(t, "content_block_start", blockStart.Type)
+
+	sse, err := ResponsesAnthropicEventToSSE(blockStart)
+	require.NoError(t, err)
+	assert.Contains(t, sse, `"text":""`,
+		`content_block_start SSE must include "text":"" for text-type blocks`)
+}
+
+// ---------------------------------------------------------------------------
 // response.failed tests
 // ---------------------------------------------------------------------------
 
@@ -914,12 +972,13 @@ func TestAnthropicToResponses_ToolChoiceSpecific(t *testing.T) {
 	resp, err := AnthropicToResponses(req)
 	require.NoError(t, err)
 
+	// Responses API uses flat {"type":"function","name":"X"}, not nested.
 	var tc map[string]any
 	require.NoError(t, json.Unmarshal(resp.ToolChoice, &tc))
 	assert.Equal(t, "function", tc["type"])
-	fn, ok := tc["function"].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "get_weather", fn["name"])
+	assert.Equal(t, "get_weather", tc["name"])
+	_, hasNested := tc["function"]
+	assert.False(t, hasNested, "Responses API rejects nested 'function' field in tool_choice")
 }
 
 // ---------------------------------------------------------------------------

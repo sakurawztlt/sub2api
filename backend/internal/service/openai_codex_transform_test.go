@@ -18,7 +18,7 @@ func TestApplyCodexOAuthTransform_ToolContinuationPreservesInput(t *testing.T) {
 		"tool_choice": "auto",
 	}
 
-	applyCodexOAuthTransform(reqBody, false, false)
+	applyCodexOAuthTransform(reqBody, false, false, false)
 
 	// 未显式设置 store=true，默认为 false。
 	store, ok := reqBody["store"].(bool)
@@ -52,7 +52,7 @@ func TestApplyCodexOAuthTransform_ToolContinuationPreservesNativeMessageAndReaso
 		"tool_choice": "auto",
 	}
 
-	applyCodexOAuthTransform(reqBody, false, false)
+	applyCodexOAuthTransform(reqBody, false, false, false)
 
 	input, ok := reqBody["input"].([]any)
 	require.True(t, ok)
@@ -77,7 +77,7 @@ func TestApplyCodexOAuthTransform_ToolContinuationNormalizesToolReferenceIDsOnly
 		"tool_choice": "auto",
 	}
 
-	applyCodexOAuthTransform(reqBody, false, false)
+	applyCodexOAuthTransform(reqBody, false, false, false)
 
 	input, ok := reqBody["input"].([]any)
 	require.True(t, ok)
@@ -104,7 +104,7 @@ func TestApplyCodexOAuthTransform_ExplicitStoreFalsePreserved(t *testing.T) {
 		"tool_choice": "auto",
 	}
 
-	applyCodexOAuthTransform(reqBody, false, false)
+	applyCodexOAuthTransform(reqBody, false, false, false)
 
 	store, ok := reqBody["store"].(bool)
 	require.True(t, ok)
@@ -123,7 +123,7 @@ func TestApplyCodexOAuthTransform_ExplicitStoreTrueForcedFalse(t *testing.T) {
 		"tool_choice": "auto",
 	}
 
-	applyCodexOAuthTransform(reqBody, false, false)
+	applyCodexOAuthTransform(reqBody, false, false, false)
 
 	store, ok := reqBody["store"].(bool)
 	require.True(t, ok)
@@ -139,7 +139,7 @@ func TestApplyCodexOAuthTransform_StripsUnsupportedFlexServiceTier(t *testing.T)
 		},
 	}
 
-	result := applyCodexOAuthTransform(reqBody, false, false)
+	result := applyCodexOAuthTransform(reqBody, false, false, false)
 
 	_, hasServiceTier := reqBody["service_tier"]
 	require.False(t, hasServiceTier)
@@ -153,7 +153,7 @@ func TestApplyCodexOAuthTransform_CompactForcesNonStreaming(t *testing.T) {
 		"stream": true,
 	}
 
-	result := applyCodexOAuthTransform(reqBody, true, true)
+	result := applyCodexOAuthTransform(reqBody, true, true, false)
 
 	_, hasStore := reqBody["store"]
 	require.False(t, hasStore)
@@ -172,7 +172,7 @@ func TestApplyCodexOAuthTransform_NonContinuationDefaultsStoreFalseAndStripsIDs(
 		},
 	}
 
-	applyCodexOAuthTransform(reqBody, false, false)
+	applyCodexOAuthTransform(reqBody, false, false, false)
 
 	store, ok := reqBody["store"].(bool)
 	require.True(t, ok)
@@ -221,7 +221,7 @@ func TestApplyCodexOAuthTransform_NormalizeCodexTools_PreservesResponsesFunction
 		},
 	}
 
-	applyCodexOAuthTransform(reqBody, false, false)
+	applyCodexOAuthTransform(reqBody, false, false, false)
 
 	tools, ok := reqBody["tools"].([]any)
 	require.True(t, ok)
@@ -241,7 +241,7 @@ func TestApplyCodexOAuthTransform_EmptyInput(t *testing.T) {
 		"input": []any{},
 	}
 
-	applyCodexOAuthTransform(reqBody, false, false)
+	applyCodexOAuthTransform(reqBody, false, false, false)
 
 	input, ok := reqBody["input"].([]any)
 	require.True(t, ok)
@@ -297,7 +297,7 @@ func TestApplyCodexOAuthTransform_PreservesBareSparkModel(t *testing.T) {
 		"input": []any{},
 	}
 
-	result := applyCodexOAuthTransform(reqBody, false, false)
+	result := applyCodexOAuthTransform(reqBody, false, false, false)
 
 	require.Equal(t, "gpt-5.3-codex-spark", reqBody["model"])
 	require.Equal(t, "gpt-5.3-codex-spark", result.NormalizedModel)
@@ -312,7 +312,7 @@ func TestApplyCodexOAuthTransform_TrimmedModelWithoutPolicyRewrite(t *testing.T)
 		"input": []any{},
 	}
 
-	result := applyCodexOAuthTransform(reqBody, false, false)
+	result := applyCodexOAuthTransform(reqBody, false, false, false)
 
 	require.Equal(t, "gpt-5.3-codex-spark", reqBody["model"])
 	require.Equal(t, "gpt-5.3-codex-spark", result.NormalizedModel)
@@ -327,7 +327,7 @@ func TestApplyCodexOAuthTransform_CodexCLI_PreservesExistingInstructions(t *test
 		"instructions": "existing instructions",
 	}
 
-	result := applyCodexOAuthTransform(reqBody, true, false) // isCodexCLI=true
+	result := applyCodexOAuthTransform(reqBody, true, false, false) // isCodexCLI=true
 
 	instructions, ok := reqBody["instructions"].(string)
 	require.True(t, ok)
@@ -344,7 +344,7 @@ func TestApplyCodexOAuthTransform_CodexCLI_SuppliesDefaultWhenEmpty(t *testing.T
 		// 没有 instructions 字段
 	}
 
-	result := applyCodexOAuthTransform(reqBody, true, false) // isCodexCLI=true
+	result := applyCodexOAuthTransform(reqBody, true, false, false) // isCodexCLI=true
 
 	instructions, ok := reqBody["instructions"].(string)
 	require.True(t, ok)
@@ -360,7 +360,7 @@ func TestApplyCodexOAuthTransform_NonCodexCLI_PreservesExistingInstructions(t *t
 		"instructions": "old instructions",
 	}
 
-	applyCodexOAuthTransform(reqBody, false, false) // isCodexCLI=false
+	applyCodexOAuthTransform(reqBody, false, false, false)
 
 	instructions, ok := reqBody["instructions"].(string)
 	require.True(t, ok)
@@ -369,7 +369,7 @@ func TestApplyCodexOAuthTransform_NonCodexCLI_PreservesExistingInstructions(t *t
 
 func TestApplyCodexOAuthTransform_StringInputConvertedToArray(t *testing.T) {
 	reqBody := map[string]any{"model": "gpt-5.4", "input": "Hello, world!"}
-	result := applyCodexOAuthTransform(reqBody, false, false)
+	result := applyCodexOAuthTransform(reqBody, false, false, false)
 	require.True(t, result.Modified)
 	input, ok := reqBody["input"].([]any)
 	require.True(t, ok)
@@ -383,7 +383,7 @@ func TestApplyCodexOAuthTransform_StringInputConvertedToArray(t *testing.T) {
 
 func TestApplyCodexOAuthTransform_EmptyStringInputBecomesEmptyArray(t *testing.T) {
 	reqBody := map[string]any{"model": "gpt-5.4", "input": ""}
-	result := applyCodexOAuthTransform(reqBody, false, false)
+	result := applyCodexOAuthTransform(reqBody, false, false, false)
 	require.True(t, result.Modified)
 	input, ok := reqBody["input"].([]any)
 	require.True(t, ok)
@@ -392,7 +392,7 @@ func TestApplyCodexOAuthTransform_EmptyStringInputBecomesEmptyArray(t *testing.T
 
 func TestApplyCodexOAuthTransform_WhitespaceStringInputBecomesEmptyArray(t *testing.T) {
 	reqBody := map[string]any{"model": "gpt-5.4", "input": "   "}
-	result := applyCodexOAuthTransform(reqBody, false, false)
+	result := applyCodexOAuthTransform(reqBody, false, false, false)
 	require.True(t, result.Modified)
 	input, ok := reqBody["input"].([]any)
 	require.True(t, ok)
@@ -405,7 +405,7 @@ func TestApplyCodexOAuthTransform_StringInputWithToolsField(t *testing.T) {
 		"input": "Run the tests",
 		"tools": []any{map[string]any{"type": "function", "name": "bash"}},
 	}
-	applyCodexOAuthTransform(reqBody, false, false)
+	applyCodexOAuthTransform(reqBody, false, false, false)
 	input, ok := reqBody["input"].([]any)
 	require.True(t, ok)
 	require.Len(t, input, 1)
@@ -517,22 +517,24 @@ func TestExtractSystemMessagesFromInput(t *testing.T) {
 
 // TestApplyCodexOAuthTransform_StripsPromptCacheRetention is a regression
 // test: some clients (e.g. Cursor cloud via the Responses-shape compat path)
-// send prompt_cache_retention, but the ChatGPT internal Codex endpoint
-// rejects it with "Unsupported parameter: prompt_cache_retention".
-func TestApplyCodexOAuthTransform_StripsPromptCacheRetention(t *testing.T) {
+func TestApplyCodexOAuthTransform_StripsUnsupportedResponsesFields(t *testing.T) {
 	reqBody := map[string]any{
 		"model":                  "gpt-5.1",
 		"prompt_cache_retention": "24h",
+		"safety_identifier":      "sid_123",
 		"input": []any{
 			map[string]any{"role": "user", "content": "hi"},
 		},
 	}
 
-	applyCodexOAuthTransform(reqBody, false, false)
+	applyCodexOAuthTransform(reqBody, false, false, false)
 
 	_, stillThere := reqBody["prompt_cache_retention"]
 	require.False(t, stillThere,
 		"prompt_cache_retention must be stripped before forwarding to Codex upstream")
+	_, stillThere = reqBody["safety_identifier"]
+	require.False(t, stillThere,
+		"safety_identifier must be stripped before forwarding to Codex upstream")
 }
 
 func TestApplyCodexOAuthTransform_ExtractsSystemMessages(t *testing.T) {
@@ -544,7 +546,7 @@ func TestApplyCodexOAuthTransform_ExtractsSystemMessages(t *testing.T) {
 		},
 	}
 
-	result := applyCodexOAuthTransform(reqBody, false, false)
+	result := applyCodexOAuthTransform(reqBody, false, false, false)
 
 	require.True(t, result.Modified)
 

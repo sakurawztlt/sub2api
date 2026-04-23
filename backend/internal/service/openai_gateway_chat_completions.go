@@ -152,11 +152,12 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	logger.L().Debug("openai chat_completions: model mapping applied", logFields...)
 
 	if account.Type == AccountTypeOAuth {
+		textFormatRaw := extractResponsesTextFormatRaw(responsesBody)
 		var reqBody map[string]any
 		if err := json.Unmarshal(responsesBody, &reqBody); err != nil {
 			return nil, fmt.Errorf("unmarshal for codex transform: %w", err)
 		}
-		codexResult := applyCodexOAuthTransform(reqBody, false, false)
+		codexResult := applyCodexOAuthTransform(reqBody, false, false, false)
 		if codexResult.NormalizedModel != "" {
 			upstreamModel = codexResult.NormalizedModel
 		}
@@ -173,6 +174,10 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		responsesBody, err = json.Marshal(reqBody)
 		if err != nil {
 			return nil, fmt.Errorf("remarshal after codex transform: %w", err)
+		}
+		responsesBody, err = restoreResponsesTextFormatRaw(responsesBody, textFormatRaw)
+		if err != nil {
+			return nil, fmt.Errorf("restore text.format after codex transform: %w", err)
 		}
 	}
 
