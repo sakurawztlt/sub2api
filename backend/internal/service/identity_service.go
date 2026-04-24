@@ -25,14 +25,15 @@ var (
 )
 
 // 默认指纹值（当客户端未提供时使用）
+// 2026-04-24 对真实 claude-cli/2.1.119 抓包更新；同 constants.DefaultHeaders。
 var defaultFingerprint = Fingerprint{
-	UserAgent:               "claude-cli/2.1.119 (external, cli)",
+	UserAgent:               "claude-cli/2.1.119 (external, sdk-cli)",
 	StainlessLang:           "js",
-	StainlessPackageVersion: "0.70.0",
+	StainlessPackageVersion: "0.81.0",
 	StainlessOS:             "Linux",
-	StainlessArch:           "arm64",
+	StainlessArch:           "x64",
 	StainlessRuntime:        "node",
-	StainlessRuntimeVersion: "v24.13.0",
+	StainlessRuntimeVersion: "v24.3.0",
 }
 
 // Fingerprint represents account fingerprint data

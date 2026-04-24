@@ -45,16 +45,21 @@ const APIKeyBetaHeader = BetaClaudeCode + "," + BetaInterleavedThinking + "," + 
 const APIKeyHaikuBetaHeader = BetaInterleavedThinking
 
 // DefaultHeaders 是 Claude Code 客户端默认请求头。
+// 2026-04-24 更新：对真实 claude-cli/2.1.119 的 `POST /v1/messages?beta=true`
+// 抓包（Debian 12 amd64 + bundled Bun 1.3.13 runtime 但 SDK 仍自报 node），
+// 确认 4 处指纹：UA 后缀 `sdk-cli`、Arch `x64`、Package-Version `0.81.0`、
+// Runtime-Version `v24.3.0`。老值 (`cli` / `arm64` / `0.70.0` / `v24.13.0`)
+// 是 2.1.81 抓包时代残留，与新 CLI 不一致。
 var DefaultHeaders = map[string]string{
 	// Keep these in sync with recent Claude CLI traffic to reduce the chance
 	// that Claude Code-scoped OAuth credentials are rejected as "non-CLI" usage.
-	"User-Agent":                                "claude-cli/2.1.119 (external, cli)",
+	"User-Agent":                                "claude-cli/2.1.119 (external, sdk-cli)",
 	"X-Stainless-Lang":                          "js",
-	"X-Stainless-Package-Version":               "0.70.0",
+	"X-Stainless-Package-Version":               "0.81.0",
 	"X-Stainless-OS":                            "Linux",
-	"X-Stainless-Arch":                          "arm64",
+	"X-Stainless-Arch":                          "x64",
 	"X-Stainless-Runtime":                       "node",
-	"X-Stainless-Runtime-Version":               "v24.13.0",
+	"X-Stainless-Runtime-Version":               "v24.3.0",
 	"X-Stainless-Retry-Count":                   "0",
 	"X-Stainless-Timeout":                       "600",
 	"X-App":                                     "cli",
