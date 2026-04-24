@@ -3637,6 +3637,58 @@ func isClaudeCodeRequest(ctx context.Context, c *gin.Context, parsed *ParsedRequ
 	return isClaudeCodeClient(c.GetHeader("User-Agent"), parsed.MetadataUserID)
 }
 
+// shouldInjectClaudeCodeSessionHeader decides whether we should actively
+// populate X-Claude-Code-Session-Id from the outbound body rather than
+// rely on the client already supplying it.
+//
+// Real claude-cli/2.1.86+ emits this header on every /v1/messages request
+// (verified against a 2026-04-24 capture of 2.1.119). Clients that don't
+// send it will stick out. We inject only when:
+//   - OAuth-backed upstream (these are the ones imitating Claude Code)
+//   - OR request's User-Agent + metadata.user_id shape says "this IS a
+//     Claude Code client" — keeps plain Anthropic-API clients untouched.
+//
+// We intentionally do NOT inject for every request: non-CLI clients
+// forged into looking like CLI is itself a risk.
+func shouldInjectClaudeCodeSessionHeader(c *gin.Context, tokenType string, body []byte) bool {
+	if strings.EqualFold(tokenType, "oauth") {
+		return true
+	}
+	if c == nil || c.Request == nil {
+		return false
+	}
+	return isClaudeCodeClient(
+		c.GetHeader("User-Agent"),
+		strings.TrimSpace(gjson.GetBytes(body, "metadata.user_id").String()),
+	)
+}
+
+// syncClaudeCodeSessionHeader writes X-Claude-Code-Session-Id onto req
+// from body.metadata.user_id.session_id. When injectIfMissing is false,
+// it only refreshes the header if the client already supplied one —
+// preserving the pre-2026-04-24 behaviour.
+//
+// Always pulls from the FINAL outbound body (post-RewriteUserIDWithMasking),
+// so the header matches body invariants instead of diverging when the body
+// has been rewritten.
+func syncClaudeCodeSessionHeader(req *http.Request, body []byte, injectIfMissing bool) {
+	if req == nil {
+		return
+	}
+	if !injectIfMissing && getHeaderRaw(req.Header, "X-Claude-Code-Session-Id") == "" {
+		return
+	}
+	uid := strings.TrimSpace(gjson.GetBytes(body, "metadata.user_id").String())
+	if uid == "" {
+		return
+	}
+	parsed := ParseMetadataUserID(uid)
+	if parsed == nil || strings.TrimSpace(parsed.SessionID) == "" {
+		return
+	}
+	setHeaderRaw(req.Header, "X-Claude-Code-Session-Id", strings.TrimSpace(parsed.SessionID))
+}
+
 // normalizeSystemParam 将 json.RawMessage 类型的 system 参数转为标准 Go 类型（string / []any / nil），
 // 避免 type switch 中 json.RawMessage（底层 []byte）无法匹配 case string / case []any / case nil 的问题。
 // 这是 Go 的 typed nil 陷阱：(json.RawMessage, nil) ≠ (nil, nil)。
@@ -4883,6 +4935,7 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 	if getHeaderRaw(req.Header, "anthropic-version") == "" {
 		setHeaderRaw(req.Header, "anthropic-version", "2023-06-01")
 	}
+	syncClaudeCodeSessionHeader(req, body, shouldInjectClaudeCodeSessionHeader(c, "apikey", body))
 
 	return req, nil
 }
@@ -5724,14 +5777,9 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 		}
 	}
 
-	// 同步 X-Claude-Code-Session-Id 头：取 body 中已处理的 metadata.user_id 的 session_id 覆盖
-	if sessionHeader := getHeaderRaw(req.Header, "X-Claude-Code-Session-Id"); sessionHeader != "" {
-		if uid := gjson.GetBytes(body, "metadata.user_id").String(); uid != "" {
-			if parsed := ParseMetadataUserID(uid); parsed != nil {
-				setHeaderRaw(req.Header, "X-Claude-Code-Session-Id", parsed.SessionID)
-			}
-		}
-	}
+	// 同步 X-Claude-Code-Session-Id 头：取 body 中已处理的 metadata.user_id 的 session_id 覆盖。
+	// 2026-04-24：OAuth/Claude Code 链路下主动注入（原来只"有就同步"），真 CLI 每请求都带。
+	syncClaudeCodeSessionHeader(req, body, shouldInjectClaudeCodeSessionHeader(c, tokenType, body))
 
 	// === DEBUG: 打印上游转发请求（headers + body 摘要），与 CLIENT_ORIGINAL 对比 ===
 	s.debugLogGatewaySnapshot("UPSTREAM_FORWARD", req.Header, body, map[string]string{
@@ -8597,6 +8645,7 @@ func (s *GatewayService) buildCountTokensRequestAnthropicAPIKeyPassthrough(
 	if req.Header.Get("anthropic-version") == "" {
 		req.Header.Set("anthropic-version", "2023-06-01")
 	}
+	syncClaudeCodeSessionHeader(req, body, shouldInjectClaudeCodeSessionHeader(c, "apikey", body))
 
 	return req, nil
 }
@@ -8737,14 +8786,9 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 		}
 	}
 
-	// 同步 X-Claude-Code-Session-Id 头：取 body 中已处理的 metadata.user_id 的 session_id 覆盖
-	if sessionHeader := getHeaderRaw(req.Header, "X-Claude-Code-Session-Id"); sessionHeader != "" {
-		if uid := gjson.GetBytes(body, "metadata.user_id").String(); uid != "" {
-			if parsed := ParseMetadataUserID(uid); parsed != nil {
-				setHeaderRaw(req.Header, "X-Claude-Code-Session-Id", parsed.SessionID)
-			}
-		}
-	}
+	// 同步 X-Claude-Code-Session-Id 头：取 body 中已处理的 metadata.user_id 的 session_id 覆盖。
+	// 2026-04-24：OAuth/Claude Code 链路下主动注入（原来只"有就同步"），真 CLI 每请求都带。
+	syncClaudeCodeSessionHeader(req, body, shouldInjectClaudeCodeSessionHeader(c, tokenType, body))
 
 	if c != nil && tokenType == "oauth" {
 		c.Set(claudeMimicDebugInfoKey, buildClaudeMimicDebugLine(req, body, account, tokenType, mimicClaudeCode))

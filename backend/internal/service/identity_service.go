@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -25,15 +26,16 @@ var (
 )
 
 // 默认指纹值（当客户端未提供时使用）
-// 2026-04-24 对真实 claude-cli/2.1.119 抓包更新；同 constants.DefaultHeaders。
+// 2026-04-24 改为从 claude.DefaultHeaders 派生，保持 constants.go 单一 source
+// of truth；后续所有伪装版本 bump 只改一处 (constants.go)。
 var defaultFingerprint = Fingerprint{
-	UserAgent:               "claude-cli/2.1.119 (external, sdk-cli)",
-	StainlessLang:           "js",
-	StainlessPackageVersion: "0.81.0",
-	StainlessOS:             "Linux",
-	StainlessArch:           "x64",
-	StainlessRuntime:        "node",
-	StainlessRuntimeVersion: "v24.3.0",
+	UserAgent:               claude.DefaultHeaders["User-Agent"],
+	StainlessLang:           claude.DefaultHeaders["X-Stainless-Lang"],
+	StainlessPackageVersion: claude.DefaultHeaders["X-Stainless-Package-Version"],
+	StainlessOS:             claude.DefaultHeaders["X-Stainless-OS"],
+	StainlessArch:           claude.DefaultHeaders["X-Stainless-Arch"],
+	StainlessRuntime:        claude.DefaultHeaders["X-Stainless-Runtime"],
+	StainlessRuntimeVersion: claude.DefaultHeaders["X-Stainless-Runtime-Version"],
 }
 
 // Fingerprint represents account fingerprint data

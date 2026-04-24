@@ -1,6 +1,30 @@
 // Package claude provides constants and helpers for Claude API integration.
 package claude
 
+import "runtime"
+
+// defaultStainlessArch returns the X-Stainless-Arch value that a real
+// claude-cli running on this host would emit. The stainless SDK maps
+// Go/Node GOARCH to CLI-visible arch: amd64 → x64, arm64 → arm64, 386 → ia32.
+// Fallback to raw GOARCH so we never emit a literal Go-arch tell.
+//
+// 2026-04-24: previously hardcoded; codex flagged that 108 workers / k8s
+// nodes are all x86_64 today but future ARM migration would silently leak
+// `arm64` on x86 or `x64` on ARM. Dynamic is correct for "real CLI on THIS
+// machine" — the semantic Anthropic's fingerprint check implicitly asserts.
+func defaultStainlessArch() string {
+	switch runtime.GOARCH {
+	case "amd64":
+		return "x64"
+	case "arm64":
+		return "arm64"
+	case "386":
+		return "ia32"
+	default:
+		return runtime.GOARCH
+	}
+}
+
 // Claude Code 客户端相关常量
 
 // Beta header 常量
@@ -57,7 +81,7 @@ var DefaultHeaders = map[string]string{
 	"X-Stainless-Lang":                          "js",
 	"X-Stainless-Package-Version":               "0.81.0",
 	"X-Stainless-OS":                            "Linux",
-	"X-Stainless-Arch":                          "x64",
+	"X-Stainless-Arch":                          defaultStainlessArch(),
 	"X-Stainless-Runtime":                       "node",
 	"X-Stainless-Runtime-Version":               "v24.3.0",
 	"X-Stainless-Retry-Count":                   "0",
