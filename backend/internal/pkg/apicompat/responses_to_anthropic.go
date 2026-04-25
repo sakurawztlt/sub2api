@@ -73,7 +73,7 @@ func ResponsesToAnthropic(resp *ResponsesResponse, model string) *AnthropicRespo
 				Type:  "tool_use",
 				ID:    fromResponsesCallID(item.CallID),
 				Name:  item.Name,
-				Input: json.RawMessage(item.Arguments),
+				Input: safeRawJSON(item.Arguments),
 			})
 		case "web_search_call":
 			toolUseID := "srvtoolu_" + item.ID

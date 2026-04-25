@@ -126,11 +126,10 @@ func convertResponsesInputToAnthropic(inputRaw json.RawMessage) (json.RawMessage
 			}
 
 		case item.Type == "function_call":
-			// function_call → assistant message with tool_use block
-			input := json.RawMessage("{}")
-			if item.Arguments != "" {
-				input = json.RawMessage(item.Arguments)
-			}
+			// function_call → assistant message with tool_use block.
+			// safeRawJSON tolerates "" + invalid JSON (codex 2026-04-25:
+			// raw cast yielded "unexpected end of JSON input" 500s).
+			input := safeRawJSON(item.Arguments)
 			block := AnthropicContentBlock{
 				Type:  "tool_use",
 				ID:    fromResponsesCallIDToAnthropic(item.CallID),
