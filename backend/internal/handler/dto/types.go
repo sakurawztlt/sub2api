@@ -444,12 +444,18 @@ type UsageLog struct {
 	FirstTokenMs *int   `json:"first_token_ms"`
 
 	// 图片生成字段
-	ImageCount int     `json:"image_count"`
-	ImageSize  *string `json:"image_size"`
-	MediaType  *string `json:"media_type"`
+	ImageCount         int            `json:"image_count"`
+	ImageSize          *string        `json:"image_size"`
+	ImageInputSize     *string        `json:"image_input_size"`
+	ImageOutputSize    *string        `json:"image_output_size"`
+	ImageSizeSource    *string        `json:"image_size_source"`
+	ImageSizeBreakdown map[string]int `json:"image_size_breakdown,omitempty"`
+	MediaType          *string        `json:"media_type"`
 
 	// User-Agent
 	UserAgent *string `json:"user_agent"`
+	// IPAddress is visible to the owner of the usage record.
+	IPAddress *string `json:"ip_address,omitempty"`
 
 	// Cache TTL Override 标记
 	CacheTTLOverridden bool `json:"cache_ttl_overridden"`
@@ -485,7 +491,7 @@ type AdminUsageLog struct {
 	// AccountStatsCost 自定义定价规则计算的账号统计费用（nil 表示使用默认公式）
 	AccountStatsCost *float64 `json:"account_stats_cost,omitempty"`
 
-	// IPAddress 用户请求 IP（仅管理员可见）
+	// IPAddress 用户请求 IP
 	IPAddress *string `json:"ip_address,omitempty"`
 
 	// Account 最小账号信息（避免泄露敏感字段）
