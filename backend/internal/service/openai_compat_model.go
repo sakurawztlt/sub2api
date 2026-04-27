@@ -65,6 +65,20 @@ func splitOpenAICompatReasoningModel(model string) (normalizedModel string, reas
 		return trimmed, "", false
 	}
 
+	if strings.HasSuffix(strings.TrimSpace(modelID), ")") {
+		openParen := strings.LastIndex(modelID, "(")
+		if openParen > 0 {
+			suffix := strings.TrimSpace(strings.TrimSuffix(modelID[openParen+1:], ")"))
+			if effort, valid := normalizeOpenAICompatReasoningSuffix(suffix); valid {
+				baseModel := strings.TrimSpace(modelID[:openParen])
+				if baseModel == "" {
+					return trimmed, "", false
+				}
+				return normalizeCodexModel(baseModel), effort, true
+			}
+		}
+	}
+
 	parts := strings.FieldsFunc(strings.ToLower(modelID), func(r rune) bool {
 		switch r {
 		case '-', '_', ' ':
@@ -78,17 +92,31 @@ func splitOpenAICompatReasoningModel(model string) (normalizedModel string, reas
 	}
 
 	last := strings.NewReplacer("-", "", "_", "", " ", "").Replace(parts[len(parts)-1])
-	switch last {
-	case "none", "minimal":
-	case "low", "medium", "high":
-		reasoningEffort = last
-	case "xhigh", "extrahigh":
-		reasoningEffort = "xhigh"
-	default:
+	reasoningEffort, ok = normalizeOpenAICompatReasoningSuffix(last)
+	if !ok {
 		return trimmed, "", false
 	}
 
 	return normalizeCodexModel(modelID), reasoningEffort, true
+}
+
+func normalizeOpenAICompatReasoningSuffix(raw string) (reasoningEffort string, ok bool) {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	if value == "" {
+		return "", false
+	}
+	value = strings.NewReplacer("-", "", "_", "", " ", "").Replace(value)
+
+	switch value {
+	case "none", "minimal":
+	case "low", "medium", "high":
+		return value, true
+	case "xhigh", "extrahigh":
+		return "xhigh", true
+	default:
+		return "", false
+	}
+	return "", true
 }
 
 func openAIReasoningEffortToClaudeOutputEffort(effort string) string {

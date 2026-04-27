@@ -86,6 +86,13 @@ func TestExtractOpenAIReasoningEffortFromBody(t *testing.T) {
 			wantValue: "high",
 		},
 		{
+			name:      "缺失字段时从括号模型后缀推导",
+			body:      []byte(`{"input":"hi"}`),
+			model:     "gpt-5.5(xhigh)",
+			wantNil:   false,
+			wantValue: "xhigh",
+		},
+		{
 			name:    "未知后缀不返回",
 			body:    []byte(`{"input":"hi"}`),
 			model:   "gpt-5-unknown",
