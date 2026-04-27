@@ -3538,6 +3538,20 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 		}
 
 		if !clientDisconnected {
+			// SSE comment lines (":...") are no-ops per spec but reset idle
+			// timers on intermediaries (e.g. Cloudflare's ~100s limit). Pass
+			// them through immediately, even before client output has started,
+			// so upstream keepalives during long reasoning stalls actually
+			// reach the client without polluting the pending buffer.
+			if isSSECommentLine(line) {
+				if _, err := fmt.Fprintln(w, line); err != nil {
+					clientDisconnected = true
+					logger.LegacyPrintf("service.openai_gateway", "[OpenAI passthrough] Client disconnected during streaming, continue draining upstream for usage: account=%d", account.ID)
+				} else {
+					flusher.Flush()
+				}
+				continue
+			}
 			if !clientOutputStarted && !lineStartsClientOutput {
 				pendingLines = append(pendingLines, line)
 				continue
@@ -4518,6 +4532,14 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 
 // extractOpenAISSEDataLine 低开销提取 SSE `data:` 行内容。
 // 兼容 `data: xxx` 与 `data:xxx` 两种格式。
+// isSSECommentLine reports whether line is an SSE comment line (begins with
+// ':' after optional whitespace) per the EventSource spec. Comment lines are
+// ignored by clients but useful as keepalives across idle proxies.
+func isSSECommentLine(line string) bool {
+	trimmed := strings.TrimLeft(line, " \t")
+	return strings.HasPrefix(trimmed, ":")
+}
+
 func extractOpenAISSEDataLine(line string) (string, bool) {
 	if !strings.HasPrefix(line, "data:") {
 		return "", false
