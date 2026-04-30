@@ -381,11 +381,31 @@ type OverloadCooldownSettings struct {
 	CooldownMinutes int `json:"cooldown_minutes"`
 }
 
+// RateLimit429CooldownSettings 429默认回避配置
+type RateLimit429CooldownSettings struct {
+	// Enabled 是否在无法解析上游重置时间时应用默认429回避
+	Enabled bool `json:"enabled"`
+	// CooldownSeconds 默认回避时长（秒）
+	CooldownSeconds int `json:"cooldown_seconds"`
+}
+
 // DefaultOverloadCooldownSettings 返回默认的过载冷却配置（启用，10分钟）
 func DefaultOverloadCooldownSettings() *OverloadCooldownSettings {
 	return &OverloadCooldownSettings{
 		Enabled:         true,
 		CooldownMinutes: 10,
+	}
+}
+
+// DefaultRateLimit429CooldownSettings 返回默认的429回避配置（启用，300秒/5分钟）。
+//
+// 2026-05-05 fork override: upstream PR #2120 默认 5s, 但在 ChatGPT Pro 池上
+// 太激进 (5s 就重试 → 反复撞 dead 账号 → 加速封号). 保留 5min 安全默认, 仅放开
+// admin UI 让 ops 按需调.
+func DefaultRateLimit429CooldownSettings() *RateLimit429CooldownSettings {
+	return &RateLimit429CooldownSettings{
+		Enabled:         true,
+		CooldownSeconds: 300,
 	}
 }
 
