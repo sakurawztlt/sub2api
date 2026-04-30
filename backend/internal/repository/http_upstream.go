@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/andybalholm/brotli"
+	"github.com/klauspost/compress/zstd"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
@@ -889,6 +890,12 @@ func decompressResponseBody(resp *http.Response) {
 		reader = brotli.NewReader(resp.Body)
 	case "deflate":
 		reader = flate.NewReader(resp.Body)
+	case "zstd":
+		zr, err := zstd.NewReader(resp.Body)
+		if err != nil {
+			return // 解压失败，保持原样
+		}
+		reader = &zstdDecoderReader{Decoder: zr}
 	default:
 		return
 	}
@@ -898,6 +905,17 @@ func decompressResponseBody(resp *http.Response) {
 	resp.Header.Del("Content-Encoding")
 	resp.Header.Del("Content-Length") // 解压后长度不确定
 	resp.ContentLength = -1
+}
+
+// zstdDecoderReader 适配 zstd.Decoder 到 io.Reader+io.Closer。
+// klauspost/compress/zstd 的 Decoder.Close() 无返回值，这里转成 error。
+type zstdDecoderReader struct {
+	*zstd.Decoder
+}
+
+func (z *zstdDecoderReader) Close() error {
+	z.Decoder.Close()
+	return nil
 }
 
 // decompressedBody 组合解压 reader 和原始 body 的 close。
