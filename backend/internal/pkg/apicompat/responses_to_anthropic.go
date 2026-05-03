@@ -287,6 +287,18 @@ func ResponsesEventToAnthropicEvents(
 
 // FinalizeResponsesAnthropicStream emits synthetic termination events if the
 // stream ended without a proper completion event.
+//
+// 2026-05-03 codex casjbcfasju 1322455-token incident: when the upstream
+// produced ZERO output tokens AND no content blocks were emitted, we
+// previously closed with message_delta(stop_reason="end_turn") +
+// message_stop. NewAPI's local_count_tokens=true path then billed the
+// inbound prompt as successful consumption (~3.3M quota / call,
+// observed 7 times over 16 minutes for one user, ~33M total quota
+// burned with zero output).
+//
+// Now: zero-output finalisation emits an Anthropic SSE `error` event
+// instead. Clients that respect SSE error events do NOT treat this as
+// a successful completion and skip the success-billing path.
 func FinalizeResponsesAnthropicStream(state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
 	if !state.MessageStartSent || state.MessageStopSent {
 		return nil
@@ -297,6 +309,23 @@ func FinalizeResponsesAnthropicStream(state *ResponsesEventToAnthropicState) []A
 
 	input, creation, read := estimateAnthropicCacheUsage(state.RawTotalInputTokens, state.RawCachedInputTokens)
 	outputTokens := visibleOutputTokens(state.RawOutputTokens, state.RawReasoningTokens)
+
+	// Detect "no real output" — both no visible output tokens AND no
+	// content block ever opened. ContentBlockIndex starts at 0 and is
+	// only bumped when a block opens, so an unbumped index combined
+	// with zero output tokens means the upstream stream was empty.
+	noOutput := outputTokens <= 0 && state.ContentBlockIndex == 0 && !state.ContentBlockOpen
+	if noOutput {
+		events = append(events, AnthropicStreamEvent{
+			Type: "error",
+			Error: &AnthropicErrorBody{
+				Type:    "api_error",
+				Message: "upstream returned no content tokens (empty stream)",
+			},
+		})
+		state.MessageStopSent = true
+		return events
+	}
 
 	events = append(events,
 		AnthropicStreamEvent{

@@ -170,6 +170,25 @@ type AnthropicStreamEvent struct {
 
 	// message_delta
 	Usage *AnthropicUsage `json:"usage,omitempty"`
+
+	// error event — emitted when sub2api detects an upstream condition
+	// that should NOT be billed as a successful completion. Anthropic
+	// SSE spec includes this terminal event shape; clients that respect
+	// it (e.g. NewAPI 24h+) treat it as an upstream error and skip the
+	// success-path billing logic.
+	//
+	// 2026-05-03 codex casjbcfasju 1322455-token incident: empty-output
+	// stream was being normalized to message_delta(stop_reason=end_turn)
+	// + message_stop, then NewAPI's local_count_tokens=true billed the
+	// inbound 1.32M tokens as a successful consumption. Emitting an
+	// error event instead breaks that billing path.
+	Error *AnthropicErrorBody `json:"error,omitempty"`
+}
+
+// AnthropicErrorBody is the payload of an SSE error event.
+type AnthropicErrorBody struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
 }
 
 // AnthropicDelta carries incremental content in streaming events.

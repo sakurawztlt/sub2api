@@ -479,6 +479,64 @@ func TestFinalizeStream_AlreadyCompleted(t *testing.T) {
 	assert.Nil(t, events)
 }
 
+// 2026-05-03 codex casjbcfasju 1322455-token incident: when the
+// upstream finishes WITHOUT emitting any content tokens, finalize
+// must NOT close with normal message_delta(end_turn) + message_stop —
+// that lets NewAPI's local_count_tokens=true bill the (huge) inbound
+// prompt as successful consumption. Emit Anthropic SSE error event
+// instead.
+func TestFinalizeStream_NoOutputEmitsErrorEvent(t *testing.T) {
+	state := NewResponsesEventToAnthropicState()
+	// Stream started but produced zero content blocks and zero tokens
+	ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:     "response.created",
+		Response: &ResponsesResponse{ID: "resp_empty", Model: "gpt-5.2"},
+	}, state)
+
+	events := FinalizeResponsesAnthropicStream(state)
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event (error), got %d: %+v", len(events), events)
+	}
+	if events[0].Type != "error" {
+		t.Fatalf("expected error event, got %s", events[0].Type)
+	}
+	if events[0].Error == nil {
+		t.Fatalf("error event must carry Error body")
+	}
+	if events[0].Error.Type != "api_error" {
+		t.Errorf("expected api_error, got %s", events[0].Error.Type)
+	}
+	if events[0].Error.Message == "" {
+		t.Errorf("error message must not be empty")
+	}
+}
+
+// Counter-test: stream WITH content tokens still finalizes normally
+// (message_delta(end_turn) + message_stop). Only the empty case
+// switches to error.
+func TestFinalizeStream_WithContentStillsCompletesNormally(t *testing.T) {
+	state := NewResponsesEventToAnthropicState()
+
+	ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:     "response.created",
+		Response: &ResponsesResponse{ID: "resp_n", Model: "gpt-5.2"},
+	}, state)
+	ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:  "response.output_text.delta",
+		Delta: "hello",
+	}, state)
+
+	events := FinalizeResponsesAnthropicStream(state)
+	if len(events) < 3 {
+		t.Fatalf("non-empty stream should still emit content_block_stop + message_delta + message_stop, got %d events", len(events))
+	}
+	for _, e := range events {
+		if e.Type == "error" {
+			t.Fatalf("non-empty stream must NOT emit error event")
+		}
+	}
+}
+
 func TestFinalizeStream_AbnormalTermination(t *testing.T) {
 	state := NewResponsesEventToAnthropicState()
 
