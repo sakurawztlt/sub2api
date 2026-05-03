@@ -428,7 +428,7 @@ func convertResponsesToAnthropicTools(tools []ResponsesTool) []AnthropicTool {
 	var out []AnthropicTool
 	for _, t := range tools {
 		switch t.Type {
-		case "web_search":
+		case "web_search", "google_search", "web_search_20250305":
 			out = append(out, AnthropicTool{
 				Type: "web_search_20250305",
 				Name: "web_search",
@@ -493,9 +493,9 @@ func convertResponsesToAnthropicToolChoice(raw json.RawMessage) (json.RawMessage
 		} `json:"function"`
 	}
 	if err := json.Unmarshal(raw, &tc); err == nil && tc.Type == "function" {
-		name := tc.Name
+		name := strings.TrimSpace(tc.Name)
 		if name == "" && tc.Function != nil {
-			name = tc.Function.Name
+			name = strings.TrimSpace(tc.Function.Name)
 		}
 		if name != "" {
 			return json.Marshal(map[string]string{

@@ -404,14 +404,18 @@ func TestResolveOpenAIMessagesDispatchMappedModel(t *testing.T) {
 		require.Empty(t, resolveOpenAIMessagesDispatchMappedModel(&service.APIKey{Group: &service.Group{}}, "gpt-5.4"))
 	})
 
-	t.Run("does_not_fall_back_to_group_default_mapped_model", func(t *testing.T) {
+	t.Run("falls_back_to_group_default_mapped_model_when_no_family_override", func(t *testing.T) {
+		// Fork patch (commit 181edc42): restored Group.DefaultMappedModel fallback
+		// for Claude families when no exact / family-specific override is set, before
+		// reaching the hard-coded family default. Upstream removed this; fork keeps
+		// it so groups configured with DefaultMappedModel continue to work.
 		apiKey := &service.APIKey{
 			Group: &service.Group{
 				DefaultMappedModel: "gpt-5.4",
 			},
 		}
 		require.Empty(t, resolveOpenAIMessagesDispatchMappedModel(apiKey, "gpt-5.4"))
-		require.Equal(t, "gpt-5.3-codex", resolveOpenAIMessagesDispatchMappedModel(apiKey, "claude-sonnet-4-5-20250929"))
+		require.Equal(t, "gpt-5.4", resolveOpenAIMessagesDispatchMappedModel(apiKey, "claude-sonnet-4-5-20250929"))
 	})
 }
 
