@@ -351,6 +351,14 @@ type OpenAIGatewayService struct {
 	openaiWSRetryMetrics  openAIWSRetryMetrics
 	responseHeaderFilter  *responseheaders.CompiledHeaderFilter
 	codexSnapshotThrottle *accountWriteThrottle
+
+	// 2026-05-06 partial port of upstream 0584305e (Claude Code compat).
+	// openai_messages_continuation/digest_session/replay_guard/todo_guard
+	// modules need shared per-process state to track previous_response_id
+	// continuation chains and digest sessions for Anthropic→Responses
+	// conversions. sync.Map fits the read-heavy / occasional-write pattern.
+	openaiCompatSessionResponses        sync.Map // session_hash → previous_response_id continuation state
+	openaiCompatAnthropicDigestSessions sync.Map // sessionDigest → anthropic digest session state
 }
 
 // NewOpenAIGatewayService creates a new OpenAIGatewayService

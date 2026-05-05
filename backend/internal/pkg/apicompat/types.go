@@ -53,6 +53,12 @@ type AnthropicMessage struct {
 type AnthropicContentBlock struct {
 	Type string `json:"type"`
 
+	// 2026-05-06 partial port of upstream 0584305e: cache_control breakpoint
+	// at the block level lets prompt-cache-key derivation read individual
+	// breakpoint anchors (Claude Code uses these as deterministic cache
+	// segmentation markers).
+	CacheControl *AnthropicCacheControl `json:"cache_control,omitempty"`
+
 	// type=text
 	Text string `json:"text,omitempty"`
 
@@ -243,14 +249,27 @@ type ResponsesRequest struct {
 	Tools           []ResponsesTool     `json:"tools,omitempty"`
 	Include         []string            `json:"include,omitempty"`
 	Store           *bool               `json:"store,omitempty"`
-	Reasoning       *ResponsesReasoning `json:"reasoning,omitempty"`
-	ToolChoice      json.RawMessage     `json:"tool_choice,omitempty"`
-	ServiceTier     string              `json:"service_tier,omitempty"`
+	// 2026-05-06 partial port of upstream 0584305e (Claude Code compat).
+	// ParallelToolCalls/PromptCacheKey/PreviousResponseID/Text.Verbosity
+	// are needed by openai_messages_continuation/replay_guard wiring to
+	// chain Anthropic→Responses turns deterministically without losing
+	// upstream prompt cache.
+	ParallelToolCalls  *bool               `json:"parallel_tool_calls,omitempty"`
+	Reasoning          *ResponsesReasoning `json:"reasoning,omitempty"`
+	ToolChoice         json.RawMessage     `json:"tool_choice,omitempty"`
+	ServiceTier        string              `json:"service_tier,omitempty"`
+	PromptCacheKey     string              `json:"prompt_cache_key,omitempty"`
+	PreviousResponseID string              `json:"previous_response_id,omitempty"`
 }
 
 // ResponsesText configures structured text output for the Responses API.
+//
+// 2026-05-06 fork merge: fork uses Format (raw json passthrough), upstream
+// 058 added Verbosity. Both are kept — JSON omitempty means they never
+// collide on the wire.
 type ResponsesText struct {
-	Format json.RawMessage `json:"format,omitempty"`
+	Format    json.RawMessage `json:"format,omitempty"`
+	Verbosity string          `json:"verbosity,omitempty"` // "low" | "medium" | "high"
 }
 
 // ResponsesReasoning configures reasoning effort in the Responses API.
