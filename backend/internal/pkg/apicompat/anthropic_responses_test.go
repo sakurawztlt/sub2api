@@ -51,7 +51,14 @@ func TestAnthropicToResponses_SystemPrompt(t *testing.T) {
 		var items []ResponsesInputItem
 		require.NoError(t, json.Unmarshal(resp.Input, &items))
 		require.Len(t, items, 2)
-		assert.Equal(t, "system", items[0].Role)
+		// 058 step 2: system prompt → developer role with typed input_text parts.
+		assert.Equal(t, "message", items[0].Type)
+		assert.Equal(t, "developer", items[0].Role)
+		var parts []ResponsesContentPart
+		require.NoError(t, json.Unmarshal(items[0].Content, &parts))
+		require.Len(t, parts, 1)
+		assert.Equal(t, "input_text", parts[0].Type)
+		assert.Equal(t, "You are helpful.", parts[0].Text)
 	})
 
 	t.Run("array", func(t *testing.T) {
@@ -67,11 +74,35 @@ func TestAnthropicToResponses_SystemPrompt(t *testing.T) {
 		var items []ResponsesInputItem
 		require.NoError(t, json.Unmarshal(resp.Input, &items))
 		require.Len(t, items, 2)
-		assert.Equal(t, "system", items[0].Role)
-		// System text should be joined with double newline.
-		var text string
-		require.NoError(t, json.Unmarshal(items[0].Content, &text))
-		assert.Equal(t, "Part 1\n\nPart 2", text)
+		assert.Equal(t, "message", items[0].Type)
+		assert.Equal(t, "developer", items[0].Role)
+		// 058 step 2: system text array → multiple typed input_text parts (no \n\n join).
+		var parts []ResponsesContentPart
+		require.NoError(t, json.Unmarshal(items[0].Content, &parts))
+		require.Len(t, parts, 2)
+		assert.Equal(t, "input_text", parts[0].Type)
+		assert.Equal(t, "Part 1", parts[0].Text)
+		assert.Equal(t, "input_text", parts[1].Type)
+		assert.Equal(t, "Part 2", parts[1].Text)
+	})
+
+	t.Run("billing header dropped", func(t *testing.T) {
+		req := &AnthropicRequest{
+			Model:     "gpt-5.2",
+			MaxTokens: 100,
+			System:    json.RawMessage(`[{"type":"text","text":"x-anthropic-billing-header: cc_version=1;"},{"type":"text","text":"Project prompt"}]`),
+			Messages:  []AnthropicMessage{{Role: "user", Content: json.RawMessage(`"Hi"`)}},
+		}
+		resp, err := AnthropicToResponses(req)
+		require.NoError(t, err)
+
+		var items []ResponsesInputItem
+		require.NoError(t, json.Unmarshal(resp.Input, &items))
+		require.Len(t, items, 2)
+		var parts []ResponsesContentPart
+		require.NoError(t, json.Unmarshal(items[0].Content, &parts))
+		require.Len(t, parts, 1)
+		assert.Equal(t, "Project prompt", parts[0].Text)
 	})
 }
 
@@ -106,11 +137,16 @@ func TestAnthropicToResponses_ToolUse(t *testing.T) {
 	assert.Equal(t, "user", items[0].Role)
 	assert.Equal(t, "assistant", items[1].Role)
 	assert.Equal(t, "function_call", items[2].Type)
-	assert.Equal(t, "fc_call_1", items[2].CallID)
+	// 058 step 2: call_id is preserved verbatim (no fc_ prefix).
+	assert.Equal(t, "call_1", items[2].CallID)
 	assert.Empty(t, items[2].ID)
 	assert.Equal(t, "function_call_output", items[3].Type)
-	assert.Equal(t, "fc_call_1", items[3].CallID)
+	assert.Equal(t, "call_1", items[3].CallID)
 	assert.Equal(t, "Sunny, 72°F", items[3].Output)
+
+	// 058 step 2: function tools must include strict=false to match Codex CLI.
+	require.NotNil(t, resp.Tools[0].Strict)
+	assert.False(t, *resp.Tools[0].Strict)
 }
 
 func TestAnthropicToResponses_ThinkingIgnored(t *testing.T) {
@@ -955,8 +991,8 @@ func TestAnthropicToResponses_ThinkingEnabled(t *testing.T) {
 	resp, err := AnthropicToResponses(req)
 	require.NoError(t, err)
 	require.NotNil(t, resp.Reasoning)
-	// thinking.type is ignored for effort; default high applies.
-	assert.Equal(t, "high", resp.Reasoning.Effort)
+	// thinking.type is ignored for effort; default medium applies (058 step 2).
+	assert.Equal(t, "medium", resp.Reasoning.Effort)
 	assert.Equal(t, "auto", resp.Reasoning.Summary)
 	assert.Contains(t, resp.Include, "reasoning.encrypted_content")
 	assert.NotContains(t, resp.Include, "reasoning.summary")
@@ -973,8 +1009,8 @@ func TestAnthropicToResponses_ThinkingAdaptive(t *testing.T) {
 	resp, err := AnthropicToResponses(req)
 	require.NoError(t, err)
 	require.NotNil(t, resp.Reasoning)
-	// thinking.type is ignored for effort; default high applies.
-	assert.Equal(t, "high", resp.Reasoning.Effort)
+	// thinking.type is ignored for effort; default medium applies (058 step 2).
+	assert.Equal(t, "medium", resp.Reasoning.Effort)
 	assert.Equal(t, "auto", resp.Reasoning.Summary)
 	assert.NotContains(t, resp.Include, "reasoning.summary")
 }
@@ -989,9 +1025,9 @@ func TestAnthropicToResponses_ThinkingDisabled(t *testing.T) {
 
 	resp, err := AnthropicToResponses(req)
 	require.NoError(t, err)
-	// Default effort applies (high → high) even when thinking is disabled.
+	// Default effort applies (medium) even when thinking is disabled (058 step 2).
 	require.NotNil(t, resp.Reasoning)
-	assert.Equal(t, "high", resp.Reasoning.Effort)
+	assert.Equal(t, "medium", resp.Reasoning.Effort)
 }
 
 func TestAnthropicToResponses_NoThinking(t *testing.T) {
@@ -1003,9 +1039,9 @@ func TestAnthropicToResponses_NoThinking(t *testing.T) {
 
 	resp, err := AnthropicToResponses(req)
 	require.NoError(t, err)
-	// Default effort applies (high → high) when no thinking/output_config is set.
+	// Default effort applies (medium) when no thinking/output_config is set (058 step 2).
 	require.NotNil(t, resp.Reasoning)
-	assert.Equal(t, "high", resp.Reasoning.Effort)
+	assert.Equal(t, "medium", resp.Reasoning.Effort)
 }
 
 // ---------------------------------------------------------------------------
@@ -1079,7 +1115,7 @@ func TestAnthropicToResponses_OutputConfigMax(t *testing.T) {
 }
 
 func TestAnthropicToResponses_NoOutputConfig(t *testing.T) {
-	// No output_config → default high regardless of thinking.type.
+	// No output_config → default medium regardless of thinking.type (058 step 2).
 	req := &AnthropicRequest{
 		Model:     "gpt-5.2",
 		MaxTokens: 1024,
@@ -1090,11 +1126,11 @@ func TestAnthropicToResponses_NoOutputConfig(t *testing.T) {
 	resp, err := AnthropicToResponses(req)
 	require.NoError(t, err)
 	require.NotNil(t, resp.Reasoning)
-	assert.Equal(t, "high", resp.Reasoning.Effort)
+	assert.Equal(t, "medium", resp.Reasoning.Effort)
 }
 
 func TestAnthropicToResponses_OutputConfigWithoutEffort(t *testing.T) {
-	// output_config present but effort empty (e.g. only format set) → default high.
+	// output_config present but effort empty (e.g. only format set) → default medium (058 step 2).
 	req := &AnthropicRequest{
 		Model:        "gpt-5.2",
 		MaxTokens:    1024,
@@ -1105,7 +1141,7 @@ func TestAnthropicToResponses_OutputConfigWithoutEffort(t *testing.T) {
 	resp, err := AnthropicToResponses(req)
 	require.NoError(t, err)
 	require.NotNil(t, resp.Reasoning)
-	assert.Equal(t, "high", resp.Reasoning.Effort)
+	assert.Equal(t, "medium", resp.Reasoning.Effort)
 }
 
 // ---------------------------------------------------------------------------
@@ -1355,7 +1391,7 @@ func TestAnthropicToResponses_ToolResultWithImage(t *testing.T) {
 
 	// function_call_output should have text-only output (no image).
 	assert.Equal(t, "function_call_output", items[2].Type)
-	assert.Equal(t, "fc_toolu_1", items[2].CallID)
+	assert.Equal(t, "toolu_1", items[2].CallID)
 	assert.Equal(t, "(empty)", items[2].Output)
 
 	// Image should be in a separate user message.
@@ -1878,13 +1914,13 @@ func TestAnthropicToResponses_OrphanedToolResultSynthesizesPlaceholder(t *testin
 		// Find the placeholder function_call and the output.
 		var gotPlaceholder, gotOutput bool
 		for i, it := range items {
-			if it.Type == "function_call" && it.CallID == "fc_toolu_orphan_1" {
+			if it.Type == "function_call" && it.CallID == "toolu_orphan_1" {
 				if it.Name != "orphan_tool_call_placeholder" {
 					t.Errorf("expected placeholder name, got %q", it.Name)
 				}
 				gotPlaceholder = true
 				// Next item should be the matching output
-				if i+1 < len(items) && items[i+1].Type == "function_call_output" && items[i+1].CallID == "fc_toolu_orphan_1" {
+				if i+1 < len(items) && items[i+1].Type == "function_call_output" && items[i+1].CallID == "toolu_orphan_1" {
 					gotOutput = true
 				}
 			}
@@ -1914,10 +1950,10 @@ func TestAnthropicToResponses_OrphanedToolResultSynthesizesPlaceholder(t *testin
 		// Must contain both placeholder and its output, placeholder first.
 		var fcIdx, outIdx = -1, -1
 		for i, it := range items {
-			if it.Type == "function_call" && it.CallID == "fc_toolu_ghost" {
+			if it.Type == "function_call" && it.CallID == "toolu_ghost" {
 				fcIdx = i
 			}
-			if it.Type == "function_call_output" && it.CallID == "fc_toolu_ghost" {
+			if it.Type == "function_call_output" && it.CallID == "toolu_ghost" {
 				outIdx = i
 			}
 		}
@@ -1984,10 +2020,10 @@ func TestAnthropicToResponses_OrphanedToolResultSynthesizesPlaceholder(t *testin
 			if it.Type == "function_call" {
 				if it.Name == "orphan_tool_call_placeholder" {
 					placeholderCount++
-					assert.Equal(t, "fc_toolu_orphan", it.CallID)
+					assert.Equal(t, "toolu_orphan", it.CallID)
 				} else {
 					realCount++
-					assert.Equal(t, "fc_toolu_good", it.CallID)
+					assert.Equal(t, "toolu_good", it.CallID)
 				}
 			}
 		}
@@ -2180,7 +2216,7 @@ func TestAnthropicToResponses_ToolResultWithDocument(t *testing.T) {
 	require.Len(t, items, 4)
 
 	assert.Equal(t, "function_call_output", items[2].Type)
-	assert.Equal(t, "fc_toolu_pdf", items[2].CallID)
+	assert.Equal(t, "toolu_pdf", items[2].CallID)
 	assert.Equal(t, "(empty)", items[2].Output)
 
 	assert.Equal(t, "user", items[3].Role)

@@ -41,12 +41,66 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	if err := json.Unmarshal(body, &anthropicReq); err != nil {
 		return nil, fmt.Errorf("parse anthropic request: %w", err)
 	}
+	// 058 step 2: snapshot the unmutated request for digest derivation. The
+	// digest must reflect what the *client* sent, before normalization or
+	// the replay-guard sliding window — otherwise the same conversation
+	// produces a different digest each turn and prompt cache is invalidated.
+	anthropicDigestReq := cloneAnthropicRequestForDigest(&anthropicReq)
 	originalModel := anthropicReq.Model
 	applyOpenAICompatModelNormalization(&anthropicReq)
 	normalizedModel := anthropicReq.Model
 	clientStream := anthropicReq.Stream // client's original stream preference
 
-	// 2. Convert Anthropic → Responses
+	// 2. Model mapping (computed early so 058 prompt-cache derivation can
+	// gate on the upstream model).
+	billingModel := resolveOpenAIForwardModel(account, normalizedModel, defaultMappedModel)
+	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
+	apiKeyID := getAPIKeyIDFromContext(c)
+
+	// 058 step 2: prompt-cache key derivation, replay guard, continuation
+	// chain, and todo guard. All gated on the upstream model + account type.
+	promptCacheKey = strings.TrimSpace(promptCacheKey)
+	anthropicDigestChain := ""
+	anthropicMatchedDigestChain := ""
+	compatPromptCacheInjected := false
+	if promptCacheKey == "" && shouldAutoInjectPromptCacheKeyForCompat(upstreamModel) {
+		// Three-layer fallback: Anthropic metadata.user_id → cache_control
+		// breakpoints → full message digest. Each layer downgrades how
+		// stable the key is across multi-turn conversations.
+		promptCacheKey = promptCacheKeyFromAnthropicMetadataSession(&anthropicReq)
+		if promptCacheKey == "" {
+			promptCacheKey = deriveAnthropicCacheControlPromptCacheKey(&anthropicReq)
+		}
+		if promptCacheKey == "" {
+			anthropicDigestChain = buildOpenAICompatAnthropicDigestChain(anthropicDigestReq)
+			if reusedKey, matchedChain := s.findOpenAICompatAnthropicDigestPromptCacheKey(account, apiKeyID, anthropicDigestChain); reusedKey != "" {
+				promptCacheKey = reusedKey
+				anthropicMatchedDigestChain = matchedChain
+			} else {
+				promptCacheKey = promptCacheKeyFromAnthropicDigest(anthropicDigestChain)
+			}
+		}
+		compatPromptCacheInjected = promptCacheKey != ""
+	}
+
+	compatReplayGuardEnabled := shouldAutoInjectPromptCacheKeyForCompat(upstreamModel)
+	compatContinuationEnabled := openAICompatContinuationEnabled(account, upstreamModel)
+	previousResponseID := ""
+	if compatContinuationEnabled {
+		previousResponseID = s.getOpenAICompatSessionResponseID(ctx, c, account, promptCacheKey)
+	}
+	compatContinuationDisabled := compatContinuationEnabled &&
+		s.isOpenAICompatSessionContinuationDisabled(ctx, c, account, promptCacheKey)
+	compatTurnState := ""
+	compatReplayTrimmed := false
+	// OAuth/Plus relies on session_id + x-codex-turn-state; trimming to a
+	// sliding 12-message window makes the cached prefix stall at system/tools.
+	// Keep full replay there so upstream prompt caching can grow turn by turn.
+	if compatReplayGuardEnabled && account.Type != AccountTypeOAuth && previousResponseID == "" && !compatContinuationDisabled {
+		compatReplayTrimmed = applyAnthropicCompatFullReplayGuard(&anthropicReq)
+	}
+
+	// 3. Convert Anthropic → Responses (after replay guard mutates messages).
 	responsesReq, err := apicompat.AnthropicToResponses(&anthropicReq)
 	if err != nil {
 		return nil, fmt.Errorf("convert anthropic to responses: %w", err)
@@ -57,24 +111,47 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	responsesReq.Stream = true
 	isStream := true
 
-	// 2b. Handle BetaFastMode → service_tier: "priority"
+	// 3b. Handle BetaFastMode → service_tier: "priority"
 	if containsBetaToken(c.GetHeader("anthropic-beta"), claude.BetaFastMode) {
 		responsesReq.ServiceTier = "priority"
 	}
 
-	// 3. Model mapping
-	billingModel := resolveOpenAIForwardModel(account, normalizedModel, defaultMappedModel)
-	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 	responsesReq.Model = upstreamModel
+	if previousResponseID != "" {
+		responsesReq.PreviousResponseID = previousResponseID
+		trimAnthropicCompatResponsesInputToLatestTurn(responsesReq)
+	}
+	if compatReplayGuardEnabled && account.Type != AccountTypeOAuth {
+		appendOpenAICompatClaudeCodeTodoGuard(responsesReq)
+	}
 
-	logger.L().Debug("openai messages: model mapping applied",
+	logFields := []zap.Field{
 		zap.Int64("account_id", account.ID),
 		zap.String("original_model", originalModel),
 		zap.String("normalized_model", normalizedModel),
 		zap.String("billing_model", billingModel),
 		zap.String("upstream_model", upstreamModel),
 		zap.Bool("stream", isStream),
-	)
+	}
+	if compatPromptCacheInjected {
+		logFields = append(logFields,
+			zap.Bool("compat_prompt_cache_key_injected", true),
+			zap.String("compat_prompt_cache_key_sha256", hashSensitiveValueForLog(promptCacheKey)),
+		)
+	}
+	if compatReplayTrimmed {
+		logFields = append(logFields,
+			zap.Bool("compat_full_replay_trimmed", true),
+			zap.Int("compat_messages_after_trim", len(anthropicReq.Messages)),
+		)
+	}
+	if previousResponseID != "" {
+		logFields = append(logFields,
+			zap.Bool("compat_previous_response_id_attached", true),
+			zap.String("compat_previous_response_id", truncateOpenAIWSLogValue(previousResponseID, openAIWSIDValueMaxLen)),
+		)
+	}
+	logger.L().Debug("openai messages: model mapping applied", logFields...)
 
 	// 4. Marshal Responses request body, then apply OAuth codex transform
 	responsesBody, err := json.Marshal(responsesReq)
@@ -94,7 +171,13 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		if err := json.Unmarshal(responsesBody, &reqBody); err != nil {
 			return nil, fmt.Errorf("unmarshal for codex transform: %w", err)
 		}
-		codexResult := applyCodexOAuthTransform(reqBody, false, false, false)
+		// 058 step 2: messages bridge skips the default "helpful coding assistant"
+		// instructions (the developer-message shape is authoritative) and keeps
+		// Anthropic tool ids verbatim through the call_id round trip.
+		codexResult := applyCodexOAuthTransformWithOptions(reqBody, codexOAuthTransformOptions{
+			SkipDefaultInstructions: true,
+			PreserveToolCallIDs:     true,
+		})
 		forcedTemplateText := ""
 		if s.cfg != nil {
 			forcedTemplateText = s.cfg.Gateway.ForcedCodexInstructionsTemplate
@@ -104,6 +187,13 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			templateUpstreamModel = codexResult.NormalizedModel
 		}
 		existingInstructions, _ := reqBody["instructions"].(string)
+		// 058 step 2: when the codex transform's developer-message extraction
+		// did not populate instructions (e.g. because the bridge skipped the
+		// default), pull from input directly so the forced-template feature
+		// still has client text to prepend onto.
+		if strings.TrimSpace(existingInstructions) == "" {
+			existingInstructions = extractPromptLikeInstructionsFromInput(reqBody)
+		}
 		if _, err := applyForcedCodexInstructionsTemplate(reqBody, forcedTemplateText, forcedCodexInstructionsTemplateData{
 			ExistingInstructions: strings.TrimSpace(existingInstructions),
 			OriginalModel:        originalModel,
@@ -113,14 +203,24 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		}); err != nil {
 			return nil, err
 		}
+		// 058 step 2: ensure instructions is always a string field upstream
+		// so Codex SSE stops emitting "instructions: null" rejection paths.
+		ensureCodexOAuthInstructionsField(reqBody)
+		if shouldAutoInjectPromptCacheKeyForCompat(upstreamModel) {
+			appendOpenAICompatClaudeCodeTodoGuardToRequestBody(reqBody)
+		}
 		if codexResult.NormalizedModel != "" {
 			upstreamModel = codexResult.NormalizedModel
 		}
 		if codexResult.PromptCacheKey != "" {
 			promptCacheKey = codexResult.PromptCacheKey
 		}
-		if promptCacheKey != "" {
-			reqBody["prompt_cache_key"] = promptCacheKey
+		// 058 step 2: prompt_cache_key is captured into result + sent via the
+		// session_id header. Sending it again in the body confuses Codex SSE
+		// (rejected as unsupported field on bridge path).
+		delete(reqBody, "prompt_cache_key")
+		if shouldAutoInjectPromptCacheKeyForCompat(upstreamModel) {
+			compatTurnState = s.getOpenAICompatSessionTurnState(ctx, c, account, promptCacheKey)
 		}
 		if serviceTier := extractOpenAIServiceTier(reqBody); serviceTier != nil {
 			responsesReq.ServiceTier = *serviceTier
@@ -193,8 +293,33 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// session_id with the isolated prompt cache key to preserve the legacy
 	// upstream session behavior for OAuth/Codex accounts.
 	if promptCacheKey != "" {
-		apiKeyID := getAPIKeyIDFromContext(c)
-		upstreamReq.Header.Set("session_id", generateSessionUUID(isolateOpenAISessionID(apiKeyID, promptCacheKey)))
+		isolatedSessionID := generateSessionUUID(isolateOpenAISessionID(apiKeyID, promptCacheKey))
+		upstreamReq.Header.Set("session_id", isolatedSessionID)
+		// 058 step 2: when upstream/builder set conversation_id we re-align it
+		// onto the isolated session id so per-key sessions stay separated.
+		if upstreamReq.Header.Get("conversation_id") != "" {
+			upstreamReq.Header.Set("conversation_id", isolatedSessionID)
+		}
+	}
+	if account.Type == AccountTypeOAuth {
+		// 058 step 2: Anthropic Messages → ChatGPT Codex SSE does NOT accept
+		// the Responses experimental beta header, and forcing originator can
+		// switch ChatGPT to a different internal continuation path. airgate-
+		// openai's airgate bridge omits both — match that shape.
+		upstreamReq.Header.Del("OpenAI-Beta")
+		upstreamReq.Header.Del("originator")
+	}
+	if account.Type == AccountTypeOAuth && promptCacheKey != "" && strings.TrimSpace(c.GetHeader("conversation_id")) == "" {
+		// Without inbound conversation_id, sending one upstream creates a
+		// disposable conversation that confuses the cache lookup.
+		upstreamReq.Header.Del("conversation_id")
+	}
+	if compatTurnState != "" && upstreamReq.Header.Get("x-codex-turn-state") == "" {
+		// 058 step 2: replay-side Codex turn state. The upstream emits
+		// x-codex-turn-state on the response header; we cache it under
+		// the prompt_cache_key and replay on the next turn so Codex SSE
+		// resumes the same internal continuation slot.
+		upstreamReq.Header.Set("x-codex-turn-state", compatTurnState)
 	}
 
 	// 7. Send request
@@ -230,6 +355,24 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
+		// 058 step 2: when upstream rejects the cached previous_response_id
+		// (account moved, response evicted, server doesn't honor the field),
+		// drop the binding and retry once without continuation. "unsupported"
+		// is sticky — disables continuation for this prompt key permanently;
+		// "not_found" is per-call.
+		if previousResponseID != "" && (isOpenAICompatPreviousResponseNotFound(resp.StatusCode, upstreamMsg, respBody) || isOpenAICompatPreviousResponseUnsupported(resp.StatusCode, upstreamMsg, respBody)) {
+			if isOpenAICompatPreviousResponseUnsupported(resp.StatusCode, upstreamMsg, respBody) {
+				s.disableOpenAICompatSessionContinuation(ctx, c, account, promptCacheKey)
+			} else {
+				s.deleteOpenAICompatSessionResponseID(ctx, c, account, promptCacheKey)
+			}
+			logger.L().Info("openai messages: previous_response_id unavailable, retrying without continuation",
+				zap.Int64("account_id", account.ID),
+				zap.String("previous_response_id", truncateOpenAIWSLogValue(previousResponseID, openAIWSIDValueMaxLen)),
+				zap.String("upstream_model", upstreamModel),
+			)
+			return s.ForwardAsAnthropic(ctx, c, account, body, promptCacheKey, defaultMappedModel)
+		}
 		if s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, respBody) {
 			upstreamDetail := ""
 			if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
@@ -262,6 +405,15 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		return s.handleAnthropicErrorResponse(resp, c, account)
 	}
 
+	// 058 step 2: Codex SSE returns x-codex-turn-state on the success header.
+	// Cache it under the prompt cache key so the next turn can resume the
+	// same internal slot.
+	if account.Type == AccountTypeOAuth && promptCacheKey != "" {
+		if turnState := strings.TrimSpace(resp.Header.Get("x-codex-turn-state")); turnState != "" {
+			s.bindOpenAICompatSessionTurnState(ctx, c, account, promptCacheKey, turnState)
+		}
+	}
+
 	// 9. Handle normal response
 	// Upstream is always streaming; choose response format based on client preference.
 	var result *OpenAIForwardResult
@@ -275,6 +427,15 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 
 	// Propagate ServiceTier and ReasoningEffort to result for billing
 	if handleErr == nil && result != nil {
+		// 058 step 2: bind upstream response id under the prompt cache key
+		// (continuation chain) and bind any new digest chain (cache key
+		// reuse) so the next turn picks up where this one left off.
+		if compatContinuationEnabled && promptCacheKey != "" && result.ResponseID != "" {
+			s.bindOpenAICompatSessionResponseID(ctx, c, account, promptCacheKey, result.ResponseID)
+		}
+		if promptCacheKey != "" && anthropicDigestChain != "" {
+			s.bindOpenAICompatAnthropicDigestPromptCacheKey(account, apiKeyID, anthropicDigestChain, promptCacheKey, anthropicMatchedDigestChain)
+		}
 		if responsesReq.ServiceTier != "" {
 			st := responsesReq.ServiceTier
 			result.ServiceTier = &st
@@ -293,6 +454,22 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	}
 
 	return result, handleErr
+}
+
+// ensureCodexOAuthInstructionsField guarantees reqBody["instructions"] is a
+// string (possibly empty). Codex SSE upstream emits an unrecoverable
+// "instructions: null" rejection if the field is absent or non-string.
+func ensureCodexOAuthInstructionsField(reqBody map[string]any) {
+	if reqBody == nil {
+		return
+	}
+	if value, ok := reqBody["instructions"]; !ok || value == nil {
+		reqBody["instructions"] = ""
+		return
+	}
+	if _, ok := reqBody["instructions"].(string); !ok {
+		reqBody["instructions"] = ""
+	}
 }
 
 // handleAnthropicErrorResponse reads an upstream error and returns it in
@@ -366,8 +543,13 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	}
 	c.JSON(http.StatusOK, anthropicResp)
 
+	responseID := ""
+	if finalResponse != nil {
+		responseID = strings.TrimSpace(finalResponse.ID)
+	}
 	return &OpenAIForwardResult{
 		RequestID:     requestID,
+		ResponseID:    responseID,
 		Usage:         usage,
 		Model:         originalModel,
 		BillingModel:  billingModel,
@@ -551,6 +733,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	state := apicompat.NewResponsesEventToAnthropicState()
 	state.Model = originalModel
 	var usage OpenAIUsage
+	responseID := ""
 	var firstTokenMs *int
 	firstChunk := true
 	clientDisconnected := false
@@ -580,6 +763,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	resultWithUsage := func() *OpenAIForwardResult {
 		return &OpenAIForwardResult{
 			RequestID:     requestID,
+			ResponseID:    responseID,
 			Usage:         usage,
 			Model:         originalModel,
 			BillingModel:  billingModel,
@@ -609,8 +793,17 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 
 		// 仅按兼容转换器支持的终止事件提取 usage，避免无意扩大事件语义。
 		isTerminalEvent := isOpenAICompatResponsesTerminalEvent(event.Type)
-		if isTerminalEvent && event.Response != nil && event.Response.Usage != nil {
-			usage = copyOpenAIUsageFromResponsesUsage(event.Response.Usage)
+		if isTerminalEvent && event.Response != nil {
+			// 058 step 2: capture upstream response id (resp_xxx) so the
+			// continuation chain can attach it as previous_response_id on
+			// the next turn. Anthropic-facing id stays synthesised — only
+			// internal binding sees the upstream value.
+			if id := strings.TrimSpace(event.Response.ID); id != "" {
+				responseID = id
+			}
+			if event.Response.Usage != nil {
+				usage = copyOpenAIUsageFromResponsesUsage(event.Response.Usage)
+			}
 		}
 
 		// Convert to Anthropic events

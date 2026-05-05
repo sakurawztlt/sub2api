@@ -212,7 +212,11 @@ type OpenAIUsage struct {
 // OpenAIForwardResult represents the result of forwarding
 type OpenAIForwardResult struct {
 	RequestID string
-	Usage     OpenAIUsage
+	// ResponseID is the upstream Responses API response id (resp_xxx).
+	// Captured from the terminal SSE event so the messages-bridge path can
+	// chain the next turn via previous_response_id (058 step 2 continuation).
+	ResponseID string
+	Usage      OpenAIUsage
 	Model     string // 原始模型（用于响应和日志显示）
 	// BillingModel is the model used for cost calculation.
 	// When non-empty, CalculateCost uses this instead of Model.
@@ -1155,15 +1159,19 @@ func (s *OpenAIGatewayService) ResolveAnthropicMessageSessionContext(c *gin.Cont
 		return sessionCtx
 	}
 
+	// 058 step 2: metadata.user_id only seeds the sticky-session signal
+	// (account selection). It must NOT pin PromptCacheKey — letting
+	// ForwardAsAnthropic derive the upstream prompt cache key from
+	// cache_control breakpoints or the message digest is what allows the
+	// cached prefix to roll forward across multi-turn conversations.
+	// PromptCacheKey is only populated by an *explicit* signal (a literal
+	// prompt_cache_key, X-Claude-Code-Session-Id header, etc.).
 	if parsedUserID := ParseMetadataUserID(userID); parsedUserID != nil {
 		metadataSessionID := strings.TrimSpace(parsedUserID.SessionID)
 		if metadataSessionID == "" {
 			return sessionCtx
 		}
-		if sessionCtx.PromptCacheKey == "" {
-			sessionCtx.PromptCacheKey = metadataSessionID
-		}
-		if sessionCtx.SessionHash == "" || resolvedSessionID == "" {
+		if sessionCtx.SessionHash == "" {
 			sessionCtx.SessionHash = DeriveSessionHashFromSeed(metadataSessionID)
 		}
 		return sessionCtx
@@ -1173,10 +1181,7 @@ func (s *OpenAIGatewayService) ResolveAnthropicMessageSessionContext(c *gin.Cont
 	if strings.TrimSpace(seed) == "-" {
 		return sessionCtx
 	}
-	if sessionCtx.PromptCacheKey == "" {
-		sessionCtx.PromptCacheKey = GenerateSessionUUID(seed)
-	}
-	if sessionCtx.SessionHash == "" || resolvedSessionID == "" {
+	if sessionCtx.SessionHash == "" {
 		sessionCtx.SessionHash = DeriveSessionHashFromSeed(seed)
 	}
 	return sessionCtx

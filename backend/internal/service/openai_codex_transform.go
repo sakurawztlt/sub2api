@@ -63,6 +63,21 @@ var codexVersionModelPrefixes = []struct {
 	{prefix: "gpt-5.2", target: "gpt-5.2"},
 }
 
+// codexOAuthTransformOptions configures applyCodexOAuthTransformWithOptions.
+// Older 4-arg call sites still use applyCodexOAuthTransform, which routes
+// IsCodexCLI / IsCompact / StoreEnabled here. The 058 messages bridge passes
+// SkipDefaultInstructions=true (the bridge supplies its own instructions
+// from the developer message) and PreserveToolCallIDs=true (Anthropic tool
+// IDs already match upstream call_ids — re-prefixing them with fc_ would
+// break the round trip).
+type codexOAuthTransformOptions struct {
+	IsCodexCLI              bool
+	IsCompact               bool
+	StoreEnabled            bool
+	SkipDefaultInstructions bool
+	PreserveToolCallIDs     bool
+}
+
 type codexTransformResult struct {
 	Modified        bool
 	NormalizedModel string
@@ -94,6 +109,18 @@ var openAICodexOAuthUnsupportedFields = append([]string{
 }, openAIChatGPTInternalUnsupportedFields...)
 
 func applyCodexOAuthTransform(reqBody map[string]any, isCodexCLI bool, isCompact bool, storeEnabled bool) codexTransformResult {
+	return applyCodexOAuthTransformWithOptions(reqBody, codexOAuthTransformOptions{
+		IsCodexCLI:   isCodexCLI,
+		IsCompact:    isCompact,
+		StoreEnabled: storeEnabled,
+	})
+}
+
+func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuthTransformOptions) codexTransformResult {
+	isCodexCLI := opts.IsCodexCLI
+	isCompact := opts.IsCompact
+	storeEnabled := opts.StoreEnabled
+
 	result := codexTransformResult{}
 	// 工具续链需求会影响存储策略与 input 过滤逻辑。
 	needsToolContinuation := NeedsToolContinuation(reqBody)
@@ -195,6 +222,14 @@ func applyCodexOAuthTransform(reqBody map[string]any, isCodexCLI bool, isCompact
 
 	if v, ok := reqBody["prompt_cache_key"].(string); ok {
 		result.PromptCacheKey = strings.TrimSpace(v)
+		// 058 step 2: when this transform is invoked by the Anthropic-messages
+		// bridge, prompt_cache_key has already been captured into result and
+		// must NOT be sent verbatim on the wire — Codex Pro upstream rejects
+		// it as an unsupported field on the messages-bridged path.
+		if isOpenAICompatMessagesBridgeRequestBody(reqBody) {
+			delete(reqBody, "prompt_cache_key")
+			result.Modified = true
+		}
 	}
 
 	// 提取 input 中 role:"system" 消息至 instructions（OAuth 上游不支持 system role）。
@@ -202,8 +237,10 @@ func applyCodexOAuthTransform(reqBody map[string]any, isCodexCLI bool, isCompact
 		result.Modified = true
 	}
 
-	// instructions 处理逻辑：根据是否是 Codex CLI 分别调用不同方法
-	if applyInstructions(reqBody, isCodexCLI) {
+	// instructions 处理逻辑：根据是否是 Codex CLI 分别调用不同方法。
+	// 058 step 2: messages bridge sets SkipDefaultInstructions to keep the
+	// developer-message contents authoritative.
+	if !opts.SkipDefaultInstructions && applyInstructions(reqBody, isCodexCLI) {
 		result.Modified = true
 	}
 	if isCodexSparkModel(normalizedModel) && applyCodexSparkImageUnsupportedInstructions(reqBody) {
@@ -220,7 +257,10 @@ func applyCodexOAuthTransform(reqBody map[string]any, isCodexCLI bool, isCompact
 			input = normalizedInput
 			result.Modified = true
 		}
-		input = filterCodexInput(input, needsToolContinuation)
+		input = filterCodexInputWithOptions(input, codexInputFilterOptions{
+			PreserveReferences: needsToolContinuation,
+			PreserveCallIDs:    opts.PreserveToolCallIDs,
+		})
 		reqBody["input"] = input
 		result.Modified = true
 	} else if inputStr, ok := reqBody["input"].(string); ok {
@@ -863,7 +903,10 @@ func getNormalizedCodexModel(modelID string) string {
 }
 
 // extractTextFromContent extracts plain text from a content value that is either
-// a Go string or a []any of content-part maps with type:"text".
+// a Go string or a []any of text-like content-part maps. 058 step 2: the
+// Anthropic→Responses bridge emits typed input_text/output_text parts (Codex
+// Pro shape), not the bare type:"text" used by chat-completions, so all three
+// variants must be honoured.
 func extractTextFromContent(content any) string {
 	switch v := content.(type) {
 	case string:
@@ -875,7 +918,8 @@ func extractTextFromContent(content any) string {
 			if !ok {
 				continue
 			}
-			if t, _ := m["type"].(string); t == "text" {
+			switch t, _ := m["type"].(string); t {
+			case "text", "input_text", "output_text":
 				if text, ok := m["text"].(string); ok {
 					parts = append(parts, text)
 				}
@@ -887,10 +931,14 @@ func extractTextFromContent(content any) string {
 	}
 }
 
-// extractSystemMessagesFromInput scans the input array for items with role=="system",
-// removes them, and merges their content into reqBody["instructions"].
-// If instructions is already non-empty, extracted content is prepended with "\n\n".
-// Returns true if any system messages were extracted.
+// extractSystemMessagesFromInput scans the input array for items with
+// role=="system" or role=="developer", removes them, and merges their
+// content into reqBody["instructions"]. 058 step 2: the Anthropic→Responses
+// bridge maps Anthropic `system` to a developer message; Codex OAuth still
+// expects the prompt to live in the instructions field, and fork's forced-
+// template feature reads the rendered text out of `reqBody["instructions"]`.
+// If instructions is already non-empty, extracted content is prepended with
+// "\n\n". Returns true if any system/developer messages were extracted.
 func extractSystemMessagesFromInput(reqBody map[string]any) bool {
 	input, ok := reqBody["input"].([]any)
 	if !ok || len(input) == 0 {
@@ -906,7 +954,8 @@ func extractSystemMessagesFromInput(reqBody map[string]any) bool {
 			remaining = append(remaining, item)
 			continue
 		}
-		if role, _ := m["role"].(string); role != "system" {
+		role, _ := m["role"].(string)
+		if role != "system" && role != "developer" {
 			remaining = append(remaining, item)
 			continue
 		}
@@ -927,6 +976,32 @@ func extractSystemMessagesFromInput(reqBody map[string]any) bool {
 	}
 	reqBody["input"] = remaining
 	return true
+}
+
+// extractPromptLikeInstructionsFromInput collects developer/system message
+// text already present in the input array. The 058 messages bridge uses this
+// to derive a non-empty instructions block so SkipDefaultInstructions=true
+// does not strand the request with an empty instructions field upstream.
+func extractPromptLikeInstructionsFromInput(reqBody map[string]any) string {
+	input, ok := reqBody["input"].([]any)
+	if !ok || len(input) == 0 {
+		return ""
+	}
+	var texts []string
+	for _, item := range input {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		role, _ := m["role"].(string)
+		switch role {
+		case "developer", "system":
+			if text := strings.TrimSpace(extractTextFromContent(m["content"])); text != "" {
+				texts = append(texts, text)
+			}
+		}
+	}
+	return strings.Join(texts, "\n\n")
 }
 
 // applyInstructions 处理 instructions 字段：仅在 instructions 为空时填充默认值。
@@ -955,9 +1030,25 @@ func isInstructionsEmpty(reqBody map[string]any) bool {
 	return strings.TrimSpace(str) == ""
 }
 
+// codexInputFilterOptions tunes filterCodexInput behaviour for 058's
+// messages-bridge path. PreserveCallIDs keeps Anthropic-style toolu_/call_
+// ids verbatim instead of fc_-prefixing them — round-tripping through the
+// Anthropic compatibility layer requires lossless ids.
+type codexInputFilterOptions struct {
+	PreserveReferences bool
+	PreserveCallIDs    bool
+}
+
 // filterCodexInput 按需过滤 item_reference 与 id。
 // preserveReferences 为 true 时保持引用与 id，以满足续链请求对上下文的依赖。
 func filterCodexInput(input []any, preserveReferences bool) []any {
+	return filterCodexInputWithOptions(input, codexInputFilterOptions{
+		PreserveReferences: preserveReferences,
+	})
+}
+
+func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []any {
+	preserveReferences := opts.PreserveReferences
 	filtered := make([]any, 0, len(input))
 	for _, item := range input {
 		m, ok := item.(map[string]any)
@@ -978,6 +1069,12 @@ func filterCodexInput(input []any, preserveReferences bool) []any {
 		// 仅修正真正的 tool/function call 标识，避免误改普通 message/reasoning id；
 		// 若 item_reference 指向 legacy call_* 标识，则仅修正该引用本身。
 		fixCallIDPrefix := func(id string) string {
+			// 058 step 2: messages bridge passes PreserveCallIDs to keep
+			// Anthropic tool_use_id round-trip intact — fc_ prefixing breaks
+			// the call_id ↔ tool_use_id correspondence Claude Code expects.
+			if opts.PreserveCallIDs {
+				return id
+			}
 			if id == "" || strings.HasPrefix(id, "fc") {
 				return id
 			}

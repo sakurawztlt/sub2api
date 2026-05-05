@@ -404,7 +404,11 @@ func TestOpenAIGatewayService_ResolveAnthropicMessageSessionContext_UsesParsedMe
 	body := []byte(`{"metadata":{"user_id":"{\"device_id\":\"deadbeef00112233445566778899aabbccddeeff0011223344556677\",\"account_uuid\":\"\",\"session_id\":\"c72554f2-1234-5678-abcd-123456789abc\"}"}}`)
 
 	sessionCtx := svc.ResolveAnthropicMessageSessionContext(c, "gpt-5.4", body)
-	require.Equal(t, "c72554f2-1234-5678-abcd-123456789abc", sessionCtx.PromptCacheKey)
+	// 058 step 2: parsed metadata session_id seeds account stickiness only;
+	// PromptCacheKey is left empty so ForwardAsAnthropic can derive it from
+	// cache_control breakpoints / message digest (which lets the cached
+	// prefix roll forward across multi-turn conversations).
+	require.Empty(t, sessionCtx.PromptCacheKey)
 	require.Equal(t, DeriveSessionHashFromSeed("c72554f2-1234-5678-abcd-123456789abc"), sessionCtx.SessionHash)
 }
 
@@ -419,7 +423,9 @@ func TestOpenAIGatewayService_ResolveAnthropicMessageSessionContext_FallsBackFor
 
 	sessionCtx := svc.ResolveAnthropicMessageSessionContext(c, "gpt-5.4", body)
 	seed := "gpt-5.4-opaque-user-id"
-	require.Equal(t, GenerateSessionUUID(seed), sessionCtx.PromptCacheKey)
+	// 058 step 2: opaque metadata.user_id seeds SessionHash; PromptCacheKey
+	// stays empty so the bridge picks up cache_control / digest derivation.
+	require.Empty(t, sessionCtx.PromptCacheKey)
 	require.Equal(t, DeriveSessionHashFromSeed(seed), sessionCtx.SessionHash)
 }
 
