@@ -1,6 +1,19 @@
 docs/claude-relay-service/
 .codex
 
+# Claude Code hook 日志 / 历史聊天 — 可能含真实 OAuth token / API key, 永不入 git
+backend/logs/
+logs/
+**/chat.json
+**/post_tool_use.json
+**/post_tool_use_failure.json
+**/pre_tool_use.json
+**/user_prompt_submit.json
+**/notification.json
+**/session_end.json
+**/stop.json
+**/subagent_stop.json
+
 # ===================
 # Go 后端
 # ===================
