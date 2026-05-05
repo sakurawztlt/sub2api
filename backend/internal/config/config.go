@@ -1093,9 +1093,8 @@ type DefaultConfig struct {
 }
 
 type RateLimitConfig struct {
-	OverloadCooldownMinutes     int `mapstructure:"overload_cooldown_minutes"`       // 529过载冷却时间(分钟)
-	RateLimit429CooldownSeconds int `mapstructure:"rate_limit_429_cooldown_seconds"` // 429无重置时间时的默认回避时间(秒)
-	OAuth401CooldownMinutes     int `mapstructure:"oauth_401_cooldown_minutes"`      // OAuth 401临时不可调度冷却(分钟)
+	OverloadCooldownMinutes int `mapstructure:"overload_cooldown_minutes"`  // 529过载冷却时间(分钟)
+	OAuth401CooldownMinutes int `mapstructure:"oauth_401_cooldown_minutes"` // OAuth 401临时不可调度冷却(分钟)
 }
 
 // APIKeyAuthCacheConfig API Key 认证缓存配置
@@ -1555,10 +1554,12 @@ func setDefaults() {
 
 	// RateLimit
 	viper.SetDefault("rate_limit.overload_cooldown_minutes", 10)
-	// 2026-05-05 fork override: upstream PR #2120 默认 5s 在 ChatGPT Pro
-	// 池上太激进 (账号被 429 后 5s 就重试 → 反复撞 dead 账号 → 加速封号).
-	// 保留 5min 安全默认, 仅放开 admin UI 让 ops 按需调.
-	viper.SetDefault("rate_limit.rate_limit_429_cooldown_seconds", 300)
+	// 2026-05-05 跟 upstream 11ae6f21: 删除 rate_limit_429_cooldown_seconds
+	// yaml/viper config option. PR #2120 引入了它默认 5s, 但在 ChatGPT Pro
+	// 池上太激进, upstream 自己也意识到删了. fork 仍保留:
+	//   - defaultRateLimit429CooldownSeconds=300 const (ratelimit_service.go)
+	//   - admin DB-backed settings UI (能动态调)
+	// fallback 路径用 const 默认, 不再读 cfg/viper.
 	viper.SetDefault("rate_limit.oauth_401_cooldown_minutes", 10)
 
 	// Pricing - 从 model-price-repo 同步模型定价和上下文窗口数据（固定到 commit，避免分支漂移）

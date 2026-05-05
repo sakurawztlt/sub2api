@@ -99,10 +99,9 @@ func TestHandle429_FallbackDisabledSkipsLocalMark(t *testing.T) {
 	require.Zero(t, accountRepo.rateLimitCalls)
 }
 
-func TestHandle429_FallbackUsesConfigSecondsWhenSettingServiceMissing(t *testing.T) {
+func TestHandle429_FallbackUsesDefaultSecondsWhenSettingServiceMissing(t *testing.T) {
 	accountRepo := &rateLimit429AccountRepoStub{}
 	cfg := &config.Config{}
-	cfg.RateLimit.RateLimit429CooldownSeconds = 9
 	svc := NewRateLimitService(accountRepo, nil, cfg, nil, nil)
 
 	account := &Account{ID: 44, Platform: PlatformGemini, Type: AccountTypeAPIKey}
@@ -112,5 +111,7 @@ func TestHandle429_FallbackUsesConfigSecondsWhenSettingServiceMissing(t *testing
 
 	require.Equal(t, 1, accountRepo.rateLimitCalls)
 	require.Equal(t, int64(44), accountRepo.lastRateLimitID)
-	require.True(t, !accountRepo.lastRateLimitReset.Before(before.Add(9*time.Second)) && !accountRepo.lastRateLimitReset.After(after.Add(9*time.Second)))
+	// 2026-05-05 fork override: upstream PR #2120 设的 5s 默认在 ChatGPT Pro
+	// 池上太激进; fork 保留 defaultRateLimit429CooldownSeconds=300.
+	require.True(t, !accountRepo.lastRateLimitReset.Before(before.Add(300*time.Second)) && !accountRepo.lastRateLimitReset.After(after.Add(300*time.Second)))
 }
