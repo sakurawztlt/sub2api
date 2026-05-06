@@ -1454,6 +1454,41 @@ func TestAnthropicToResponses_ToolChoiceSpecific(t *testing.T) {
 	assert.NotContains(t, tc, "function")
 }
 
+// 2026-05-07 backup 108 ch15 cctest 行为验证 0/30 主因: 客户端 (Claude
+// Code SDK / 经 NewAPI 转发) 发 OpenAI Chat Completions nested 形式
+// {"type":"function","function":{"name":"X"}}. 之前 type=function 走
+// default 原样透传, OpenAI Responses 上游回 "Unknown parameter:
+// 'tool_choice.function'" 400. 修复后拍平成 {"type":"function","name":"X"}.
+func TestAnthropicToResponses_ToolChoiceOpenAINestedFunction(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:      "gpt-5.2",
+		MaxTokens:  1024,
+		Messages:   []AnthropicMessage{{Role: "user", Content: json.RawMessage(`"Hello"`)}},
+		ToolChoice: json.RawMessage(`{"type":"function","function":{"name":"get_weather"}}`),
+	}
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+	var tc map[string]any
+	require.NoError(t, json.Unmarshal(resp.ToolChoice, &tc))
+	assert.Equal(t, "function", tc["type"])
+	assert.Equal(t, "get_weather", tc["name"])
+	assert.NotContains(t, tc, "function", "拍平后不能再含 nested function 子对象")
+}
+
+// 已经是 Responses flat 格式 (没 nested function) 直接 pass through, 不被双重改写
+func TestAnthropicToResponses_ToolChoiceResponsesFlatFunctionPassThrough(t *testing.T) {
+	raw := `{"type":"function","name":"get_weather"}`
+	req := &AnthropicRequest{
+		Model:      "gpt-5.2",
+		MaxTokens:  1024,
+		Messages:   []AnthropicMessage{{Role: "user", Content: json.RawMessage(`"Hello"`)}},
+		ToolChoice: json.RawMessage(raw),
+	}
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+	assert.Equal(t, raw, string(resp.ToolChoice))
+}
+
 func TestResponsesToAnthropicRequest_ToolChoiceFunctionName(t *testing.T) {
 	req := &ResponsesRequest{
 		Model:      "gpt-5.2",

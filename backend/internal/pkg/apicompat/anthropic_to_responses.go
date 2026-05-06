@@ -111,12 +111,20 @@ func AnthropicToResponses(req *AnthropicRequest) (*ResponsesRequest, error) {
 //	{"type":"any"}             → "required"
 //	{"type":"none"}            → "none"
 //	{"type":"tool","name":"X"} → {"type":"function","name":"X"}
+//	{"type":"function","function":{"name":"X"}} → {"type":"function","name":"X"} (OpenAI Chat Completions nested → Responses flat)
+//	{"type":"function","name":"X"}              → pass through (Responses flat 已经对了)
 //
 // 2026-05-07 修: 客户端 (Claude Code SDK / 经 NewAPI 转发的 OpenAI 客户端)
 // 也会发字符串形式 "auto" / "none" / "required" / "any". 之前这里只接受
 // object, 字符串触发 "cannot unmarshal string into Go value of type struct"
 // 502 — 142/146 forward_failed 都是这条. 现在跟
 // remapChatToolChoiceToResponses 行为对齐, 字符串 normalize + pass through.
+//
+// 2026-05-07 又修: backup 108 ch15 cctest 行为验证 0/30 fail 主因 — 客户端
+// 发 OpenAI Chat Completions nested 风格 {"type":"function","function":{"name":"X"}},
+// 之前 type=function 走 default 原样透传, OpenAI Responses 上游回
+// "Unknown parameter: 'tool_choice.function'" 400. 加 case "function" 分支
+// 拍平 nested function name.
 func convertAnthropicToolChoiceToResponses(raw json.RawMessage) (json.RawMessage, error) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
@@ -139,8 +147,11 @@ func convertAnthropicToolChoiceToResponses(raw json.RawMessage) (json.RawMessage
 	}
 
 	var tc struct {
-		Type string `json:"type"`
-		Name string `json:"name"`
+		Type     string `json:"type"`
+		Name     string `json:"name"`
+		Function *struct {
+			Name string `json:"name"`
+		} `json:"function"`
 	}
 	if err := json.Unmarshal(raw, &tc); err != nil {
 		return nil, err
@@ -157,6 +168,21 @@ func convertAnthropicToolChoiceToResponses(raw json.RawMessage) (json.RawMessage
 		return json.Marshal(map[string]string{
 			"type": "function",
 			"name": sanitizeOpenAIName(tc.Name),
+		})
+	case "function":
+		// Chat Completions 客户端 nested shape 经 Anthropic 入口路径漏过来
+		// 时, Responses 上游会拒带 "function" 子对象. 已经是 flat 格式 (没
+		// nested function 字段) 时直接 pass-through.
+		if tc.Function == nil {
+			return raw, nil
+		}
+		name := tc.Name
+		if name == "" {
+			name = tc.Function.Name
+		}
+		return json.Marshal(map[string]string{
+			"type": "function",
+			"name": sanitizeOpenAIName(name),
 		})
 	default:
 		return raw, nil
