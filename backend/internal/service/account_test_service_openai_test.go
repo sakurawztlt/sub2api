@@ -318,7 +318,10 @@ func TestAccountTestService_OpenAIOAuthEmptyModelUsesSafeDefault(t *testing.T) {
 		Credentials: map[string]any{"access_token": "test-token", "chatgpt_account_id": "acct_123"},
 	}
 
-	err := svc.testOpenAIAccountConnection(ctx, account, "")
+	// 2026-05-06 — testOpenAIAccountConnection 在上游 merge (053+) 时
+	// 加了 prompt + mode 参数, 这个旧 test 没跟上签名. 顺手补两个空字符串
+	// 让 unit-tag 测试 build 起来.
+	err := svc.testOpenAIAccountConnection(ctx, account, "", "", "")
 	require.NoError(t, err)
 	require.Len(t, upstream.requests, 1)
 

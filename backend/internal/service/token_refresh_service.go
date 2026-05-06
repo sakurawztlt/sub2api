@@ -281,7 +281,9 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 			return nil
 		}
 
-		// 不可重试错误（invalid_grant/invalid_client 等）直接标记 error 状态并返回
+		// 不可重试错误（invalid_grant/invalid_client/refresh_token_reused 等）
+		// 直接标记 error 状态并返回。SetError 会写 DB + 发 scheduler outbox +
+		// 同步单账号 scheduler 快照。
 		if isNonRetryableRefreshError(err) {
 			errorMsg := fmt.Sprintf("Token refresh failed (non-retryable): %v", err)
 			if setErr := s.accountRepo.SetError(ctx, account.ID, errorMsg); setErr != nil {
@@ -289,6 +291,18 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 					"account_id", account.ID,
 					"error", setErr,
 				)
+			}
+			// 2026-05-06: 永久坏号路径 best-effort 失效化 token cache，否则
+			// 旧 access_token 还能被请求路径使用一次到 cache TTL 自然过期。
+			// 失败不阻止 SetError —— DB 层已经把账号标 error，调度器看的是 DB
+			// 状态不是 cache。这里只是让请求路径“立刻”看到失效。
+			if s.cacheInvalidator != nil && account.Type == AccountTypeOAuth {
+				if invalidateErr := s.cacheInvalidator.InvalidateToken(ctx, account); invalidateErr != nil {
+					slog.Warn("token_refresh.nonretryable_invalidate_token_cache_failed",
+						"account_id", account.ID,
+						"error", invalidateErr,
+					)
+				}
 			}
 			// 刷新失败但 access_token 可能仍有效，尝试设置隐私
 			s.ensureOpenAIPrivacy(ctx, account)
@@ -411,18 +425,36 @@ var errRefreshSkipped = fmt.Errorf("refresh skipped")
 // isNonRetryableRefreshError 判断是否为不可重试的刷新错误
 // 这些错误通常表示凭证已失效或配置确实缺失，需要用户重新授权
 // 注意：missing_project_id 错误只在真正缺失（从未获取过）时返回，临时获取失败不会返回此错误
+//
+// 2026-05-06 — 加入 refresh_token_reused / refresh token has been reused
+// / refresh token revoked. OpenAI OAuth 在 refresh token 被重复使用 (典型
+// 场景: 同一 refresh token 在两个进程并发 refresh, 或 refresh 后 sub2api
+// 没及时持久化新 token) 后会永久作废这条 refresh chain。这类错误若按普
+// 通网络失败重试 → 短期 cooldown → 重新进池, 账号会反复制造 502 直到
+// 运维手动干预。归入 non-retryable 让 refreshWithRetry 第一次就走
+// SetError 永久坏号路径。
+//
+// 不加 "token revoked" 裸串: 太宽容易误判 (任何提到 revoke 的错误文案都中)。
+// "refresh token revoked" 已经够具体。
 func isNonRetryableRefreshError(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
 	nonRetryable := []string{
-		"invalid_grant",       // refresh_token 已失效
-		"invalid_client",      // 客户端配置错误
-		"unauthorized_client", // 客户端未授权
-		"access_denied",       // 访问被拒绝
-		"missing_project_id",  // 缺少 project_id
+		"invalid_grant",                // refresh_token 已失效
+		"invalid_client",               // 客户端配置错误
+		"unauthorized_client",          // 客户端未授权
+		"access_denied",                // 访问被拒绝
+		"missing_project_id",           // 缺少 project_id
 		"no refresh token available",
+		// 2026-05-06: refresh token reuse → permanent dead.
+		// strings.ToLower 已经把 REFRESH_TOKEN_REUSED → refresh_token_reused
+		// 所以只需要列小写形式; OpenAI 实际有时返 "refresh token has been
+		// reused" (空格) / "refresh token revoked", 都覆盖。
+		"refresh_token_reused",
+		"refresh token has been reused",
+		"refresh token revoked",
 	}
 	for _, needle := range nonRetryable {
 		if strings.Contains(msg, needle) {

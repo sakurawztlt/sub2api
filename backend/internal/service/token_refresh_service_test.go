@@ -421,8 +421,44 @@ func TestTokenRefreshService_RefreshWithRetry_AntigravityNonRetryableError(t *te
 	err := service.refreshWithRetry(context.Background(), account, refresher, refresher, time.Hour)
 	require.Error(t, err)
 	require.Equal(t, 0, repo.updateCalls)
-	require.Equal(t, 0, invalidator.calls)
+	// 2026-05-06: non-retryable 现在 best-effort 失效 token cache, 否则旧
+	// access_token 还能被请求路径使用一次到 cache TTL. 只对 OAuth 账号触发.
+	require.Equal(t, 1, invalidator.calls)
 	require.Equal(t, 1, repo.setErrorCalls) // 不可重试错误应设置错误状态
+}
+
+// 2026-05-06 — TestTokenRefreshService_RefreshWithRetry_RefreshTokenReused
+// 验证 refresh_token_reused (永久坏号语义) 第一次失败就走 SetError 路径,
+// 不重试到 max_retries, 不进短期 SetTempUnschedulable.
+//
+// 这是真实 NewAPI 502 风暴根因: 之前 refresh_token_reused 不在 nonRetryable
+// 列表, 重试 3 次后只 set 10min temp unschedulable, 账号继续保持 active,
+// 下个 refresh 周期又被拉起来失败 → 反复制造 502.
+func TestTokenRefreshService_RefreshWithRetry_RefreshTokenReused(t *testing.T) {
+	repo := &tokenRefreshAccountRepo{}
+	invalidator := &tokenCacheInvalidatorStub{}
+	cfg := &config.Config{
+		TokenRefresh: config.TokenRefreshConfig{
+			MaxRetries:          3,
+			RetryBackoffSeconds: 0,
+		},
+	}
+	service := NewTokenRefreshService(repo, nil, nil, nil, nil, invalidator, nil, cfg, nil)
+	account := &Account{
+		ID:       33,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+	}
+	refresher := &tokenRefresherStub{
+		err: errors.New(`OPENAI_OAUTH_TOKEN_REFRESH_FAILED: status 400 body: {"error":"refresh_token_reused"}`),
+	}
+
+	err := service.refreshWithRetry(context.Background(), account, refresher, refresher, time.Hour)
+	require.Error(t, err)
+	require.Equal(t, 0, repo.updateCalls)         // 没成功刷新
+	require.Equal(t, 1, repo.setErrorCalls)       // 永久坏号路径
+	require.Equal(t, 0, repo.setTempUnschedCalls) // 不进短期临时禁用 (= 没重试到 max_retries 回退)
+	require.Equal(t, 1, invalidator.calls)        // best-effort cache invalidate
 }
 
 // TestTokenRefreshService_RefreshWithRetry_ClearsTempUnschedulable 测试刷新成功后清除临时不可调度（DB + Redis）
@@ -537,6 +573,19 @@ func TestIsNonRetryableRefreshError(t *testing.T) {
 		{name: "no_refresh_token", err: errors.New("no refresh token available"), expected: true},
 		{name: "invalid_grant_with_desc", err: errors.New("Error: invalid_grant - token revoked"), expected: true},
 		{name: "case_insensitive", err: errors.New("INVALID_GRANT"), expected: true},
+		// 2026-05-06: refresh token reuse — OpenAI 在并发刷新或 sub2api
+		// 没及时持久化新 token 时返回这类错误, 永久作废 refresh chain.
+		{name: "refresh_token_reused_lower", err: errors.New(`OPENAI_OAUTH_TOKEN_REFRESH_FAILED: status 400 body: {"error":"refresh_token_reused"}`), expected: true},
+		{name: "refresh_token_reused_upper", err: errors.New("REFRESH_TOKEN_REUSED"), expected: true},
+		{name: "refresh_token_has_been_reused", err: errors.New(`{"error_description":"refresh token has been reused"}`), expected: true},
+		{name: "refresh_token_revoked_phrase", err: errors.New(`{"error_description":"refresh token revoked"}`), expected: true},
+		// negative cases — 不要把这些误判成永久坏号
+		{name: "transient_5xx", err: errors.New("OPENAI_OAUTH_TOKEN_REFRESH_FAILED: status 500 body: {}"), expected: false},
+		{name: "transient_502", err: errors.New("OPENAI_OAUTH_TOKEN_REFRESH_FAILED: status 502 body: bad gateway"), expected: false},
+		{name: "context_deadline", err: errors.New("context deadline exceeded"), expected: false},
+		// "token revoked" 裸串 — codex review: 太宽不要中.
+		// 我们只在 "refresh token revoked" 这种更具体的形式中.
+		{name: "bare_token_revoked_no_refresh_prefix", err: errors.New("session token revoked by user"), expected: false},
 	}
 
 	for _, tt := range tests {
