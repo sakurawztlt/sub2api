@@ -5497,6 +5497,8 @@ export default {
         field_cid: '支付渠道 ID',
         field_cidAlipay: '支付宝渠道 ID',
         field_cidWxpay: '微信渠道 ID',
+        field_typeAlipay: '支付宝类型覆盖',
+        field_typeWxpay: '微信类型覆盖',
         stripeWebhookHint: '请在 Stripe Dashboard 中将以下地址配置为 Webhook 端点：',
         limitsTitle: '限额配置',
         limitSingleMin: '单笔最低',

@@ -516,7 +516,8 @@ function handleSave() {
   // Validate required config fields — all non-optional fields must be filled.
   // In edit mode, sensitive fields may be left blank to preserve the stored
   // value (backend merges blanks by preserving the existing secret).
-  for (const f of PROVIDER_CONFIG_FIELDS[form.provider_key] || []) {
+  const fieldDefs = PROVIDER_CONFIG_FIELDS[form.provider_key] || []
+  for (const f of fieldDefs) {
     if (f.optional) continue
     if (props.editing && f.sensitive) continue
     const val = (config[f.key] || '').trim()
@@ -527,6 +528,10 @@ function handleSave() {
     }
   }
 
+  // codex upstream PR#2234 cherry-pick — local doesn't have `clearable`
+  // field support (a separate upstream feature), so keep the simpler
+  // drop-empty logic. Result is identical for the EasyPay typeAlipay/
+  // typeWxpay fields (optional, dropped when empty).
   const filteredConfig: Record<string, string> = {}
   for (const [k, v] of Object.entries(config)) {
     if (!v || !v.trim()) continue

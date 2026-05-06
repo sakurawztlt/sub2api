@@ -5336,6 +5336,8 @@ export default {
         field_cid: 'Channel ID',
         field_cidAlipay: 'Alipay Channel ID',
         field_cidWxpay: 'WeChat Channel ID',
+        field_typeAlipay: 'Alipay Type Override',
+        field_typeWxpay: 'WeChat Type Override',
         stripeWebhookHint: 'Configure the following URL as a Webhook endpoint in Stripe Dashboard:',
         limitsTitle: 'Limits',
         limitSingleMin: 'Min per order',
