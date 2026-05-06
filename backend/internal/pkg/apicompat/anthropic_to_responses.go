@@ -1,6 +1,7 @@
 package apicompat
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -110,7 +111,33 @@ func AnthropicToResponses(req *AnthropicRequest) (*ResponsesRequest, error) {
 //	{"type":"any"}             → "required"
 //	{"type":"none"}            → "none"
 //	{"type":"tool","name":"X"} → {"type":"function","name":"X"}
+//
+// 2026-05-07 修: 客户端 (Claude Code SDK / 经 NewAPI 转发的 OpenAI 客户端)
+// 也会发字符串形式 "auto" / "none" / "required" / "any". 之前这里只接受
+// object, 字符串触发 "cannot unmarshal string into Go value of type struct"
+// 502 — 142/146 forward_failed 都是这条. 现在跟
+// remapChatToolChoiceToResponses 行为对齐, 字符串 normalize + pass through.
 func convertAnthropicToolChoiceToResponses(raw json.RawMessage) (json.RawMessage, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return raw, nil
+	}
+
+	if trimmed[0] == '"' {
+		var s string
+		if err := json.Unmarshal(trimmed, &s); err != nil {
+			return nil, err
+		}
+		switch s {
+		case "auto", "none":
+			return json.Marshal(s)
+		case "any", "required":
+			return json.Marshal("required")
+		default:
+			return raw, nil
+		}
+	}
+
 	var tc struct {
 		Type string `json:"type"`
 		Name string `json:"name"`
@@ -132,7 +159,6 @@ func convertAnthropicToolChoiceToResponses(raw json.RawMessage) (json.RawMessage
 			"name": sanitizeOpenAIName(tc.Name),
 		})
 	default:
-		// Pass through unknown types as-is
 		return raw, nil
 	}
 }

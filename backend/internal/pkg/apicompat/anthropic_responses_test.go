@@ -1225,6 +1225,85 @@ func TestAnthropicToResponses_SummaryGateOn_AdaptiveThinking(t *testing.T) {
 // tool_choice conversion tests
 // ---------------------------------------------------------------------------
 
+// 2026-05-07 prod 502 风暴根因: 客户端 (Claude Code SDK / NewAPI) 发字符串
+// 形式的 tool_choice ("auto" / "none" / 等), 之前只接受 Anthropic 标准对象
+// 形式, json.Unmarshal 把 string 当 object 解 → "cannot unmarshal string into
+// Go value of type struct" → 502. sub2api 5/7 build #19 时 142/146 forward_failed
+// 都是这条 error.
+//
+// 修复: convertAnthropicToolChoiceToResponses 兼容 string 输入, 跟
+// remapChatToolChoiceToResponses 行为对齐.
+
+func TestAnthropicToResponses_ToolChoiceStringAuto(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:      "gpt-5.2",
+		MaxTokens:  1024,
+		Messages:   []AnthropicMessage{{Role: "user", Content: json.RawMessage(`"Hello"`)}},
+		ToolChoice: json.RawMessage(`"auto"`),
+	}
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+	var tc string
+	require.NoError(t, json.Unmarshal(resp.ToolChoice, &tc))
+	assert.Equal(t, "auto", tc)
+}
+
+func TestAnthropicToResponses_ToolChoiceStringNone(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:      "gpt-5.2",
+		MaxTokens:  1024,
+		Messages:   []AnthropicMessage{{Role: "user", Content: json.RawMessage(`"Hello"`)}},
+		ToolChoice: json.RawMessage(`"none"`),
+	}
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+	var tc string
+	require.NoError(t, json.Unmarshal(resp.ToolChoice, &tc))
+	assert.Equal(t, "none", tc)
+}
+
+// "any" / "required" 都 normalize 成 Responses API 的 "required"
+func TestAnthropicToResponses_ToolChoiceStringAny(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:      "gpt-5.2",
+		MaxTokens:  1024,
+		Messages:   []AnthropicMessage{{Role: "user", Content: json.RawMessage(`"Hello"`)}},
+		ToolChoice: json.RawMessage(`"any"`),
+	}
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+	var tc string
+	require.NoError(t, json.Unmarshal(resp.ToolChoice, &tc))
+	assert.Equal(t, "required", tc)
+}
+
+func TestAnthropicToResponses_ToolChoiceStringRequired(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:      "gpt-5.2",
+		MaxTokens:  1024,
+		Messages:   []AnthropicMessage{{Role: "user", Content: json.RawMessage(`"Hello"`)}},
+		ToolChoice: json.RawMessage(`"required"`),
+	}
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+	var tc string
+	require.NoError(t, json.Unmarshal(resp.ToolChoice, &tc))
+	assert.Equal(t, "required", tc)
+}
+
+// 未知字符串 pass through, 不报错 (前向兼容未来 OpenAI 加新值)
+func TestAnthropicToResponses_ToolChoiceStringUnknownPassThrough(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:      "gpt-5.2",
+		MaxTokens:  1024,
+		Messages:   []AnthropicMessage{{Role: "user", Content: json.RawMessage(`"Hello"`)}},
+		ToolChoice: json.RawMessage(`"future_value"`),
+	}
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+	assert.Equal(t, `"future_value"`, string(resp.ToolChoice))
+}
+
 func TestAnthropicToResponses_ToolChoiceAuto(t *testing.T) {
 	req := &AnthropicRequest{
 		Model:      "gpt-5.2",
