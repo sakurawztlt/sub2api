@@ -1222,6 +1222,105 @@ func TestAnthropicToResponses_SummaryGateOn_AdaptiveThinking(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// 2026-05-07 prod 502 第二波 — codex 分析: tool_choice 修了之后剩的 400
+// upstream errors 是 missing call_id / content[0].text. 根因:
+//   - tool_result block 缺 tool_use_id → function_call_output.CallID="" →
+//     omitempty 字段消失 → OpenAI 上游 400 "Missing required parameter:
+//     'input[N].call_id'"
+//   - user plain string content="" → input_text.Text="" → omitempty 字段
+//     消失 → OpenAI 上游 400 "Missing required parameter:
+//     'input[N].content[0].text'"
+// 修法对齐已有的 assistant 空字符串保护 (line 384-388), 把 user 路径跟
+// tool_result 缺 ID 的路径也补上.
+// ---------------------------------------------------------------------------
+
+// user plain string 空 → 不应该生成 input_text 空 text part
+func TestAnthropicToResponses_UserPlainStringEmpty(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:     "gpt-5.2",
+		MaxTokens: 1024,
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: json.RawMessage(`""`)},
+		},
+	}
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+
+	var items []ResponsesInputItem
+	require.NoError(t, json.Unmarshal(resp.Input, &items))
+	for _, item := range items {
+		if item.Type != "message" {
+			continue
+		}
+		var parts []ResponsesContentPart
+		require.NoError(t, json.Unmarshal(item.Content, &parts))
+		for i, p := range parts {
+			if p.Type == "input_text" {
+				assert.NotEmpty(t, p.Text,
+					"input_text content[%d] has empty Text → 序列化时 omitempty 丢字段 → OpenAI 400",
+					i)
+			}
+		}
+	}
+}
+
+// tool_result 缺 tool_use_id → 不能生成空 CallID function_call_output
+func TestAnthropicToResponses_ToolResultMissingToolUseID(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:     "gpt-5.2",
+		MaxTokens: 1024,
+		Messages: []AnthropicMessage{
+			{
+				Role: "user",
+				Content: json.RawMessage(`[
+					{"type":"tool_result","tool_use_id":"","content":"the result"}
+				]`),
+			},
+		},
+	}
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+
+	var items []ResponsesInputItem
+	require.NoError(t, json.Unmarshal(resp.Input, &items))
+	for i, item := range items {
+		if item.Type == "function_call_output" {
+			assert.NotEmpty(t, item.CallID,
+				"input[%d].call_id 为空 → omitempty 丢字段 → OpenAI 400 'input[N].call_id missing'", i)
+		}
+	}
+}
+
+// 序列化层防御: 任何 function_call_output 都必须有 CallID
+func TestAnthropicToResponses_NoEmptyCallIDInOutput(t *testing.T) {
+	// 正常路径 (有 tool_use_id) 不应该被打扰
+	req := &AnthropicRequest{
+		Model:     "gpt-5.2",
+		MaxTokens: 1024,
+		Messages: []AnthropicMessage{
+			{
+				Role: "user",
+				Content: json.RawMessage(`[
+					{"type":"tool_result","tool_use_id":"toolu_abc","content":"result"}
+				]`),
+			},
+		},
+	}
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+	var items []ResponsesInputItem
+	require.NoError(t, json.Unmarshal(resp.Input, &items))
+	found := false
+	for _, item := range items {
+		if item.Type == "function_call_output" {
+			found = true
+			assert.NotEmpty(t, item.CallID)
+		}
+	}
+	assert.True(t, found, "正常 tool_use_id 应该生成 function_call_output")
+}
+
+// ---------------------------------------------------------------------------
 // tool_choice conversion tests
 // ---------------------------------------------------------------------------
 

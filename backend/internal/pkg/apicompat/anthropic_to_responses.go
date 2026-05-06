@@ -306,9 +306,15 @@ func anthropicMsgToResponsesItems(m AnthropicMessage) ([]ResponsesInputItem, err
 // plain string or an array of blocks. tool_result blocks are extracted into
 // function_call_output items. Image blocks are converted to input_image parts.
 func anthropicUserToResponses(raw json.RawMessage) ([]ResponsesInputItem, error) {
-	// Try plain string.
+	// Try plain string. 跟 assistant 路径 (line ~384) 对齐: 空字符串必须
+	// 整条 skip. 不能生成 {Type:"input_text", Text:""} —— Text 是 omitempty,
+	// 序列化后字段消失 OpenAI 上游回 "Missing required parameter:
+	// 'input[N].content[0].text'" → 502 (2026-05-07 prod 残留 502 根因之一).
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
+		if s == "" {
+			return nil, nil
+		}
 		parts := []ResponsesContentPart{{Type: "input_text", Text: s}}
 		partsJSON, err := json.Marshal(parts)
 		if err != nil {
@@ -324,6 +330,9 @@ func anthropicUserToResponses(raw json.RawMessage) ([]ResponsesInputItem, error)
 
 	var out []ResponsesInputItem
 	var toolResultImageParts []ResponsesContentPart
+	// 缺 tool_use_id 的 tool_result 无法构成合法 function_call_output,
+	// 把 output text 收集起来后面挂到普通 user message 里 (避免丢内容).
+	var orphanToolResultTexts []string
 
 	// Extract tool_result blocks → function_call_output items.
 	// Images inside tool_results are extracted separately because the
@@ -333,9 +342,20 @@ func anthropicUserToResponses(raw json.RawMessage) ([]ResponsesInputItem, error)
 			continue
 		}
 		outputText, imageParts := convertToolResultOutput(b)
+		callID := toResponsesCallID(b.ToolUseID)
+		// 缺 tool_use_id 时不能 emit function_call_output: CallID="" + omitempty
+		// → 字段消失 → OpenAI 上游 400 "Missing required parameter: 'input[N].call_id'".
+		// 退化策略: outputText 当 user text, image 仍合并到 user parts (正常路径).
+		if callID == "" {
+			if outputText != "" {
+				orphanToolResultTexts = append(orphanToolResultTexts, outputText)
+			}
+			toolResultImageParts = append(toolResultImageParts, imageParts...)
+			continue
+		}
 		out = append(out, ResponsesInputItem{
 			Type:   "function_call_output",
-			CallID: toResponsesCallID(b.ToolUseID),
+			CallID: callID,
 			Output: outputText,
 		})
 		toolResultImageParts = append(toolResultImageParts, imageParts...)
@@ -359,6 +379,10 @@ func anthropicUserToResponses(raw json.RawMessage) ([]ResponsesInputItem, error)
 		}
 	}
 	parts = append(parts, toolResultImageParts...)
+	// Orphan tool_result (无 tool_use_id) 的 outputText 退化为普通 user text.
+	for _, txt := range orphanToolResultTexts {
+		parts = append(parts, ResponsesContentPart{Type: "input_text", Text: txt})
+	}
 
 	if len(parts) > 0 {
 		content, err := json.Marshal(parts)
