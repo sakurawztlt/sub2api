@@ -2,6 +2,7 @@ package apicompat
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -566,15 +567,118 @@ func fromResponsesCallID(id string) string {
 
 // anthropicImageToDataURI converts an AnthropicImageSource to a data URI string.
 // Returns "" if the source is nil or has no data.
+//
+// 2026-05-07 codex 多模态 5/10 根因修复: 客户端如果标错 media_type
+// (比如 PNG bytes 标 image/jpeg, 或 application/octet-stream), 之前直接
+// 透传给 OpenAI Responses, OpenAI 接受但 OCR/PDF 解析静默变差 → cctest
+// 多模态评分挂. 现在按 base64 magic header 嗅 MIME 覆盖 declared.
 func anthropicImageToDataURI(src *AnthropicImageSource) string {
-	if src == nil || src.Data == "" {
+	if src == nil {
 		return ""
 	}
-	mediaType := src.MediaType
+	data := normalizeBase64Payload(src.Data)
+	if data == "" {
+		return ""
+	}
+	mediaType := normalizeImageMediaType(src.MediaType, data)
+	return "data:" + mediaType + ";base64," + data
+}
+
+func normalizeImageMediaType(declared, data string) string {
+	switch sniffBase64MediaType(data) {
+	case "image/png":
+		return "image/png"
+	case "image/jpeg":
+		return "image/jpeg"
+	case "image/gif":
+		return "image/gif"
+	case "image/webp":
+		return "image/webp"
+	}
+	mediaType := strings.TrimSpace(declared)
 	if mediaType == "" {
 		mediaType = "image/png"
 	}
-	return "data:" + mediaType + ";base64," + src.Data
+	return mediaType
+}
+
+func normalizeDocumentMediaType(declared, data string) string {
+	if sniffBase64MediaType(data) == "application/pdf" {
+		return "application/pdf"
+	}
+	mediaType := strings.TrimSpace(declared)
+	if mediaType == "" {
+		mediaType = "application/pdf"
+	}
+	return downgradeFileMediaType(mediaType)
+}
+
+// normalizeBase64Payload 删 whitespace (有些客户端 base64 串里夹了换行)
+func normalizeBase64Payload(data string) string {
+	data = strings.TrimSpace(data)
+	if data == "" || !strings.ContainsAny(data, " \n\r\t") {
+		return data
+	}
+	var sb strings.Builder
+	sb.Grow(len(data))
+	for _, r := range data {
+		switch r {
+		case ' ', '\n', '\r', '\t':
+			continue
+		default:
+			sb.WriteRune(r)
+		}
+	}
+	return sb.String()
+}
+
+// sniffBase64MediaType decode base64 前 64 bytes 看 magic header
+func sniffBase64MediaType(data string) string {
+	head := decodeBase64Prefix(data, 64)
+	switch {
+	case bytes.HasPrefix(head, []byte("\x89PNG\r\n\x1a\n")):
+		return "image/png"
+	case bytes.HasPrefix(head, []byte{0xff, 0xd8, 0xff}):
+		return "image/jpeg"
+	case bytes.HasPrefix(head, []byte("GIF87a")) || bytes.HasPrefix(head, []byte("GIF89a")):
+		return "image/gif"
+	case len(head) >= 12 && bytes.Equal(head[:4], []byte("RIFF")) && bytes.Equal(head[8:12], []byte("WEBP")):
+		return "image/webp"
+	case bytes.HasPrefix(head, []byte("%PDF-")):
+		return "application/pdf"
+	default:
+		return ""
+	}
+}
+
+func decodeBase64Prefix(data string, maxDecoded int) []byte {
+	data = normalizeBase64Payload(data)
+	if strings.HasPrefix(data, "data:") {
+		if comma := strings.Index(data, ","); comma >= 0 {
+			data = data[comma+1:]
+		}
+	}
+	if data == "" || maxDecoded <= 0 {
+		return nil
+	}
+	maxChars := ((maxDecoded + 2) / 3) * 4
+	if len(data) > maxChars {
+		data = data[:maxChars]
+	}
+	if rem := len(data) % 4; rem != 0 {
+		if rem == 1 {
+			return nil
+		}
+		data += strings.Repeat("=", 4-rem)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		return nil
+	}
+	if len(decoded) > maxDecoded {
+		return decoded[:maxDecoded]
+	}
+	return decoded
 }
 
 // convertToolResultOutput extracts text and image content from a tool_result
@@ -771,26 +875,18 @@ func convertAnthropicDocumentBlock(b AnthropicContentBlock) []ResponsesContentPa
 	src := b.Source
 	switch src.Type {
 	case "base64":
-		if src.Data == "" {
+		// 2026-05-07 codex 多模态修复: 嗅 base64 magic header 校正 MIME,
+		// 客户端把 PDF 标 application/octet-stream 时 OpenAI 接受但解析变差.
+		data := normalizeBase64Payload(src.Data)
+		if data == "" {
 			return nil
 		}
-		mediaType := src.MediaType
-		if mediaType == "" {
-			mediaType = "application/pdf"
-		}
-		// Downgrade MIME types that OpenAI's Responses API rejects in its
-		// input_file allowlist (e.g. application/xml, text/tab-separated-values)
-		// to an equivalent type it accepts. See downgradeFileMediaType for the
-		// full map and rationale.
-		mediaType = downgradeFileMediaType(mediaType)
-		filename := b.Title
-		if filename == "" {
-			filename = defaultFilenameForMediaType(mediaType)
-		}
+		mediaType := normalizeDocumentMediaType(src.MediaType, data)
+		filename := documentFilename(b.Title, mediaType)
 		return []ResponsesContentPart{{
 			Type:     "input_file",
 			Filename: filename,
-			FileData: "data:" + mediaType + ";base64," + src.Data,
+			FileData: "data:" + mediaType + ";base64," + data,
 		}}
 
 	case "text":
@@ -868,6 +964,41 @@ func documentHeader(title, context string) string {
 	}
 	sb.WriteString("]\n\n")
 	return sb.String()
+}
+
+// documentFilename returns title (with auto-appended ext if missing) or
+// fallback default filename for the given media type.
+// 2026-05-07 codex 多模态修复: title 缺扩展名时按 MIME 自动补, 让 OpenAI
+// 文件类型推断更准.
+func documentFilename(title, mediaType string) string {
+	filename := strings.TrimSpace(title)
+	if filename == "" {
+		return defaultFilenameForMediaType(mediaType)
+	}
+	return ensureFilenameExtensionForMediaType(filename, mediaType)
+}
+
+func ensureFilenameExtensionForMediaType(filename, mediaType string) string {
+	lower := strings.ToLower(filename)
+	ext := ""
+	switch mediaType {
+	case "application/pdf":
+		ext = ".pdf"
+	case "text/plain":
+		ext = ".txt"
+	case "text/xml":
+		ext = ".xml"
+	case "text/csv":
+		ext = ".csv"
+	case "application/json":
+		ext = ".json"
+	case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+		ext = ".docx"
+	}
+	if ext == "" || strings.HasSuffix(lower, ext) {
+		return filename
+	}
+	return filename + ext
 }
 
 // defaultFilenameForMediaType returns a reasonable filename with extension

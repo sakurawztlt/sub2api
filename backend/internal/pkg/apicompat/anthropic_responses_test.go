@@ -1706,6 +1706,32 @@ func TestAnthropicToResponses_ImageEmptyMediaType(t *testing.T) {
 	assert.Equal(t, "data:image/png;base64,iVBOR", parts[0].ImageURL)
 }
 
+// 2026-05-07 codex 多模态 5/10 修复: 客户端标错 MIME (PNG bytes 标 jpeg)
+// 时, base64 magic header 嗅探覆盖 declared media_type → OpenAI OCR 不再
+// 静默变差.
+func TestAnthropicToResponses_ImageSniffsPNGWhenMediaTypeWrong(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:     "gpt-5.2",
+		MaxTokens: 1024,
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: json.RawMessage(`[
+				{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"iVBORw0KGgo="}}
+			]`)},
+		},
+	}
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+	var items []ResponsesInputItem
+	require.NoError(t, json.Unmarshal(resp.Input, &items))
+	require.Len(t, items, 1)
+	var parts []ResponsesContentPart
+	require.NoError(t, json.Unmarshal(items[0].Content, &parts))
+	require.Len(t, parts, 1)
+	assert.Equal(t, "input_image", parts[0].Type)
+	assert.Equal(t, "data:image/png;base64,iVBORw0KGgo=", parts[0].ImageURL,
+		"PNG header → 应该嗅成 image/png, 覆盖 jpeg 标记")
+}
+
 // ---------------------------------------------------------------------------
 // normalizeToolParameters tests
 // ---------------------------------------------------------------------------
@@ -1893,6 +1919,31 @@ func TestAnthropicToResponses_DocumentBase64EmptyMediaTypeDefaultsToPDF(t *testi
 	require.NoError(t, json.Unmarshal(items[0].Content, &parts))
 	require.Len(t, parts, 1)
 	assert.Equal(t, "data:application/pdf;base64,JVBERi0x", parts[0].FileData)
+}
+
+// 客户端标错 MIME (PDF bytes 标 application/octet-stream) 仍能正确识别
+// + 自动补 .pdf 扩展名 (帮 OpenAI 类型推断更准)
+func TestAnthropicToResponses_DocumentBase64PDFSniffsGenericMediaType(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:     "gpt-5.2",
+		MaxTokens: 1024,
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: json.RawMessage(`[
+				{"type":"document","title":"cctest","source":{"type":"base64","media_type":"application/octet-stream","data":"JVBERi0xLjAK"}}
+			]`)},
+		},
+	}
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+	var items []ResponsesInputItem
+	require.NoError(t, json.Unmarshal(resp.Input, &items))
+	var parts []ResponsesContentPart
+	require.NoError(t, json.Unmarshal(items[0].Content, &parts))
+	require.Len(t, parts, 1)
+	assert.Equal(t, "input_file", parts[0].Type)
+	assert.Equal(t, "cctest.pdf", parts[0].Filename, "title 缺扩展名时应自动补 .pdf")
+	assert.Equal(t, "data:application/pdf;base64,JVBERi0xLjAK", parts[0].FileData,
+		"PDF magic %PDF- → 应该嗅成 application/pdf, 覆盖 octet-stream")
 }
 
 func TestAnthropicToResponses_DocumentBase64DocxFilenameExtension(t *testing.T) {
