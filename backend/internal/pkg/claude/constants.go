@@ -89,7 +89,12 @@ const DefaultCacheControlTTL = "5m"
 // CLICurrentVersion 是 sub2api 当前对外伪装的 Claude Code CLI 版本号（三段 semver）。
 // 用于 billing attribution block 中的 cc_version=X.Y.Z.{fp} 前缀以及 fingerprint 计算。
 // 必须与 DefaultHeaders["User-Agent"] 中的版本号严格一致；不一致会被 Anthropic 判第三方。
-const CLICurrentVersion = "2.1.92"
+//
+// 2026-05-08 codex disguise round 3: 之前 2.1.92 跟 UA 2.1.119 不一致,
+// billing attribution block 会写 cc_version=2.1.92.{fp} 但 header
+// claude-cli/2.1.119 — Anthropic 后端可能据此判第三方. 同步到 2.1.119
+// 配合 UA. 后续重抓真实 CLI 时再统一更新.
+const CLICurrentVersion = "2.1.119"
 
 // FullClaudeCodeMimicryBetas 返回最"像"真实 Claude Code CLI 的完整 beta 列表，
 // 用于 OAuth 账号伪装成 Claude Code 时使用。

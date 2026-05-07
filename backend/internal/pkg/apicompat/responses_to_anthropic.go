@@ -361,11 +361,13 @@ func FinalizeResponsesAnthropicStream(state *ResponsesEventToAnthropicState) []A
 	// with zero output tokens means the upstream stream was empty.
 	noOutput := outputTokens <= 0 && state.ContentBlockIndex == 0 && !state.ContentBlockOpen
 	if noOutput {
+		// 2026-05-08 codex disguise round 3: 文案不能透 "upstream"
+		// 代理结构. 用 Anthropic 风格中性词.
 		events = append(events, AnthropicStreamEvent{
 			Type: "error",
 			Error: &AnthropicErrorBody{
 				Type:    "api_error",
-				Message: "upstream returned no content tokens (empty stream)",
+				Message: "The response stream ended unexpectedly. Please retry.",
 			},
 		})
 		state.MessageStopSent = true
