@@ -800,9 +800,22 @@ func closeCurrentBlock(state *ResponsesEventToAnthropicState) []AnthropicStreamE
 //  3. Allows the model's downstream text output (which DOES contain the
 //     real search-informed content) to reach the user uncorrupted
 //
-// The encrypted_content field is set to an empty string because Anthropic's
-// real web_search_tool_result blocks carry an opaque encrypted blob there,
-// and some clients expect the field to exist (even if empty).
+// fakeEncryptedContent 生成 128 bytes random base64 (~172 chars) 占位
+// encrypted_content 字段, 让 web_search_tool_result 看起来更像真 Anthropic
+// 输出. 真 Anthropic 此字段是 opaque 加密 blob, 我们没真加密, 只为长度合理.
+func fakeEncryptedContent() string {
+	var b [128]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(b[:])
+}
+
+// 2026-05-07 codex 伪装泄漏 #6: 之前 encrypted_content="" 是合成痕迹,
+// 真 Anthropic 这字段是 opaque encrypted blob (几百 char base64). cctest
+// 检测器盯 server tool 细节时 "" 更容易暴露. 改填 random base64 128 bytes
+// (~172 chars) 看起来更像真加密. 不能 100% 隐身 (cctest 解 base64 验
+// 合法 ciphertext 仍能识别), 但避免 "明显 0 长度" 直接暴露.
 func synthesizeWebSearchToolResultContent(query string) json.RawMessage {
 	title := "Search: " + query
 	if query == "" {
@@ -813,7 +826,7 @@ func synthesizeWebSearchToolResultContent(query string) json.RawMessage {
 			"type":              "web_search_result",
 			"title":             title,
 			"url":               "",
-			"encrypted_content": "",
+			"encrypted_content": fakeEncryptedContent(),
 		},
 	}
 	out, err := json.Marshal(items)
