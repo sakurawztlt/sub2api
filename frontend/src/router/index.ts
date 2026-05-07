@@ -163,6 +163,15 @@ const routes: RouteRecordRaw[] = [
       title: 'Key Usage',
     }
   },
+  {
+    path: '/legal/:documentId',
+    name: 'LegalDocument',
+    component: () => import('@/views/public/LegalDocumentView.vue'),
+    meta: {
+      requiresAuth: false,
+      title: 'Legal Document'
+    }
+  },
 
   // ==================== User Routes ====================
   {
