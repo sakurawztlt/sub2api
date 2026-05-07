@@ -302,9 +302,49 @@ func TestResponsesToAnthropic_ToolUse(t *testing.T) {
 	require.Len(t, anth.Content, 2)
 	assert.Equal(t, "text", anth.Content[0].Type)
 	assert.Equal(t, "tool_use", anth.Content[1].Type)
-	assert.Equal(t, "call_1", anth.Content[1].ID)
+	// 2026-05-07 codex 伪装泄漏修复: OpenAI call_xxx 必须映射成 toolu_xxx
+	// 给 Anthropic 客户, 不能原样返回 (call_xxx 是 OpenAI 风格暴露).
+	assert.Equal(t, "toolu_1", anth.Content[1].ID)
 	assert.Equal(t, "get_weather", anth.Content[1].Name)
 	assert.JSONEq(t, `{"city":"NYC"}`, string(anth.Content[1].Input))
+}
+
+// 2026-05-07 codex 伪装泄漏修复: 验证 toResponsesCallID + fromResponsesCallID
+// round trip lossless. 客户上来 toolu_xxx → toResponsesCallID → call_xxx 给
+// OpenAI 上游 → OpenAI 返 call_xxx → fromResponsesCallID → toolu_xxx 给客户.
+func TestCallIDRoundTripLossless(t *testing.T) {
+	cases := []string{
+		"AAA",                          // 任意字符
+		"ABCdef123",                    // alphanum
+		"Pf2nMQX1m9",                   // OpenAI 真实风格
+		"01HV6X8N3P9Q2K7T4M5R6Y8Z3W",   // ULID 风格
+		"a-b_c.d~e",                    // 含 url-safe 特殊字符
+	}
+	for _, body := range cases {
+		anthID := "toolu_" + body
+		openaiID := toResponsesCallID(anthID)
+		require.Equal(t, "call_"+body, openaiID, "toolu_→call_ 前缀替换")
+		backToAnth := fromResponsesCallID(openaiID)
+		require.Equal(t, anthID, backToAnth, "round trip lossless: %s", anthID)
+	}
+}
+
+// 客户上来 call_xxx (历史泄漏的 OpenAI 风格 id) 仍能 work — passthrough 给上游
+func TestToResponsesCallID_PassthroughCallPrefix(t *testing.T) {
+	assert.Equal(t, "call_AAA", toResponsesCallID("call_AAA"))
+}
+
+// 客户上来 toolu_xxx 是 Anthropic 标准, fromResponsesCallID passthrough
+func TestFromResponsesCallID_PassthroughTooluPrefix(t *testing.T) {
+	assert.Equal(t, "toolu_AAA", fromResponsesCallID("toolu_AAA"))
+}
+
+// fc_ 老格式 legacy 兼容
+func TestFromResponsesCallID_LegacyFcPrefix(t *testing.T) {
+	// fc_call_xxx → toolu_xxx (剥 fc_ 后 call_xxx 再映射)
+	assert.Equal(t, "toolu_AAA", fromResponsesCallID("fc_call_AAA"))
+	// fc_toolu_xxx → toolu_xxx (剥 fc_)
+	assert.Equal(t, "toolu_AAA", fromResponsesCallID("fc_toolu_AAA"))
 }
 
 func TestResponsesToAnthropic_ReadToolDropsEmptyPages(t *testing.T) {
@@ -569,7 +609,7 @@ func TestStreamingToolCall(t *testing.T) {
 	require.Len(t, events, 1)
 	assert.Equal(t, "content_block_start", events[0].Type)
 	assert.Equal(t, "tool_use", events[0].ContentBlock.Type)
-	assert.Equal(t, "call_1", events[0].ContentBlock.ID)
+	assert.Equal(t, "toolu_1", events[0].ContentBlock.ID)
 
 	// 3. arguments delta
 	events = ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
@@ -1604,7 +1644,7 @@ func TestAnthropicToResponses_ToolResultWithImage(t *testing.T) {
 
 	// function_call_output should have text-only output (no image).
 	assert.Equal(t, "function_call_output", items[2].Type)
-	assert.Equal(t, "toolu_1", items[2].CallID)
+	assert.Equal(t, "call_1", items[2].CallID)
 	assert.Equal(t, "(empty)", items[2].Output)
 
 	// Image should be in a separate user message.
@@ -2178,13 +2218,13 @@ func TestAnthropicToResponses_OrphanedToolResultSynthesizesPlaceholder(t *testin
 		// Find the placeholder function_call and the output.
 		var gotPlaceholder, gotOutput bool
 		for i, it := range items {
-			if it.Type == "function_call" && it.CallID == "toolu_orphan_1" {
+			if it.Type == "function_call" && it.CallID == "call_orphan_1" {
 				if it.Name != "orphan_tool_call_placeholder" {
 					t.Errorf("expected placeholder name, got %q", it.Name)
 				}
 				gotPlaceholder = true
 				// Next item should be the matching output
-				if i+1 < len(items) && items[i+1].Type == "function_call_output" && items[i+1].CallID == "toolu_orphan_1" {
+				if i+1 < len(items) && items[i+1].Type == "function_call_output" && items[i+1].CallID == "call_orphan_1" {
 					gotOutput = true
 				}
 			}
@@ -2214,10 +2254,10 @@ func TestAnthropicToResponses_OrphanedToolResultSynthesizesPlaceholder(t *testin
 		// Must contain both placeholder and its output, placeholder first.
 		var fcIdx, outIdx = -1, -1
 		for i, it := range items {
-			if it.Type == "function_call" && it.CallID == "toolu_ghost" {
+			if it.Type == "function_call" && it.CallID == "call_ghost" {
 				fcIdx = i
 			}
-			if it.Type == "function_call_output" && it.CallID == "toolu_ghost" {
+			if it.Type == "function_call_output" && it.CallID == "call_ghost" {
 				outIdx = i
 			}
 		}
@@ -2284,10 +2324,10 @@ func TestAnthropicToResponses_OrphanedToolResultSynthesizesPlaceholder(t *testin
 			if it.Type == "function_call" {
 				if it.Name == "orphan_tool_call_placeholder" {
 					placeholderCount++
-					assert.Equal(t, "toolu_orphan", it.CallID)
+					assert.Equal(t, "call_orphan", it.CallID)
 				} else {
 					realCount++
-					assert.Equal(t, "toolu_good", it.CallID)
+					assert.Equal(t, "call_good", it.CallID)
 				}
 			}
 		}
@@ -2480,7 +2520,7 @@ func TestAnthropicToResponses_ToolResultWithDocument(t *testing.T) {
 	require.Len(t, items, 4)
 
 	assert.Equal(t, "function_call_output", items[2].Type)
-	assert.Equal(t, "toolu_pdf", items[2].CallID)
+	assert.Equal(t, "call_pdf", items[2].CallID)
 	assert.Equal(t, "(empty)", items[2].Output)
 
 	assert.Equal(t, "user", items[3].Role)

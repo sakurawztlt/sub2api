@@ -542,25 +542,40 @@ func isAllowedOpenAINameByte(b byte) bool {
 	}
 }
 
-// toResponsesCallID preserves Anthropic tool IDs (toolu_xxx / call_xxx) as
-// Responses API call_id values verbatim. Claude Code echoes
-// tool_result.tool_use_id back unchanged, and ChatGPT Codex continuation
-// expects the function_call_output.call_id to match the original
-// function_call.call_id — so the round trip must be lossless.
+// toResponsesCallID maps Anthropic tool_use.id (toolu_xxx) to OpenAI Responses
+// function_call.call_id (call_xxx). Lossless round trip via prefix swap so
+// continuation works (客户回带 toolu_AAA → call_AAA 给 OpenAI 上游, OpenAI
+// 仍认识).
+//
+// 2026-05-07 codex 伪装泄漏修复: 之前直接 return id, 客户上来的 "toolu_AAA"
+// 给 OpenAI 上游时, 上游不认识 (因为之前 OpenAI 给的是 call_AAA), 所以保留
+// raw 反而导致 round trip 失效. 现在前缀替换:
+//   - "toolu_AAA" → "call_AAA"  (我们对 OpenAI 上游说话)
+//   - "call_AAA" passthrough    (客户已直接发 OpenAI 风格 id, 兼容)
+//   - 空 id passthrough          (caller 上层处理)
 func toResponsesCallID(id string) string {
+	if after, ok := strings.CutPrefix(id, "toolu_"); ok {
+		return "call_" + after
+	}
 	return id
 }
 
-// fromResponsesCallID reverses old prefixed IDs (legacy conversations on
-// disk may still carry "fc_toolu_…" / "fc_call_…") while preserving raw IDs
-// emitted under the new policy.
+// fromResponsesCallID maps OpenAI Responses function_call.call_id (call_xxx)
+// back to Anthropic tool_use.id (toolu_xxx) for client-facing output.
+//
+// 2026-05-07 codex 伪装泄漏修复: 之前 call_xxx 被原样返回给客户, 客户看到
+// OpenAI 风格 id = 伪装泄漏. 现在前缀替换, 客户永远只看到 toolu_xxx:
+//   - "call_AAA" → "toolu_AAA"  (用户可见)
+//   - "toolu_AAA" passthrough   (legacy / 客户原传, 不动)
+//   - "fc_toolu_…" / "fc_call_…" 老格式继续剥 fc_ (legacy 兼容)
 func fromResponsesCallID(id string) string {
 	if after, ok := strings.CutPrefix(id, "fc_"); ok {
-		// Only strip if the remainder doesn't look like it was already "fc_" prefixed.
-		// E.g. "fc_toolu_xxx" → "toolu_xxx", "fc_call_xxx" → "call_xxx"
 		if strings.HasPrefix(after, "toolu_") || strings.HasPrefix(after, "call_") {
-			return after
+			return fromResponsesCallID(after)
 		}
+	}
+	if after, ok := strings.CutPrefix(id, "call_"); ok {
+		return "toolu_" + after
 	}
 	return id
 }
