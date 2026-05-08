@@ -49,6 +49,10 @@ const (
 	BetaRedactThinking     = "redact-thinking-2026-02-12"
 	BetaContextManagement  = "context-management-2025-06-27"
 	BetaExtendedCacheTTL   = "extended-cache-ttl-2025-04-11"
+	// 5/8 codex #4 audit: cc-api anthropic_direct.go 已注入这两个 beta,
+	// sub2api 之前漏了 → 三仓 profile 不一致。补齐对齐 CLI 2.1.119+ 流量。
+	BetaAdvisorTool     = "advisor-tool-2026-03-01"
+	BetaAdvancedToolUse = "advanced-tool-use-2025-11-20"
 )
 
 // DroppedBetas 是转发时需要从 anthropic-beta header 中移除的 beta token 列表。
@@ -114,6 +118,9 @@ func FullClaudeCodeMimicryBetas() []string {
 		BetaEffort,
 		BetaContextManagement,
 		BetaExtendedCacheTTL,
+		// 5/8 codex #4 audit: 跟 cc-api anthropic_direct.go 对齐 CLI 2.1.119+ 抓包.
+		BetaAdvisorTool,
+		BetaAdvancedToolUse,
 	}
 }
 

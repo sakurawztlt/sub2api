@@ -1115,10 +1115,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			return resultWithUsage(), fmt.Errorf("first meaningful event timeout after %s", firstMeaningfulTimeout)
 
 		case <-keepaliveCh:
-			if clientDisconnected {
-				continue
-			}
-			if time.Since(lastDataAt) < keepaliveInterval {
+			if !shouldEmitKeepalivePing(clientDisconnected, firstMeaningfulSeen, time.Since(lastDataAt), keepaliveInterval) {
 				continue
 			}
 			// Send Anthropic-format ping event
@@ -1133,6 +1130,33 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			c.Writer.Flush()
 		}
 	}
+}
+
+// shouldEmitKeepalivePing decides whether the openai-messages stream loop
+// should emit an Anthropic ping event on this keepalive tick.
+//
+// codex 5/8 audit caught this: gin's ResponseWriter.Write implicitly
+// commits HTTP 200 on the first byte. If we send a ping before
+// firstMeaningfulSeen=true, the client sees a "200 stream" carrying only
+// ping events and no real content — and the firstMeaningfulEventTimeout
+// fallback (which would otherwise return 502) is bypassed because by then
+// the status is already locked. The client then sits there until upstream
+// closes the connection, looking like a successful empty stream.
+//
+// All four conditions must hold: client still connected, first meaningful
+// event already seen (status committed legitimately), enough quiet time
+// since last data event.
+func shouldEmitKeepalivePing(clientDisconnected, firstMeaningfulSeen bool, sinceLastData, interval time.Duration) bool {
+	if clientDisconnected {
+		return false
+	}
+	if !firstMeaningfulSeen {
+		return false
+	}
+	if sinceLastData < interval {
+		return false
+	}
+	return true
 }
 
 // writeAnthropicError writes an error response in Anthropic Messages API format.
