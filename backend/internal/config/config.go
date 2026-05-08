@@ -638,6 +638,19 @@ type GatewayConfig struct {
 	// MaxLineSize: 上游 SSE 单行最大字节数（0使用默认值）
 	MaxLineSize int `mapstructure:"max_line_size"`
 
+	// FirstMeaningfulEventTimeoutSeconds (codex 5/8 audit):
+	// 首个 meaningful event (text_delta / thinking_delta / tool_use /
+	// terminal usage) 出现前的超时. 超时后此次请求 abort + 返 502, 而不
+	// 是空流 200 等 180s. 0 = 禁用 (回到旧行为, 立即 200).
+	// 默认 60s.
+	FirstMeaningfulEventTimeoutSeconds int `mapstructure:"first_meaningful_event_timeout_seconds"`
+
+	// DrainAfterClientDisconnectMaxSeconds (codex 5/8 audit):
+	// 客户断开后继续 drain upstream 给 billing 的最大时间. 超过 abort
+	// upstream 释放账号并发. 0 = 不限 (旧行为, 永远 drain).
+	// 默认 30s.
+	DrainAfterClientDisconnectMaxSeconds int `mapstructure:"drain_after_client_disconnect_max_seconds"`
+
 	// 是否记录上游错误响应体摘要（避免输出请求内容）
 	LogUpstreamErrorBody bool `mapstructure:"log_upstream_error_body"`
 	// 上游错误响应体记录最大字节数（超过会截断）
@@ -1696,6 +1709,8 @@ func setDefaults() {
 	viper.SetDefault("gateway.stream_data_interval_timeout", 180)
 	viper.SetDefault("gateway.stream_keepalive_interval", 10)
 	viper.SetDefault("gateway.max_line_size", 500*1024*1024)
+	viper.SetDefault("gateway.first_meaningful_event_timeout_seconds", 60)
+	viper.SetDefault("gateway.drain_after_client_disconnect_max_seconds", 30)
 	viper.SetDefault("gateway.scheduling.sticky_session_max_waiting", 3)
 	viper.SetDefault("gateway.scheduling.sticky_session_wait_timeout", 120*time.Second)
 	viper.SetDefault("gateway.scheduling.fallback_wait_timeout", 30*time.Second)
@@ -2275,6 +2290,20 @@ func (c *Config) Validate() error {
 	if c.Gateway.StreamDataIntervalTimeout != 0 &&
 		(c.Gateway.StreamDataIntervalTimeout < 30 || c.Gateway.StreamDataIntervalTimeout > 300) {
 		return fmt.Errorf("gateway.stream_data_interval_timeout must be 0 or between 30-300 seconds")
+	}
+	if c.Gateway.FirstMeaningfulEventTimeoutSeconds < 0 {
+		return fmt.Errorf("gateway.first_meaningful_event_timeout_seconds must be non-negative")
+	}
+	if c.Gateway.FirstMeaningfulEventTimeoutSeconds != 0 &&
+		(c.Gateway.FirstMeaningfulEventTimeoutSeconds < 10 || c.Gateway.FirstMeaningfulEventTimeoutSeconds > 300) {
+		return fmt.Errorf("gateway.first_meaningful_event_timeout_seconds must be 0 or between 10-300 seconds")
+	}
+	if c.Gateway.DrainAfterClientDisconnectMaxSeconds < 0 {
+		return fmt.Errorf("gateway.drain_after_client_disconnect_max_seconds must be non-negative")
+	}
+	if c.Gateway.DrainAfterClientDisconnectMaxSeconds != 0 &&
+		(c.Gateway.DrainAfterClientDisconnectMaxSeconds < 5 || c.Gateway.DrainAfterClientDisconnectMaxSeconds > 600) {
+		return fmt.Errorf("gateway.drain_after_client_disconnect_max_seconds must be 0 or between 5-600 seconds")
 	}
 	if c.Gateway.StreamKeepaliveInterval < 0 {
 		return fmt.Errorf("gateway.stream_keepalive_interval must be non-negative")

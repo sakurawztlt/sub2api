@@ -721,14 +721,25 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 
-	if s.responseHeaderFilter != nil {
-		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	// 5/8 codex audit #1+#2: WriteHeader(200) 延后到首个 meaningful event.
+	// 原本立即写 200 → 上游空流时客户傻等 stream_data_interval_timeout
+	// (默认 180s) 才知道, NewAPI 记成"成功 0 输出". 现在: header 没写时
+	// 出错可走 502, 客户立刻知道没数据. 写 helper 防多次 WriteHeader.
+	headerWritten := false
+	writeStreamHeader := func() {
+		if headerWritten {
+			return
+		}
+		if s.responseHeaderFilter != nil {
+			responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+		}
+		c.Writer.Header().Set("Content-Type", "text/event-stream")
+		c.Writer.Header().Set("Cache-Control", "no-cache")
+		c.Writer.Header().Set("Connection", "keep-alive")
+		c.Writer.Header().Set("X-Accel-Buffering", "no")
+		c.Writer.WriteHeader(http.StatusOK)
+		headerWritten = true
 	}
-	c.Writer.Header().Set("Content-Type", "text/event-stream")
-	c.Writer.Header().Set("Cache-Control", "no-cache")
-	c.Writer.Header().Set("Connection", "keep-alive")
-	c.Writer.Header().Set("X-Accel-Buffering", "no")
-	c.Writer.WriteHeader(http.StatusOK)
 
 	state := apicompat.NewResponsesEventToAnthropicState()
 	state.Model = originalModel
@@ -736,7 +747,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	responseID := ""
 	var firstTokenMs *int
 	firstChunk := true
+	firstMeaningfulSeen := false // codex 5/8 #1: WriteHeader 直到见到 meaningful event
 	clientDisconnected := false
+	var disconnectedAt time.Time // codex 5/8 #3: drain after disconnect 上限
 
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
@@ -757,6 +770,25 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	var intervalCh <-chan time.Time
 	if intervalTicker != nil {
 		intervalCh = intervalTicker.C
+	}
+
+	// codex 5/8 #1+#2: first meaningful event timeout. 0 关.
+	firstMeaningfulTimeout := time.Duration(0)
+	if s.cfg != nil && s.cfg.Gateway.FirstMeaningfulEventTimeoutSeconds > 0 {
+		firstMeaningfulTimeout = time.Duration(s.cfg.Gateway.FirstMeaningfulEventTimeoutSeconds) * time.Second
+	}
+	var firstMeaningfulDeadlineCh <-chan time.Time
+	var firstMeaningfulTimer *time.Timer
+	if firstMeaningfulTimeout > 0 {
+		firstMeaningfulTimer = time.NewTimer(firstMeaningfulTimeout)
+		defer firstMeaningfulTimer.Stop()
+		firstMeaningfulDeadlineCh = firstMeaningfulTimer.C
+	}
+
+	// codex 5/8 #3: drain after client disconnect 上限. 0 关.
+	drainMax := time.Duration(0)
+	if s.cfg != nil && s.cfg.Gateway.DrainAfterClientDisconnectMaxSeconds > 0 {
+		drainMax = time.Duration(s.cfg.Gateway.DrainAfterClientDisconnectMaxSeconds) * time.Second
 	}
 
 	// resultWithUsage builds the final result snapshot.
@@ -808,6 +840,32 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 
 		// Convert to Anthropic events
 		events := apicompat.ResponsesEventToAnthropicEvents(&event, state)
+
+		// codex 5/8 #1: 见到首个 meaningful event 才 WriteHeader(200).
+		// 没见过 meaningful 之前不 forward 任何 SSE (会迫使 client 看到
+		// 200 + 一堆没用的 message_start/ping 然后 hang). 见到后立刻
+		// flush 之前积累的 metadata events.
+		if !firstMeaningfulSeen {
+			for _, evt := range events {
+				if isMeaningfulAnthropicEvent(evt) {
+					firstMeaningfulSeen = true
+					writeStreamHeader()
+					if firstMeaningfulTimer != nil {
+						firstMeaningfulTimer.Stop()
+					}
+					break
+				}
+			}
+		}
+
+		if !firstMeaningfulSeen {
+			// 还没真实数据, 不写 client. 但仍要让 caller 知道是不是 terminal
+			// (terminal 事件来 isTerminalEvent=true 但 events list 里没
+			// meaningful — 说明上游 0 输出, 让 caller 走 finalize 错误路径).
+			return isTerminalEvent
+		}
+
+		// 此时 header 已写, 正常 forward
 		if !clientDisconnected {
 			for _, evt := range events {
 				sse, err := apicompat.ResponsesAnthropicEventToSSE(evt)
@@ -820,6 +878,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				}
 				if _, err := fmt.Fprint(c.Writer, sse); err != nil {
 					clientDisconnected = true
+					disconnectedAt = time.Now()
 					logger.L().Info("openai messages stream: client disconnected, continuing to drain upstream for billing",
 						zap.String("request_id", requestID),
 					)
@@ -940,6 +999,17 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	lastDataAt := time.Now()
 
 	for {
+		// codex 5/8 #3: drain max — client 断开后超过 drainMax 强制 abort.
+		// 防"客户走了上游还跑 180s 占账号并发"的浪费.
+		if clientDisconnected && drainMax > 0 && !disconnectedAt.IsZero() &&
+			time.Since(disconnectedAt) > drainMax {
+			logger.L().Info("openai messages stream: drain after disconnect exceeded max, aborting",
+				zap.String("request_id", requestID),
+				zap.Duration("drain_max", drainMax),
+				zap.Duration("disconnect_age", time.Since(disconnectedAt)),
+			)
+			return resultWithUsage(), fmt.Errorf("drain after disconnect exceeded max %s", drainMax)
+		}
 		select {
 		case ev, ok := <-events:
 			if !ok {
@@ -977,6 +1047,22 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				zap.Duration("interval", streamInterval),
 			)
 			return resultWithUsage(), fmt.Errorf("stream data interval timeout")
+
+		case <-firstMeaningfulDeadlineCh:
+			// codex 5/8 #2: 首个 meaningful event 超时. 如果还没 WriteHeader,
+			// 我们能干净返 error 让 caller 改 status (502). 之前是傻等
+			// stream_data_interval_timeout 默认 180s 才发现空流.
+			if firstMeaningfulSeen {
+				// 已经见过 meaningful, 此 timer 残留 (理论上 Stop 了不会到这).
+				continue
+			}
+			logger.L().Warn("openai messages stream: first meaningful event timeout",
+				zap.String("request_id", requestID),
+				zap.String("model", originalModel),
+				zap.Duration("timeout", firstMeaningfulTimeout),
+				zap.Bool("header_written", headerWritten),
+			)
+			return resultWithUsage(), fmt.Errorf("first meaningful event timeout after %s", firstMeaningfulTimeout)
 
 		case <-keepaliveCh:
 			if clientDisconnected {
@@ -1022,4 +1108,38 @@ func copyOpenAIUsageFromResponsesUsage(usage *apicompat.ResponsesUsage) OpenAIUs
 		result.CacheReadInputTokens = usage.InputTokensDetails.CachedTokens
 	}
 	return result
+}
+
+// isMeaningfulAnthropicEvent codex 5/8 audit #1: 区分真实数据 vs 元数据.
+//   真实 (返 true): content_block_delta (text/thinking/input_json/signature),
+//                  content_block_start tool_use/server_tool_use,
+//                  message_delta (含 usage), message_stop, error.
+//   元数据 (返 false): message_start, ping, content_block_start text/thinking
+//                    (空块, 还没 token), content_block_stop.
+//
+// 用 WriteHeader(200) gating: 没收到 meaningful 之前不写 200, 让上游空流
+// timeout 走 502 错误返回, 而不是空 200 等 180s.
+func isMeaningfulAnthropicEvent(e apicompat.AnthropicStreamEvent) bool {
+	switch e.Type {
+	case "content_block_delta":
+		return true
+	case "content_block_start":
+		if e.ContentBlock != nil {
+			t := e.ContentBlock.Type
+			if t == "tool_use" || t == "server_tool_use" {
+				return true
+			}
+		}
+		return false
+	case "message_delta":
+		// 含 usage / stop_reason — 算 meaningful (上游有真实 terminal)
+		return true
+	case "message_stop":
+		return true
+	case "error":
+		// 上游主动 error event, 算 meaningful (有真实信号要 forward)
+		return true
+	default:
+		return false
+	}
 }
