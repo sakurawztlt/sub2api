@@ -751,6 +751,14 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	clientDisconnected := false
 	var disconnectedAt time.Time // codex 5/8 #3: drain after disconnect 上限
 
+	// R29 v25 cctest 签名校验失败教训: 没 forward 累积的 metadata events
+	// (message_start / content_block_start text/thinking / ping) 给客户,
+	// 客户拿到的 SSE 流缺 message_start, cctest 校验"流必须以 message_start
+	// 开头" → fail. 修法: 累积 metadata events 等 meaningful 一次性 flush.
+	// maxPending 防上游 metadata flood 内存爆炸.
+	var pendingEvents []apicompat.AnthropicStreamEvent
+	const maxPendingEvents = 100
+
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
 	if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
@@ -841,27 +849,69 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		// Convert to Anthropic events
 		events := apicompat.ResponsesEventToAnthropicEvents(&event, state)
 
-		// codex 5/8 #1: 见到首个 meaningful event 才 WriteHeader(200).
-		// 没见过 meaningful 之前不 forward 任何 SSE (会迫使 client 看到
-		// 200 + 一堆没用的 message_start/ping 然后 hang). 见到后立刻
-		// flush 之前积累的 metadata events.
+		// codex 5/8 #1 + R29 修: 见到首个 meaningful event 才 WriteHeader(200),
+		// 但**累积** metadata events (message_start / content_block_start /
+		// ping), 触发 meaningful 时一次性 flush. 之前 v25 的 bug 是直接
+		// drop metadata events 导致 cctest 签名校验失败 (流缺 message_start).
 		if !firstMeaningfulSeen {
+			// 累积所有 events (含 metadata + 当次的 meaningful)
+			pendingEvents = append(pendingEvents, events...)
+
+			// maxPendingEvents 防上游 metadata flood 内存爆炸. 触发后当成
+			// 空流处理 — 让 first_meaningful_event_timeout 自然 fire 走 502.
+			if len(pendingEvents) > maxPendingEvents {
+				logger.L().Warn("openai messages stream: pending metadata events overflow, dropping (treat as empty stream)",
+					zap.String("request_id", requestID),
+					zap.Int("max_pending", maxPendingEvents),
+				)
+				pendingEvents = nil
+				return isTerminalEvent
+			}
+
+			// 检查 events 里是否有 meaningful
+			seenMeaningful := false
 			for _, evt := range events {
 				if isMeaningfulAnthropicEvent(evt) {
-					firstMeaningfulSeen = true
-					writeStreamHeader()
-					if firstMeaningfulTimer != nil {
-						firstMeaningfulTimer.Stop()
-					}
+					seenMeaningful = true
 					break
 				}
 			}
-		}
+			if !seenMeaningful {
+				// 还没真实数据, 累积继续等. caller 看 isTerminalEvent 决定终止.
+				return isTerminalEvent
+			}
 
-		if !firstMeaningfulSeen {
-			// 还没真实数据, 不写 client. 但仍要让 caller 知道是不是 terminal
-			// (terminal 事件来 isTerminalEvent=true 但 events list 里没
-			// meaningful — 说明上游 0 输出, 让 caller 走 finalize 错误路径).
+			// 触发! WriteHeader + 一次性 flush 所有累积的 events 给客户.
+			firstMeaningfulSeen = true
+			writeStreamHeader()
+			if firstMeaningfulTimer != nil {
+				firstMeaningfulTimer.Stop()
+			}
+
+			if !clientDisconnected {
+				for _, evt := range pendingEvents {
+					sse, err := apicompat.ResponsesAnthropicEventToSSE(evt)
+					if err != nil {
+						logger.L().Warn("openai messages stream: failed to marshal pending event",
+							zap.Error(err),
+							zap.String("request_id", requestID),
+						)
+						continue
+					}
+					if _, err := fmt.Fprint(c.Writer, sse); err != nil {
+						clientDisconnected = true
+						disconnectedAt = time.Now()
+						logger.L().Info("openai messages stream: client disconnected during initial flush",
+							zap.String("request_id", requestID),
+						)
+						break
+					}
+				}
+				if !clientDisconnected {
+					c.Writer.Flush()
+				}
+			}
+			pendingEvents = nil // 释放, 后续走 normal 路径
 			return isTerminalEvent
 		}
 

@@ -1709,8 +1709,12 @@ func setDefaults() {
 	viper.SetDefault("gateway.stream_data_interval_timeout", 180)
 	viper.SetDefault("gateway.stream_keepalive_interval", 10)
 	viper.SetDefault("gateway.max_line_size", 500*1024*1024)
-	viper.SetDefault("gateway.first_meaningful_event_timeout_seconds", 60)
-	viper.SetDefault("gateway.drain_after_client_disconnect_max_seconds", 30)
+	// R29 v25→v26 调整: 60s 太严, opus thinking 大请求 60s+ 才出第一个
+	// thinking_delta 被误伤. 改 120s 给慢请求空间, 同时仍能在 ~3min 范围
+	// 内 catch 真空流 (vs 旧版 180s 慢请求).
+	viper.SetDefault("gateway.first_meaningful_event_timeout_seconds", 120)
+	// 30s 太严, 客户断开后 thinking 模型 30s 内可能没新 token. 改 90s.
+	viper.SetDefault("gateway.drain_after_client_disconnect_max_seconds", 90)
 	viper.SetDefault("gateway.scheduling.sticky_session_max_waiting", 3)
 	viper.SetDefault("gateway.scheduling.sticky_session_wait_timeout", 120*time.Second)
 	viper.SetDefault("gateway.scheduling.fallback_wait_timeout", 30*time.Second)
