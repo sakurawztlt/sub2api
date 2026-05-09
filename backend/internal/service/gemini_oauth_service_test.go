@@ -1086,6 +1086,7 @@ func TestGeminiOAuthService_RefreshAccountToken_WithProxy(t *testing.T) {
 				Protocol: "http",
 				Host:     "proxy.test",
 				Port:     3128,
+				Status:   StatusActive,
 			}, nil
 		},
 	}

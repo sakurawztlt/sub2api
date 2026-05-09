@@ -323,12 +323,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		wsHost = normalizeOpenAIWSLogValue(parsedURL.Host)
 		wsPath = normalizeOpenAIWSLogValue(parsedURL.Path)
 	}
+	proxyURL := account.ProxyURL()
 	logOpenAIWSV2Passthrough(
 		"relay_dial_start account_id=%d ws_host=%s ws_path=%s proxy_enabled=%v",
 		account.ID,
 		wsHost,
 		wsPath,
-		account.ProxyID != nil && account.Proxy != nil,
+		proxyURL != "",
 	)
 
 	isCodexCLI := false
@@ -339,11 +340,6 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		isCodexCLI = true
 	}
 	headers, _ := s.buildOpenAIWSHeaders(c, account, token, wsDecision, isCodexCLI, "", "", "")
-	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
-		proxyURL = account.Proxy.URL()
-	}
-
 	dialer := s.getOpenAIWSPassthroughDialer()
 	if dialer == nil {
 		return errors.New("openai ws passthrough dialer is nil")

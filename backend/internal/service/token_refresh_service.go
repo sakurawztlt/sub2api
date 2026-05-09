@@ -485,7 +485,7 @@ func (s *TokenRefreshService) ensureOpenAIPrivacy(ctx context.Context, account *
 	var proxyURL string
 	if account.ProxyID != nil && s.proxyRepo != nil {
 		if p, err := s.proxyRepo.GetByID(ctx, *account.ProxyID); err == nil && p != nil {
-			proxyURL = p.URL()
+			proxyURL = p.ActiveURL()
 		}
 	}
 
@@ -530,7 +530,7 @@ func (s *TokenRefreshService) ensureAntigravityPrivacy(ctx context.Context, acco
 	var proxyURL string
 	if account.ProxyID != nil && s.proxyRepo != nil {
 		if p, err := s.proxyRepo.GetByID(ctx, *account.ProxyID); err == nil && p != nil {
-			proxyURL = p.URL()
+			proxyURL = p.ActiveURL()
 		}
 	}
 

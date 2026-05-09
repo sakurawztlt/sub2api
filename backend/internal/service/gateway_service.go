@@ -4658,7 +4658,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
 		if !account.IsCustomBaseURLEnabled() || account.GetCustomBaseURL() == "" {
-			proxyURL = account.Proxy.URL()
+			proxyURL = account.Proxy.ActiveURL()
 		}
 	}
 
@@ -5163,7 +5163,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
-		proxyURL = account.Proxy.URL()
+		proxyURL = account.Proxy.ActiveURL()
 	}
 
 	logger.LegacyPrintf("service.gateway", "[Anthropic 自动透传] 命中 API Key 透传分支: account=%d name=%s model=%s stream=%v",
@@ -5806,7 +5806,7 @@ func (s *GatewayService) forwardBedrock(
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
-		proxyURL = account.Proxy.URL()
+		proxyURL = account.Proxy.ActiveURL()
 	}
 
 	logger.LegacyPrintf("service.gateway", "[Bedrock] 命中 Bedrock 分支: account=%d name=%s model=%s->%s stream=%v",
@@ -9071,7 +9071,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
 		if !account.IsCustomBaseURLEnabled() || account.GetCustomBaseURL() == "" {
-			proxyURL = account.Proxy.URL()
+			proxyURL = account.Proxy.ActiveURL()
 		}
 	}
 
@@ -9186,7 +9186,7 @@ func (s *GatewayService) forwardCountTokensAnthropicAPIKeyPassthrough(ctx contex
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
-		proxyURL = account.Proxy.URL()
+		proxyURL = account.Proxy.ActiveURL()
 	}
 
 	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
@@ -9500,7 +9500,7 @@ func (s *GatewayService) countTokensError(c *gin.Context, status int, errType, m
 func (s *GatewayService) buildCustomRelayURL(baseURL, path string, account *Account) string {
 	u := strings.TrimRight(baseURL, "/") + path + "?beta=true"
 	if account.ProxyID != nil && account.Proxy != nil {
-		proxyURL := account.Proxy.URL()
+		proxyURL := account.Proxy.ActiveURL()
 		if proxyURL != "" {
 			u += "&proxy=" + url.QueryEscape(proxyURL)
 		}

@@ -70,7 +70,7 @@ func (s *OpenAIOAuthService) GenerateAuthURL(ctx context.Context, proxyID *int64
 			return nil, infraerrors.Newf(http.StatusBadRequest, "OPENAI_OAUTH_PROXY_NOT_FOUND", "proxy not found: %v", err)
 		}
 		if proxy != nil {
-			proxyURL = proxy.URL()
+			proxyURL = proxy.ActiveURL()
 		}
 	}
 
@@ -149,7 +149,7 @@ func (s *OpenAIOAuthService) ExchangeCode(ctx context.Context, input *OpenAIExch
 			return nil, infraerrors.Newf(http.StatusBadRequest, "OPENAI_OAUTH_PROXY_NOT_FOUND", "proxy not found: %v", err)
 		}
 		if proxy != nil {
-			proxyURL = proxy.URL()
+			proxyURL = proxy.ActiveURL()
 		}
 	}
 
@@ -320,7 +320,7 @@ func (s *OpenAIOAuthService) RefreshAccountToken(ctx context.Context, account *A
 	if account.ProxyID != nil {
 		proxy, err := s.proxyRepo.GetByID(ctx, *account.ProxyID)
 		if err == nil && proxy != nil {
-			proxyURL = proxy.URL()
+			proxyURL = proxy.ActiveURL()
 		}
 	}
 

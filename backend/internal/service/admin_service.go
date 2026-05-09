@@ -3512,7 +3512,7 @@ func (s *adminServiceImpl) EnsureOpenAIPrivacy(ctx context.Context, account *Acc
 	var proxyURL string
 	if account.ProxyID != nil {
 		if p, err := s.proxyRepo.GetByID(ctx, *account.ProxyID); err == nil && p != nil {
-			proxyURL = p.URL()
+			proxyURL = p.ActiveURL()
 		}
 	}
 
@@ -3542,7 +3542,7 @@ func (s *adminServiceImpl) ForceOpenAIPrivacy(ctx context.Context, account *Acco
 	var proxyURL string
 	if account.ProxyID != nil {
 		if p, err := s.proxyRepo.GetByID(ctx, *account.ProxyID); err == nil && p != nil {
-			proxyURL = p.URL()
+			proxyURL = p.ActiveURL()
 		}
 	}
 
@@ -3585,7 +3585,7 @@ func (s *adminServiceImpl) EnsureAntigravityPrivacy(ctx context.Context, account
 	var proxyURL string
 	if account.ProxyID != nil {
 		if p, err := s.proxyRepo.GetByID(ctx, *account.ProxyID); err == nil && p != nil {
-			proxyURL = p.URL()
+			proxyURL = p.ActiveURL()
 		}
 	}
 
@@ -3618,7 +3618,7 @@ func (s *adminServiceImpl) ForceAntigravityPrivacy(ctx context.Context, account 
 	var proxyURL string
 	if account.ProxyID != nil {
 		if p, err := s.proxyRepo.GetByID(ctx, *account.ProxyID); err == nil && p != nil {
-			proxyURL = p.URL()
+			proxyURL = p.ActiveURL()
 		}
 	}
 

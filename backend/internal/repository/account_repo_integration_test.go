@@ -496,6 +496,27 @@ func (s *AccountRepoSuite) TestPreload_And_VirtualFields() {
 	s.Require().Equal(group.ID, accounts[0].GroupIDs[0])
 }
 
+func (s *AccountRepoSuite) TestPreload_SkipsDisabledProxy() {
+	proxy := mustCreateProxy(s.T(), s.client, &service.Proxy{
+		Name:   "p-disabled",
+		Status: service.StatusDisabled,
+	})
+	account := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:    "acc-disabled-proxy",
+		ProxyID: &proxy.ID,
+	})
+
+	got, err := s.repo.GetByID(s.ctx, account.ID)
+	s.Require().NoError(err, "GetByID")
+	s.Require().Nil(got.Proxy, "disabled proxy should not be preloaded")
+
+	accounts, page, err := s.repo.ListWithFilters(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10}, "", "", "", "acc-disabled-proxy", 0, "")
+	s.Require().NoError(err, "ListWithFilters")
+	s.Require().Equal(int64(1), page.Total)
+	s.Require().Len(accounts, 1)
+	s.Require().Nil(accounts[0].Proxy, "disabled proxy should not be loaded in list results")
+}
+
 // --- GroupBinding / AddToGroup / RemoveFromGroup / BindGroups / GetGroups ---
 
 func (s *AccountRepoSuite) TestGroupBinding_And_BindGroups() {

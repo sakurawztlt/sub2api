@@ -34,14 +34,14 @@ func TestProxyURL(t *testing.T) {
 			want: "socks5://user:pass@socks.example.com:1080",
 		},
 		{
-			name: "username only keeps no auth for compatibility",
+			name: "username only",
 			proxy: Proxy{
 				Protocol: "http",
 				Host:     "proxy.example.com",
 				Port:     8080,
 				Username: "user-only",
 			},
-			want: "http://proxy.example.com:8080",
+			want: "http://user-only@proxy.example.com:8080",
 		},
 		{
 			name: "with special characters in credentials",
@@ -62,6 +62,52 @@ func TestProxyURL(t *testing.T) {
 			t.Parallel()
 			if got := tc.proxy.URL(); got != tc.want {
 				t.Fatalf("Proxy.URL() mismatch: got=%q want=%q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestProxyActiveURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		proxy *Proxy
+		want  string
+	}{
+		{
+			name: "active proxy",
+			proxy: &Proxy{
+				Protocol: "http",
+				Host:     "proxy.example.com",
+				Port:     8080,
+				Status:   StatusActive,
+			},
+			want: "http://proxy.example.com:8080",
+		},
+		{
+			name: "disabled proxy",
+			proxy: &Proxy{
+				Protocol: "http",
+				Host:     "proxy.example.com",
+				Port:     8080,
+				Status:   StatusDisabled,
+			},
+			want: "",
+		},
+		{
+			name:  "nil proxy",
+			proxy: nil,
+			want:  "",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tc.proxy.ActiveURL(); got != tc.want {
+				t.Fatalf("Proxy.ActiveURL() mismatch: got=%q want=%q", got, tc.want)
 			}
 		})
 	}

@@ -250,7 +250,9 @@ func (s *SettingService) resolveProviderProxyURLs(ctx context.Context, cfg *WebS
 	}
 	result := make(map[int64]string, len(proxies))
 	for _, px := range proxies {
-		result[px.ID] = px.URL()
+		if proxyURL := px.ActiveURL(); proxyURL != "" {
+			result[px.ID] = proxyURL
+		}
 	}
 	return result
 }

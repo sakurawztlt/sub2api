@@ -165,6 +165,7 @@ func TestOAuthService_GenerateAuthURL_WithProxy(t *testing.T) {
 				Protocol: "http",
 				Host:     "proxy.example.com",
 				Port:     8080,
+				Status:   StatusActive,
 			}, nil
 		},
 	}
@@ -524,6 +525,7 @@ func TestOAuthService_RefreshAccountToken_WithProxy(t *testing.T) {
 				Port:     1080,
 				Username: "user",
 				Password: "pass",
+				Status:   StatusActive,
 			}, nil
 		},
 	}

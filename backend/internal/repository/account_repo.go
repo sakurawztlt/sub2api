@@ -185,7 +185,9 @@ func (r *accountRepository) GetByIDs(ctx context.Context, ids []int64) ([]*servi
 	entAccounts, err := r.client.Account.
 		Query().
 		Where(dbaccount.IDIn(uniqueIDs...)).
-		WithProxy().
+		WithProxy(func(q *dbent.ProxyQuery) {
+			q.Where(dbproxy.StatusEQ(service.StatusActive))
+		}).
 		All(ctx)
 	if err != nil {
 		return nil, err
@@ -1618,7 +1620,10 @@ func (r *accountRepository) loadProxies(ctx context.Context, proxyIDs []int64) (
 		return proxyMap, nil
 	}
 
-	proxies, err := r.client.Proxy.Query().Where(dbproxy.IDIn(proxyIDs...)).All(ctx)
+	proxies, err := r.client.Proxy.Query().Where(
+		dbproxy.IDIn(proxyIDs...),
+		dbproxy.StatusEQ(service.StatusActive),
+	).All(ctx)
 	if err != nil {
 		return nil, err
 	}

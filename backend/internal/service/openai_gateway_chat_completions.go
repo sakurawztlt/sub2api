@@ -230,7 +230,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	// 7. Send request
 	proxyURL := ""
 	if account.Proxy != nil {
-		proxyURL = account.Proxy.URL()
+		proxyURL = account.Proxy.ActiveURL()
 	}
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 	if err != nil {

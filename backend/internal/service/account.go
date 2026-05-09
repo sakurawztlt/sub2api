@@ -77,6 +77,13 @@ func (a *Account) IsActive() bool {
 	return a.Status == StatusActive
 }
 
+func (a *Account) ProxyURL() string {
+	if a == nil || a.Proxy == nil {
+		return ""
+	}
+	return a.Proxy.ActiveURL()
+}
+
 // BillingRateMultiplier 返回账号计费倍率。
 // - nil 表示未配置/旧缓存缺字段，按 1.0 处理
 // - 允许 0，表示该账号计费为 0

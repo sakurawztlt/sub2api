@@ -21,7 +21,14 @@ type Proxy struct {
 }
 
 func (p *Proxy) IsActive() bool {
-	return p.Status == StatusActive
+	return p != nil && p.Status == StatusActive
+}
+
+func (p *Proxy) ActiveURL() string {
+	if !p.IsActive() {
+		return ""
+	}
+	return p.URL()
 }
 
 func (p *Proxy) URL() string {
@@ -29,8 +36,12 @@ func (p *Proxy) URL() string {
 		Scheme: p.Protocol,
 		Host:   net.JoinHostPort(p.Host, strconv.Itoa(p.Port)),
 	}
-	if p.Username != "" && p.Password != "" {
-		u.User = url.UserPassword(p.Username, p.Password)
+	if p.Username != "" {
+		if p.Password != "" {
+			u.User = url.UserPassword(p.Username, p.Password)
+		} else {
+			u.User = url.User(p.Username)
+		}
 	}
 	return u.String()
 }

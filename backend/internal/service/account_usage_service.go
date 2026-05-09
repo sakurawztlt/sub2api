@@ -629,7 +629,7 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
-		proxyURL = account.Proxy.URL()
+		proxyURL = account.Proxy.ActiveURL()
 	}
 	client, err := httppool.GetClient(httppool.Options{
 		ProxyURL:              proxyURL,
@@ -1133,7 +1133,7 @@ func (s *AccountUsageService) fetchOAuthUsageRaw(ctx context.Context, account *A
 
 	var proxyURL string
 	if account.ProxyID != nil && account.Proxy != nil {
-		proxyURL = account.Proxy.URL()
+		proxyURL = account.Proxy.ActiveURL()
 	}
 
 	// 构建完整的选项
