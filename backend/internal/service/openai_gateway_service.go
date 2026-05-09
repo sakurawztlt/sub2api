@@ -2426,15 +2426,17 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		markPatchSet("instructions", "You are a helpful coding assistant.")
 	}
 
-	// PR #2294 (issue #2280): 仅在请求显式带图片生成信号时才让 Codex image
-	// bridge 生效. 之前 isCodexCLI 单一 gate 太宽 — 普通 Codex 文本/代码请求会
-	// 被注入 image_generation tool, 模型可能在用户没要求时自发调图, 行为偏差
-	// + cctest 检测侧异常. codexImageGenerationBridgeShouldFire 检查:
-	//   - tools[] 已声明 image_generation
-	//   - tool_choice 选 image_generation
-	//   - input 含 input_image
-	//   - input 含历史 image_generation_call (continuation)
-	codexImageBridgeShouldApply := isCodexCLI && codexImageGenerationBridgeShouldFire(reqBody)
+	// 5/9 双层 defense (codex audit):
+	//   层 1 全局 config flag (CodexImageGenerationBridgeEnabled, 默认 false):
+	//     真 Claude API 没 image_generation 内置工具, 注入它=暴露伪装.
+	//     默认关闭跟真 Claude 行为一致 (问"画个图" → 无 image tool → GPT 答
+	//     "我不能画图"). admin 想恢复 Codex 画图能力可 ConfigMap 改 true.
+	//   层 2 PR #2294 intent gate (codexImageGenerationBridgeShouldFire):
+	//     即使全局开了, 也只在 4 种显式信号 (tools[] 含 image_generation /
+	//     tool_choice / input_image / 历史 image_generation_call) 命中时注入.
+	//     普通 Codex 写代码请求永远不被注入.
+	bridgeEnabled := s.cfg != nil && s.cfg.Gateway.CodexImageGenerationBridgeEnabled
+	codexImageBridgeShouldApply := bridgeEnabled && isCodexCLI && codexImageGenerationBridgeShouldFire(reqBody)
 	if codexImageBridgeShouldApply && ensureOpenAIResponsesImageGenerationTool(reqBody) {
 		bodyModified = true
 		disablePatch()

@@ -593,6 +593,18 @@ type GatewayConfig struct {
 	// ForceCodexCLI: 强制将 OpenAI `/v1/responses` 请求按 Codex CLI 处理。
 	// 用于网关未透传/改写 User-Agent 时的兼容兜底（默认关闭，避免影响其他客户端）。
 	ForceCodexCLI bool `mapstructure:"force_codex_cli"`
+	// CodexImageGenerationBridgeEnabled: 是否允许给 Codex CLI 请求注入
+	// `image_generation` 工具及对应的 bridge instructions。
+	//
+	// 5/9 默认 false (跟真 Claude 一致 — Anthropic Claude API 没有
+	// image_generation 内置工具)。开启后 Codex 客户端能用 GPT 上游的画图
+	// 能力, 但同时暴露伪装 (上游请求多 image_generation 工具名 + 客户响应
+	// 出现 image_generation_call 形态, 跟真 Claude 不一致).
+	//
+	// 即便启用, 也只在 codexImageGenerationBridgeShouldFire 命中
+	// (tools 含 image_generation / tool_choice 选 image_generation /
+	// input 含 input_image / 历史 image_generation_call) 时才注入。
+	CodexImageGenerationBridgeEnabled bool `mapstructure:"codex_image_generation_bridge_enabled"`
 	// ForcedCodexInstructionsTemplateFile: 服务端强制附加到 Codex 顶层 instructions 的模板文件路径。
 	// 模板渲染后会直接覆盖最终 instructions；若需要保留客户端 system 转换结果，请在模板中显式引用 {{ .ExistingInstructions }}。
 	ForcedCodexInstructionsTemplateFile string `mapstructure:"forced_codex_instructions_template_file"`
@@ -1644,6 +1656,9 @@ func setDefaults() {
 	viper.SetDefault("gateway.max_account_switches", 10)
 	viper.SetDefault("gateway.max_account_switches_gemini", 3)
 	viper.SetDefault("gateway.force_codex_cli", false)
+	// 5/9 安全默认: 关闭 Codex image bridge — 跟真 Claude 一致避免暴露伪装.
+	// admin 想恢复 Codex 画图: ConfigMap gateway.codex_image_generation_bridge_enabled=true.
+	viper.SetDefault("gateway.codex_image_generation_bridge_enabled", false)
 	viper.SetDefault("gateway.openai_passthrough_allow_timeout_headers", false)
 	// OpenAI Responses WebSocket（默认开启；可通过 force_http 紧急回滚）
 	viper.SetDefault("gateway.openai_ws.enabled", true)
