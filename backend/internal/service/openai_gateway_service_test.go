@@ -79,6 +79,33 @@ func (r stubOpenAIAccountRepo) ListSchedulableUngroupedByPlatform(ctx context.Co
 	return r.ListSchedulableByPlatform(ctx, platform)
 }
 
+// PR #2290 (rate limit recovery) 拉取这两个 list 接口拿候选账号. test stub 必须有
+// 否则 recoverOpenAIRateLimitedAccountBeforeNoAvailable → listOpenAIAccountsForRateLimitRecovery
+// 走到 ListByPlatform/ListByGroup 时 nil pointer panic.
+func (r stubOpenAIAccountRepo) ListByPlatform(ctx context.Context, platform string) ([]Account, error) {
+	out := make([]Account, 0, len(r.accounts))
+	for _, acc := range r.accounts {
+		if acc.Platform == platform && acc.Status == StatusActive {
+			out = append(out, acc)
+		}
+	}
+	return out, nil
+}
+
+func (r stubOpenAIAccountRepo) ListByGroup(ctx context.Context, groupID int64) ([]Account, error) {
+	out := make([]Account, 0, len(r.accounts))
+	for _, acc := range r.accounts {
+		if acc.Status == StatusActive {
+			out = append(out, acc)
+		}
+	}
+	return out, nil
+}
+
+func (r stubOpenAIAccountRepo) ClearRateLimit(ctx context.Context, id int64) error {
+	return nil
+}
+
 type stubConcurrencyCache struct {
 	ConcurrencyCache
 	loadBatchErr    error

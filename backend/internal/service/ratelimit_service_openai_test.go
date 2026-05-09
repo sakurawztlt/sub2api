@@ -4,6 +4,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -73,10 +74,11 @@ func TestCalculateOpenAI429ResetTime_5hExhausted(t *testing.T) {
 	}
 }
 
-func TestCalculateOpenAI429ResetTime_NeitherExhausted_UsesMax(t *testing.T) {
+func TestCalculateOpenAI429ResetTime_NeitherExhausted_UsesFallback(t *testing.T) {
 	svc := &RateLimitService{}
 
-	// Neither limit at 100%, should use the longer reset time
+	// Neither limit is exhausted. The reset headers describe usage windows, not
+	// the transient burst limit that caused the 429.
 	headers := http.Header{}
 	headers.Set("x-codex-primary-used-percent", "80")
 	headers.Set("x-codex-primary-reset-after-seconds", "100000")
@@ -85,22 +87,9 @@ func TestCalculateOpenAI429ResetTime_NeitherExhausted_UsesMax(t *testing.T) {
 	headers.Set("x-codex-secondary-reset-after-seconds", "5000")
 	headers.Set("x-codex-secondary-window-minutes", "300")
 
-	before := time.Now()
 	resetAt := svc.calculateOpenAI429ResetTime(headers)
-	after := time.Now()
 
-	if resetAt == nil {
-		t.Fatal("expected non-nil resetAt")
-	}
-
-	// Should use the max (100000 seconds from 7d window)
-	expectedDuration := 100000 * time.Second
-	minExpected := before.Add(expectedDuration)
-	maxExpected := after.Add(expectedDuration)
-
-	if resetAt.Before(minExpected) || resetAt.After(maxExpected) {
-		t.Errorf("resetAt %v not in expected range [%v, %v]", resetAt, minExpected, maxExpected)
-	}
+	require.Nil(t, resetAt)
 }
 
 func TestCalculateOpenAI429ResetTime_NoCodexHeaders(t *testing.T) {
@@ -459,4 +448,29 @@ func TestCalculateOpenAI429ResetTime_5MinFallbackWhenNoReset(t *testing.T) {
 	if resetAt != nil {
 		t.Errorf("expected nil when no reset_after_seconds, got %v", resetAt)
 	}
+}
+
+func TestParseOpenAIRateLimitResetTime_RateLimitExceededClampsLongReset(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+
+	got := parseOpenAIRateLimitResetTimeAt(
+		[]byte(`{"error":{"type":"rate_limit_exceeded","message":"slow down","resets_in_seconds":432000}}`),
+		now,
+	)
+
+	require.NotNil(t, got)
+	require.Equal(t, now.Add(time.Duration(maxRateLimit429CooldownSeconds)*time.Second).Unix(), *got)
+}
+
+func TestParseOpenAIRateLimitResetTime_UsageLimitReachedKeepsLongReset(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	resetAt := now.Add(5 * 24 * time.Hour).Unix()
+
+	got := parseOpenAIRateLimitResetTimeAt(
+		[]byte(fmt.Sprintf(`{"error":{"type":"usage_limit_reached","message":"limit reached","resets_at":%d}}`, resetAt)),
+		now,
+	)
+
+	require.NotNil(t, got)
+	require.Equal(t, resetAt, *got)
 }

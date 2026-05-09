@@ -601,6 +601,11 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		return nil, 0, 0, 0, err
 	}
 	if len(accounts) == 0 {
+		// codex 5/9 PR#2290 audit #3: advanced scheduler no-available 路径
+		// 也调 recover (PR 主代码只补了 default scheduler).
+		if recovered, ok := s.service.recoverOpenAIRateLimitedSelectionBeforeNoAvailable(ctx, req.GroupID, req.SessionHash, req.RequestedModel, req.ExcludedIDs, req.RequireCompact, s.service.schedulingConfig()); ok {
+			return recovered, 0, 0, 0, nil
+		}
 		return nil, 0, 0, 0, noAvailableOpenAISelectionError(req.RequestedModel, false)
 	}
 
@@ -641,6 +646,10 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		})
 	}
 	if len(filtered) == 0 {
+		// codex 5/9 PR#2290 audit #3: advanced scheduler no-available 也补 recover.
+		if recovered, ok := s.service.recoverOpenAIRateLimitedSelectionBeforeNoAvailable(ctx, req.GroupID, req.SessionHash, req.RequestedModel, req.ExcludedIDs, req.RequireCompact, s.service.schedulingConfig()); ok {
+			return recovered, 0, 0, 0, nil
+		}
 		return nil, 0, 0, 0, noAvailableOpenAISelectionError(req.RequestedModel, false)
 	}
 
@@ -822,6 +831,10 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		selectionOrder = buildSelectionOrder(candidates)
 	}
 	if len(selectionOrder) == 0 {
+		// codex 5/9 PR#2290 audit #3: advanced scheduler no-available 补 recover.
+		if recovered, ok := s.service.recoverOpenAIRateLimitedSelectionBeforeNoAvailable(ctx, req.GroupID, req.SessionHash, req.RequestedModel, req.ExcludedIDs, req.RequireCompact, s.service.schedulingConfig()); ok {
+			return recovered, candidateCount, topK, loadSkew, nil
+		}
 		return nil, candidateCount, topK, loadSkew, noAvailableOpenAISelectionError(req.RequestedModel, req.RequireCompact && len(allCandidates) > 0)
 	}
 
@@ -887,6 +900,10 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 		}, candidateCount, topK, loadSkew, nil
 	}
 
+	// codex 5/9 PR#2290 audit #3: 全跑过都没拿到 → 试 recover (advanced scheduler 路径).
+	if recovered, ok := s.service.recoverOpenAIRateLimitedSelectionBeforeNoAvailable(ctx, req.GroupID, req.SessionHash, req.RequestedModel, req.ExcludedIDs, req.RequireCompact, s.service.schedulingConfig()); ok {
+		return recovered, candidateCount, topK, loadSkew, nil
+	}
 	return nil, candidateCount, topK, loadSkew, noAvailableOpenAISelectionError(req.RequestedModel, compactBlocked)
 }
 

@@ -57,6 +57,24 @@ func (r schedulerTestOpenAIAccountRepo) ListSchedulableUngroupedByPlatform(ctx c
 	return r.ListSchedulableByPlatform(ctx, platform)
 }
 
+func (r schedulerTestOpenAIAccountRepo) ListByGroup(ctx context.Context, groupID int64) ([]Account, error) {
+	return r.accounts, nil
+}
+
+func (r schedulerTestOpenAIAccountRepo) ListByPlatform(ctx context.Context, platform string) ([]Account, error) {
+	var result []Account
+	for _, acc := range r.accounts {
+		if acc.Platform == platform {
+			result = append(result, acc)
+		}
+	}
+	return result, nil
+}
+
+func (r schedulerTestOpenAIAccountRepo) ClearRateLimit(ctx context.Context, id int64) error {
+	return nil
+}
+
 type schedulerTestConcurrencyCache struct {
 	ConcurrencyCache
 	loadBatchErr    error

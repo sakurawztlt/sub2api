@@ -1003,20 +1003,8 @@ func calculateOpenAI429ResetTime(headers http.Header) *time.Time {
 		return &resetAt
 	}
 
-	// 都未达到100%但收到429，使用较长的重置时间
-	var maxResetSecs int
-	if normalized.Reset7dSeconds != nil && *normalized.Reset7dSeconds > maxResetSecs {
-		maxResetSecs = *normalized.Reset7dSeconds
-	}
-	if normalized.Reset5hSeconds != nil && *normalized.Reset5hSeconds > maxResetSecs {
-		maxResetSecs = *normalized.Reset5hSeconds
-	}
-	if maxResetSecs > 0 {
-		resetAt := now.Add(time.Duration(maxResetSecs) * time.Second)
-		slog.Info("openai_429_using_max_reset", "max_reset_seconds", maxResetSecs, "reset_at", resetAt)
-		return &resetAt
-	}
-
+	// Neither Codex usage window is exhausted. Treat this as a burst 429 and
+	// let the caller apply the short fallback cooldown.
 	return nil
 }
 
@@ -1159,6 +1147,10 @@ func (s *RateLimitService) persistOpenAICodexSnapshot(ctx context.Context, accou
 //	  }
 //	}
 func parseOpenAIRateLimitResetTime(body []byte) *int64 {
+	return parseOpenAIRateLimitResetTimeAt(body, time.Now())
+}
+
+func parseOpenAIRateLimitResetTimeAt(body []byte, now time.Time) *int64 {
 	var parsed map[string]any
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		return nil
@@ -1177,28 +1169,42 @@ func parseOpenAIRateLimitResetTime(body []byte) *int64 {
 
 	// 优先使用 resets_at（Unix 时间戳）
 	if resetsAt, ok := errObj["resets_at"].(float64); ok {
-		ts := int64(resetsAt)
+		ts := clampOpenAIRateLimitExceededReset(errType, int64(resetsAt), now)
 		return &ts
 	}
 	if resetsAt, ok := errObj["resets_at"].(string); ok {
 		if ts, err := strconv.ParseInt(resetsAt, 10, 64); err == nil {
+			ts = clampOpenAIRateLimitExceededReset(errType, ts, now)
 			return &ts
 		}
 	}
 
 	// 如果没有 resets_at，尝试使用 resets_in_seconds
 	if resetsInSeconds, ok := errObj["resets_in_seconds"].(float64); ok {
-		ts := time.Now().Unix() + int64(resetsInSeconds)
+		ts := now.Unix() + int64(resetsInSeconds)
+		ts = clampOpenAIRateLimitExceededReset(errType, ts, now)
 		return &ts
 	}
 	if resetsInSeconds, ok := errObj["resets_in_seconds"].(string); ok {
 		if sec, err := strconv.ParseInt(resetsInSeconds, 10, 64); err == nil {
-			ts := time.Now().Unix() + sec
+			ts := now.Unix() + sec
+			ts = clampOpenAIRateLimitExceededReset(errType, ts, now)
 			return &ts
 		}
 	}
 
 	return nil
+}
+
+func clampOpenAIRateLimitExceededReset(errType string, ts int64, now time.Time) int64 {
+	if errType != "rate_limit_exceeded" {
+		return ts
+	}
+	maxResetAt := now.Add(time.Duration(maxRateLimit429CooldownSeconds) * time.Second).Unix()
+	if ts > maxResetAt {
+		return maxResetAt
+	}
+	return ts
 }
 
 // handle529 处理529过载错误
