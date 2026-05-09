@@ -36,6 +36,11 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 ) (*OpenAIForwardResult, error) {
 	startTime := time.Now()
 
+	// 5/9 codex audit: defense-in-depth. gcr 入口已经 canonicalize 过
+	// cache_control.ttl ("5min" → "5m" 等), 这里再扫一遍防 gcr 旁路 (备用
+	// 环境 cctest 直连 k8s NodePort / admin 调试). 已 canonical 时 no-op.
+	body = CanonicalizeAnthropicCacheControlTTLInBody(body)
+
 	// 1. Parse Anthropic request
 	var anthropicReq apicompat.AnthropicRequest
 	if err := json.Unmarshal(body, &anthropicReq); err != nil {
