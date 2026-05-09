@@ -186,7 +186,9 @@ func TestInjectAnthropicCacheControlTTL1h_OnlyUpdatesExistingEphemeralCacheContr
 
 	assertJSONTokenOrder(t, resultStr, `"alpha"`, `"cache_control"`, `"system"`, `"messages"`, `"tools"`, `"omega"`)
 	require.Equal(t, "1h", gjson.GetBytes(result, "cache_control.ttl").String())
-	require.Equal(t, "1h", gjson.GetBytes(result, "system.0.cache_control.ttl").String())
+	// 5/9 codex audit: 客户显式合法 ttl ("5m" / "1h") 不被 forceTTL 覆盖.
+	// system.0 原 ttl=5m 是客户显式选择, 跟 TTL 别名归一化"尊重客户 5m"一致.
+	require.Equal(t, "5m", gjson.GetBytes(result, "system.0.cache_control.ttl").String())
 	require.False(t, gjson.GetBytes(result, "system.1.cache_control").Exists())
 	require.Equal(t, "1h", gjson.GetBytes(result, "messages.0.content.0.cache_control.ttl").String())
 	require.Equal(t, "5m", gjson.GetBytes(result, "messages.0.content.1.cache_control.ttl").String())

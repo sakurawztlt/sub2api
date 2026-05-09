@@ -994,6 +994,25 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		return resultWithUsage(), fmt.Errorf("stream usage incomplete: missing terminal event")
 	}
 
+	// 5/9 codex audit #2: stream 层错误 (unexpected EOF / scanner err / 上游
+	// 断流没 [DONE]) 在客户响应**还没写 header** 时, 返 BreakSticky failover
+	// 让 handler 重选别的账号 retry. 之前直接 fmt.Errorf 走 handler 路径 2 →
+	// 直接客户 502, 没机会换账号. 已经 WriteHeader 后不能 retry (客户已收
+	// 200 + 部分 SSE), 维持原行为.
+	//
+	// 这跟 first_meaningful_event_timeout 不同: timeout 是"上游真没出 token,
+	// thinking 长任务可能误判 retry 烧账号", 用户慎重决定不动. EOF / scan err
+	// 是上游单账号真挂了 (TCP / TLS 层断), retry 换账号大概率成功.
+	streamFailoverIfNoHeader := func(orig error) error {
+		if !headerWritten {
+			return &UpstreamFailoverError{
+				StatusCode:  http.StatusBadGateway,
+				BreakSticky: true,
+			}
+		}
+		return orig // 已写 header, 不能 retry, 返原 error 维持原行为
+	}
+
 	// ── Determine keepalive interval ──
 	keepaliveInterval := time.Duration(0)
 	if s.cfg != nil && s.cfg.Gateway.StreamKeepaliveInterval > 0 {
@@ -1017,7 +1036,14 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		}
 		if err := scanner.Err(); err != nil {
 			handleScanErr(err)
-			return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", err)
+			origErr := fmt.Errorf("stream usage incomplete: %w", err)
+			return resultWithUsage(), streamFailoverIfNoHeader(origErr)
+		}
+		// channel closed without [DONE] sentinel = upstream truncation
+		if !headerWritten {
+			return resultWithUsage(), &UpstreamFailoverError{
+				StatusCode: http.StatusBadGateway, BreakSticky: true,
+			}
 		}
 		return missingTerminalErr()
 	}
@@ -1079,12 +1105,19 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		select {
 		case ev, ok := <-events:
 			if !ok {
-				// Upstream closed
+				// Upstream closed without [DONE] = truncation. Try failover
+				// if the client hasn't seen any bytes yet.
+				if !headerWritten {
+					return resultWithUsage(), &UpstreamFailoverError{
+						StatusCode: http.StatusBadGateway, BreakSticky: true,
+					}
+				}
 				return missingTerminalErr()
 			}
 			if ev.err != nil {
 				handleScanErr(ev.err)
-				return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", ev.err)
+				origErr := fmt.Errorf("stream usage incomplete: %w", ev.err)
+				return resultWithUsage(), streamFailoverIfNoHeader(origErr)
 			}
 			lastDataAt = time.Now()
 			line := ev.line
