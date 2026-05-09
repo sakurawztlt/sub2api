@@ -516,6 +516,12 @@ type UpstreamFailoverError struct {
 	ResponseHeaders        http.Header // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
 	ForceCacheBilling      bool        // Antigravity 粘性会话切换时设为 true
 	RetryableOnSameAccount bool        // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
+	// BreakSticky 5/9 codex audit: 网络层错误 (connection refused / DNS /
+	// TLS handshake timeout / SOCKS proxy unreachable) 应该让 handler
+	// DeleteStickySession 解绑当前 sessionHash → account, 否则同 sessionHash
+	// 后续请求被反复 sticky 到同一账号死循环 (account 配的 proxy 网络
+	// dead 但 DB status=active 实测会这样).
+	BreakSticky bool
 }
 
 func (e *UpstreamFailoverError) Error() string {

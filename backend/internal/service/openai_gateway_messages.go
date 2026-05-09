@@ -339,6 +339,17 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			Kind:               "request_error",
 			Message:            safeErr,
 		})
+		// 5/9 codex audit fix: 网络层错误 (connection refused / DNS / TLS
+		// handshake / SOCKS proxy unreachable) 走 handler failover 路径,
+		// 由 handler 决定 DeleteStickySession + 重选账号. **不在 service
+		// 层写客户响应** — 否则 handler 后续 retry 写新响应会响应拼接.
+		// 非网络错误维持原行为 (写 502 + 返普通 error).
+		if IsUpstreamNetworkError(err) {
+			return nil, &UpstreamFailoverError{
+				StatusCode:  http.StatusBadGateway,
+				BreakSticky: true,
+			}
+		}
 		// Generic Anthropic-style message — "Upstream request failed" leaks
 		// our relay wording to clients. Specific cause is already logged
 		// upstream + recorded via appendOpsUpstreamError above.

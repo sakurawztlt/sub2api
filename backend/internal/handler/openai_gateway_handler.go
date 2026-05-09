@@ -699,6 +699,21 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			var failoverErr *service.UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
 				h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, false, nil)
+				// 5/9 codex audit: 网络层错误 (BreakSticky=true) 解绑 sticky
+				// 防止同 sessionHash 后续请求继续被 sticky 命中已坏账号. 必须在
+				// 写客户响应之前 — 此分支 service 层不写, 安全.
+				if failoverErr.BreakSticky && sessionHash != "" {
+					if delErr := h.gatewayService.DeleteStickySession(c.Request.Context(), apiKey.GroupID, sessionHash); delErr != nil {
+						reqLog.Warn("openai_messages.delete_sticky_after_network_error_failed",
+							zap.Int64("account_id", account.ID),
+							zap.Error(delErr),
+						)
+					} else {
+						reqLog.Info("openai_messages.sticky_deleted_after_network_error",
+							zap.Int64("account_id", account.ID),
+						)
+					}
+				}
 				// 池模式：同账号重试
 				if failoverErr.RetryableOnSameAccount {
 					retryLimit := account.GetPoolModeRetryCount()
@@ -729,6 +744,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				reqLog.Warn("openai_messages.upstream_failover_switching",
 					zap.Int64("account_id", account.ID),
 					zap.Int("upstream_status", failoverErr.StatusCode),
+					zap.Bool("network_error_break_sticky", failoverErr.BreakSticky),
 					zap.Int("switch_count", switchCount),
 					zap.Int("max_switches", maxAccountSwitches),
 				)
