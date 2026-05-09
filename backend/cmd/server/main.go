@@ -20,6 +20,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/handler"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
+	"github.com/Wei-Shaw/sub2api/internal/server/routes"
 	"github.com/Wei-Shaw/sub2api/internal/setup"
 	"github.com/Wei-Shaw/sub2api/internal/web"
 
@@ -165,14 +166,31 @@ func runMainServer() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("Shutting down server...")
+	// 5/9 codex audit: 优雅停机 3 阶段:
+	// 1. 立刻把 /readyz 翻 503, k8s readinessProbe 立即拿到 503,
+	//    endpoint controller 异步把 pod 从 Service 移除 (~1-3s)
+	// 2. sleep 一段时间, 让 endpoint update 真正传播到 kube-proxy
+	//    iptables, 期间还会有少量 in-flight 进来但没新流量
+	// 3. http.Server.Shutdown 30s 内 drain 完所有现存 connection
+	// 配合 k8s deployment preStop sleep 25s + terminationGracePeriod 120s
+	// 完整无 502 滚动.
+	log.Println("Received shutdown signal — entering drain mode...")
+	routes.SetShuttingDown()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// drain phase: give k8s endpoint controller + kube-proxy time to
+	// remove this pod from Service before we stop accepting new connections.
+	// 15s 是一般 k8s 集群 endpoint update propagation 上限的 conservative 估值.
+	drainSleep := 15 * time.Second
+	log.Printf("Draining: /readyz returns 503, sleeping %s before Shutdown...", drainSleep)
+	time.Sleep(drainSleep)
+
+	log.Println("Drain done, calling Server.Shutdown(30s timeout)...")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if err := app.Server.Shutdown(ctx); err != nil {
-		log.Fatalf("Server forced to shutdown: %v", err)
+		log.Printf("Server.Shutdown returned error (likely in-flight timeout): %v", err)
 	}
 
-	log.Println("Server exited")
+	log.Println("Server exited cleanly")
 }
