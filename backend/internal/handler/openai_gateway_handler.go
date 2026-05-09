@@ -605,6 +605,15 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	sessionHash := sessionCtx.SessionHash
 	promptCacheKey := sessionCtx.PromptCacheKey
 
+	// 5/9 multimodal short-circuit: 含 image/document content block 的请求
+	// 在 scheduler 里跳 sticky/fallback 等待 (timeout=0 立即重选另一账号).
+	// 修 cctest 多模态 5/10 — 同账号 sticky 排队 120s 让一半请求 timeout.
+	// tools/thinking 走 cc-api 真 Claude, 不经过这里, 不受影响.
+	if service.HasMultimodalContent(body) {
+		c.Request = c.Request.WithContext(service.WithMultimodalSkipWaitCtx(c.Request.Context()))
+		reqLog = reqLog.With(zap.Bool("multimodal_skip_wait", true))
+	}
+
 	maxAccountSwitches := h.maxAccountSwitches
 	switchCount := 0
 	failedAccountIDs := make(map[int64]struct{})

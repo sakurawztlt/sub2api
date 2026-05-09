@@ -369,6 +369,13 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 	}
 
 	cfg := s.service.schedulingConfig()
+	stickyTimeout := cfg.StickySessionWaitTimeout
+	// 5/9: multimodal 请求跳 sticky 等待. cctest 多模态同账号 sticky 排队
+	// → 5/10 失败. 立即 fallback 重选另一账号 (handler 外层 retry loop 把
+	// 当前账号加进 excludedIDs). 见 multimodal_skip_wait.go.
+	if IsMultimodalSkipWaitCtx(ctx) {
+		stickyTimeout = 0
+	}
 	// WaitPlan.MaxConcurrency 使用 Concurrency（非 EffectiveLoadFactor），因为 WaitPlan 控制的是 Redis 实际并发槽位等待。
 	if s.service.concurrencyService != nil {
 		return &AccountSelectionResult{
@@ -376,7 +383,7 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 			WaitPlan: &AccountWaitPlan{
 				AccountID:      accountID,
 				MaxConcurrency: account.Concurrency,
-				Timeout:        cfg.StickySessionWaitTimeout,
+				Timeout:        stickyTimeout,
 				MaxWaiting:     cfg.StickySessionMaxWaiting,
 			},
 		}, nil
@@ -864,12 +871,17 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 			compactBlocked = true
 			continue
 		}
+		fallbackTimeout := cfg.FallbackWaitTimeout
+		// 5/9 multimodal 跳 fallback 等待: 同 sticky 修法.
+		if IsMultimodalSkipWaitCtx(ctx) {
+			fallbackTimeout = 0
+		}
 		return &AccountSelectionResult{
 			Account: fresh,
 			WaitPlan: &AccountWaitPlan{
 				AccountID:      fresh.ID,
 				MaxConcurrency: fresh.Concurrency,
-				Timeout:        cfg.FallbackWaitTimeout,
+				Timeout:        fallbackTimeout,
 				MaxWaiting:     cfg.FallbackMaxWaiting,
 			},
 		}, candidateCount, topK, loadSkew, nil
