@@ -46,8 +46,34 @@ func TestCanonicalizeAnthropicCacheControlTTLInBody(t *testing.T) {
 	if g := gjson.GetBytes(out, "messages.0.content.0.cache_control.ttl").String(); g != "1h" {
 		t.Errorf("messages 60min → %q want 1h", g)
 	}
-	if gjson.GetBytes(out, "messages.0.content.1.cache_control.ttl").Exists() {
-		t.Errorf("forever should be dropped")
+	if g := gjson.GetBytes(out, "messages.0.content.1.cache_control.ttl").String(); g != "1h" {
+		t.Errorf("forever should default to 1h, got %q", g)
+	}
+}
+
+// 5/9 codex audit: forceEphemeralCacheControlTTL 不覆盖客户显式合法 ttl
+func TestForceEphemeralCacheControlTTL_DoesNotOverrideValid5m(t *testing.T) {
+	body := []byte(`{"system":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral","ttl":"5m"}}]}`)
+	out := forceEphemeralCacheControlTTL(body, "1h")
+	if g := gjson.GetBytes(out, "system.0.cache_control.ttl").String(); g != "5m" {
+		t.Errorf("force-1h should NOT override explicit 5m, got %q", g)
+	}
+}
+
+func TestForceEphemeralCacheControlTTL_DoesNotOverrideValid1h(t *testing.T) {
+	body := []byte(`{"system":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral","ttl":"1h"}}]}`)
+	out := forceEphemeralCacheControlTTL(body, "1h")
+	if g := gjson.GetBytes(out, "system.0.cache_control.ttl").String(); g != "1h" {
+		t.Errorf("force-1h should keep 1h, got %q", g)
+	}
+}
+
+// 5/9 codex audit: 缺失 ttl 时 force 1h 仍补
+func TestForceEphemeralCacheControlTTL_BackfillsMissingTTL(t *testing.T) {
+	body := []byte(`{"system":[{"type":"text","text":"hi","cache_control":{"type":"ephemeral"}}]}`)
+	out := forceEphemeralCacheControlTTL(body, "1h")
+	if g := gjson.GetBytes(out, "system.0.cache_control.ttl").String(); g != "1h" {
+		t.Errorf("missing ttl should be set to 1h, got %q", g)
 	}
 }
 

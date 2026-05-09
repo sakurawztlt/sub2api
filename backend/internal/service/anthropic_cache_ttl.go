@@ -64,10 +64,9 @@ func canonicalizeCacheTTLOnArray(body []byte, arrayPath string) []byte {
 		}
 		canonical := NormalizeAnthropicCacheTTLString(ttl.String())
 		if canonical == "" {
-			if next, err := sjson.DeleteBytes(body, ttlPath); err == nil {
-				body = next
-			}
-			continue
+			// 5/9 codex audit: 未知/空 ttl 默认 "1h" (不删除). 跟 gcr 同步,
+			// 跟用户口径"传得不明确还是 1h"一致.
+			canonical = "1h"
 		}
 		if canonical == ttl.String() {
 			continue

@@ -4427,7 +4427,15 @@ func forceEphemeralCacheControlTTL(body []byte, ttl string) []byte {
 		if !cc.Exists() || cc.Get("type").String() != "ephemeral" {
 			return
 		}
-		if cc.Get("ttl").String() == ttl {
+		existingTTL := cc.Get("ttl").String()
+		if existingTTL == ttl {
+			return
+		}
+		// 5/9 codex audit: 客户显式传的合法 ttl ("5m" / "1h") 不要覆盖.
+		// 之前 forceEphemeralCacheControlTTL("1h") 会把客户传的 5m 强制改 1h,
+		// 跟 cache_control.ttl 别名归一化的"尊重客户显式 5m"目的冲突.
+		// 只补缺失/未知 ttl, 不动客户传的合法值.
+		if existingTTL == "5m" || existingTTL == "1h" {
 			return
 		}
 		paths = append(paths, path+".cache_control.ttl")
