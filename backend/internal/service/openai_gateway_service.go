@@ -2426,7 +2426,16 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		markPatchSet("instructions", "You are a helpful coding assistant.")
 	}
 
-	if isCodexCLI && ensureOpenAIResponsesImageGenerationTool(reqBody) {
+	// PR #2294 (issue #2280): 仅在请求显式带图片生成信号时才让 Codex image
+	// bridge 生效. 之前 isCodexCLI 单一 gate 太宽 — 普通 Codex 文本/代码请求会
+	// 被注入 image_generation tool, 模型可能在用户没要求时自发调图, 行为偏差
+	// + cctest 检测侧异常. codexImageGenerationBridgeShouldFire 检查:
+	//   - tools[] 已声明 image_generation
+	//   - tool_choice 选 image_generation
+	//   - input 含 input_image
+	//   - input 含历史 image_generation_call (continuation)
+	codexImageBridgeShouldApply := isCodexCLI && codexImageGenerationBridgeShouldFire(reqBody)
+	if codexImageBridgeShouldApply && ensureOpenAIResponsesImageGenerationTool(reqBody) {
 		bodyModified = true
 		disablePatch()
 		logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Injected /responses image_generation tool for Codex client")
@@ -2437,7 +2446,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		disablePatch()
 		logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Normalized /responses image_generation tool payload")
 	}
-	if isCodexCLI && applyCodexImageGenerationBridgeInstructions(reqBody) {
+	if codexImageBridgeShouldApply && applyCodexImageGenerationBridgeInstructions(reqBody) {
 		bodyModified = true
 		disablePatch()
 		logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Added Codex image_generation bridge instructions")

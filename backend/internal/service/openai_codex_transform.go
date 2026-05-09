@@ -696,6 +696,85 @@ func normalizeOpenAIResponsesImageGenerationTools(reqBody map[string]any) bool {
 	return modified
 }
 
+// codexImageGenerationBridgeShouldFire reports whether the request carries an
+// explicit image-generation signal. Without such a signal we leave the body
+// alone so that plain Codex coding requests don't get an unwanted
+// image_generation tool injected (issue #2280).
+//
+// Recognized signals:
+//   - tools[] already declares image_generation (user-opted in)
+//   - tool_choice selects image_generation (issue #2254)
+//   - input contains an input_image part (image edit / multi-modal turn)
+//   - input contains a previous image_generation_call item (continuation turn)
+func codexImageGenerationBridgeShouldFire(reqBody map[string]any) bool {
+	if len(reqBody) == 0 {
+		return false
+	}
+	if hasOpenAIImageGenerationTool(reqBody) {
+		return true
+	}
+	if openAIAnyToolChoiceSelectsImageGeneration(reqBody["tool_choice"]) {
+		return true
+	}
+	if hasOpenAIInputImage(reqBody) {
+		return true
+	}
+	return hasOpenAIImageGenerationCallItem(reqBody["input"])
+}
+
+// openAIAnyToolChoiceSelectsImageGeneration checks whether tool_choice — in
+// either the OpenAI Responses ("type":"image_generation"), legacy ChatCompletions
+// nested ({"type":"function","function":{"name":"image_generation"}}), or string
+// shape — explicitly selects image_generation.
+//
+// fork helper added 5/9 to satisfy PR #2294 reference (upstream merged in a
+// later PR that we haven't pulled).
+func openAIAnyToolChoiceSelectsImageGeneration(value any) bool {
+	switch v := value.(type) {
+	case nil:
+		return false
+	case string:
+		return strings.EqualFold(strings.TrimSpace(v), "image_generation")
+	case map[string]any:
+		if t, ok := v["type"].(string); ok && strings.EqualFold(strings.TrimSpace(t), "image_generation") {
+			return true
+		}
+		// Chat Completions nested function shape.
+		if fn, ok := v["function"].(map[string]any); ok {
+			if name, ok := fn["name"].(string); ok && strings.EqualFold(strings.TrimSpace(name), "image_generation") {
+				return true
+			}
+		}
+		if name, ok := v["name"].(string); ok && strings.EqualFold(strings.TrimSpace(name), "image_generation") {
+			return true
+		}
+	case []any:
+		for _, item := range v {
+			if openAIAnyToolChoiceSelectsImageGeneration(item) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasOpenAIImageGenerationCallItem(value any) bool {
+	items, ok := value.([]any)
+	if !ok {
+		return false
+	}
+	for _, raw := range items {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(firstNonEmptyString(item["type"])) == "image_generation_call" {
+			return true
+		}
+	}
+	return false
+}
+
 func ensureOpenAIResponsesImageGenerationTool(reqBody map[string]any) bool {
 	if len(reqBody) == 0 {
 		return false
