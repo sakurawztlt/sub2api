@@ -516,6 +516,17 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 
 	finalResponse, usage, acc, err := s.readOpenAICompatBufferedTerminal(resp, "openai messages buffered", requestID)
 	if err != nil {
+		// 5/10 codex audit: buffered path 网络层 stream 读取错误 (EOF/reset/
+		// TLS handshake/timeout) 在 !c.Writer.Written() 时 (buffered 路径
+		// 一定没写过 SSE) 返 BreakSticky failover 让 handler 重选账号 retry.
+		// 业务错误 (JSON parse / 4xx event 等) 走原 path 客户 502.
+		if IsUpstreamNetworkError(err) && !c.Writer.Written() {
+			return nil, &UpstreamFailoverError{
+				StatusCode:  http.StatusBadGateway,
+				BreakSticky: true,
+				Reason:      "buffered_stream_read_error",
+			}
+		}
 		return nil, err
 	}
 
@@ -535,14 +546,23 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 				zap.String("request_id", requestID),
 			)
 		} else {
-			// Empty accumulator = upstream dropped before any delta. Use a
-			// generic Anthropic-style message so the client body doesn't
-			// leak our internal wording ("Upstream stream ended without a
-			// terminal response event" is not something real Anthropic
-			// would ever return and would fingerprint us as not-Anthropic).
+			// 5/10 codex audit: 上游 200 但空 stream 无 [DONE] (clean close
+			// 无 EOF 错误) = 单账号上游异常, !c.Writer.Written() 时让 handler
+			// 重选账号 retry. 不在 service 层 writeAnthropicError 否则阻断
+			// failover (handler 看到客户响应已写就不重试).
+			//
+			// 已 WriteHeader 的极端兜底维持原行为 (buffered 路径理论走不到
+			// 但防御性).
 			logger.L().Warn("openai messages buffered: upstream EOF without any delta",
 				zap.String("request_id", requestID),
 			)
+			if !c.Writer.Written() {
+				return nil, &UpstreamFailoverError{
+					StatusCode:  http.StatusBadGateway,
+					BreakSticky: true,
+					Reason:      "buffered_empty_stream",
+				}
+			}
 			writeAnthropicError(c, http.StatusBadGateway, "api_error", "Internal server error")
 			return nil, fmt.Errorf("upstream stream ended without terminal event")
 		}
@@ -1161,6 +1181,17 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				zap.Duration("timeout", firstMeaningfulTimeout),
 				zap.Bool("header_written", headerWritten),
 			)
+			// 5/10 codex audit: !headerWritten 时返 BreakSticky failover, 让
+			// handler 切账号试一次. Reason 让 handler per-reason cap=1 避免
+			// 一个请求烧 10 账号 (timeout=120s × 10 = 20min, 客户体验差).
+			// thinking 长任务真没出 token 时, retry 一次还 timeout 就放弃.
+			if !headerWritten {
+				return resultWithUsage(), &UpstreamFailoverError{
+					StatusCode:  http.StatusBadGateway,
+					BreakSticky: true,
+					Reason:      "first_meaningful_timeout",
+				}
+			}
 			return resultWithUsage(), fmt.Errorf("first meaningful event timeout after %s", firstMeaningfulTimeout)
 
 		case <-keepaliveCh:

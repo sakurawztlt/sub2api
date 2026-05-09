@@ -618,6 +618,13 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	switchCount := 0
 	failedAccountIDs := make(map[int64]struct{})
 	sameAccountRetryCount := make(map[int64]int)
+	// 5/10 codex audit: per-reason switch count cap. 默认空 reason 走全局
+	// maxAccountSwitches=10. "first_meaningful_timeout" reason cap=1 避免
+	// 一个请求 timeout=120s × 10 次 = 20min, 客户体验差且烧账号多.
+	perReasonSwitchCount := make(map[string]int)
+	perReasonSwitchCap := map[string]int{
+		"first_meaningful_timeout": 1,
+	}
 	var lastFailoverErr *service.UpstreamFailoverError
 	effectiveMappedModel := preferredMappedModel
 
@@ -736,6 +743,22 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				h.gatewayService.RecordOpenAIAccountSwitch()
 				failedAccountIDs[account.ID] = struct{}{}
 				lastFailoverErr = failoverErr
+				// 5/10 codex audit: per-reason cap (e.g. first_meaningful_timeout
+				// 限 1 次 switch 防烧账号). 共享全局 switchCount 也起作用.
+				if reason := failoverErr.Reason; reason != "" {
+					if cap, hasCap := perReasonSwitchCap[reason]; hasCap {
+						if perReasonSwitchCount[reason] >= cap {
+							reqLog.Warn("openai_messages.per_reason_switch_cap_reached",
+								zap.String("reason", reason),
+								zap.Int("cap", cap),
+								zap.Int("count", perReasonSwitchCount[reason]),
+							)
+							h.handleAnthropicFailoverExhausted(c, failoverErr, streamStarted)
+							return
+						}
+						perReasonSwitchCount[reason]++
+					}
+				}
 				if switchCount >= maxAccountSwitches {
 					h.handleAnthropicFailoverExhausted(c, failoverErr, streamStarted)
 					return
@@ -744,6 +767,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				reqLog.Warn("openai_messages.upstream_failover_switching",
 					zap.Int64("account_id", account.ID),
 					zap.Int("upstream_status", failoverErr.StatusCode),
+					zap.String("reason", failoverErr.Reason),
 					zap.Bool("network_error_break_sticky", failoverErr.BreakSticky),
 					zap.Int("switch_count", switchCount),
 					zap.Int("max_switches", maxAccountSwitches),

@@ -522,6 +522,12 @@ type UpstreamFailoverError struct {
 	// 后续请求被反复 sticky 到同一账号死循环 (account 配的 proxy 网络
 	// dead 但 DB status=active 实测会这样).
 	BreakSticky bool
+	// Reason 5/10 codex audit: 失败原因分类, 用于 handler per-reason retry
+	// cap. 例: "first_meaningful_timeout" 实测可能 thinking 长任务真没出
+	// token, 全量按 maxAccountSwitches=10 retry 会让一个请求拖 20 分钟 +
+	// 烧 10 个账号. handler 看到这 reason 限制单独 cap=1.
+	// 空字符串 = 共享 maxAccountSwitches 默认 cap.
+	Reason string
 }
 
 func (e *UpstreamFailoverError) Error() string {
