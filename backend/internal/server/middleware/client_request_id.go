@@ -23,6 +23,11 @@ import (
 var upstreamRequestIDHeaders = []string{
 	"X-Newapi-Request-Id",
 	"X-Newapi-Request-ID",
+	// 5/9 codex audit: NewAPI / OneAPI fork 转发 X-Oneapi-Request-Id 时, 之前
+	// 列表没识别 → sub2api 重新生 UUID, 跨服务日志关联断, 只能按时间窗口猜.
+	// 紧跟 X-Newapi 一组优先级 (NewAPI 系列 fork 都用这两种 header 之一).
+	"X-Oneapi-Request-Id",
+	"X-Oneapi-Request-ID",
 	"X-Request-Id",
 	"X-Request-ID",
 	"X-Correlation-Id",

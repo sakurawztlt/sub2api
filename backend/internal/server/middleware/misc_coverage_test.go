@@ -36,6 +36,46 @@ func TestClientRequestID_GeneratesWhenMissing(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 }
 
+func TestClientRequestID_AdoptsXOneapiRequestID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	r := gin.New()
+	r.Use(ClientRequestID())
+	r.GET("/t", func(c *gin.Context) {
+		id, ok := c.Request.Context().Value(ctxkey.ClientRequestID).(string)
+		require.True(t, ok)
+		require.Equal(t, "req-oneapi-123", id)
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/t", nil)
+	req.Header.Set("X-Oneapi-Request-Id", "req-oneapi-123")
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+}
+
+// X-Newapi 比 X-Oneapi 优先 (新版 NewAPI 同时发两个 header 时取 Newapi)
+func TestClientRequestID_PrefersNewapiOverOneapi(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	r := gin.New()
+	r.Use(ClientRequestID())
+	r.GET("/t", func(c *gin.Context) {
+		id, ok := c.Request.Context().Value(ctxkey.ClientRequestID).(string)
+		require.True(t, ok)
+		require.Equal(t, "from-newapi", id)
+		c.Status(http.StatusOK)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/t", nil)
+	req.Header.Set("X-Newapi-Request-Id", "from-newapi")
+	req.Header.Set("X-Oneapi-Request-Id", "from-oneapi")
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+}
+
 func TestClientRequestID_PreservesExisting(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
