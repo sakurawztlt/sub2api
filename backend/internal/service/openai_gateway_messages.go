@@ -1164,7 +1164,20 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				zap.String("request_id", requestID),
 				zap.String("model", originalModel),
 				zap.Duration("interval", streamInterval),
+				zap.Bool("header_written", headerWritten),
 			)
+			// 5/10 codex audit (R38): !headerWritten 时返 BreakSticky failover.
+			// data interval timeout 跟 first_meaningful_timeout 是不同失败模式
+			// (前者发生在已有数据但中段断流, 后者从未见到首个 meaningful event)
+			// 但 retry 策略相同: 没写 header 就切账号试一次. Reason 区分让
+			// handler per-reason cap 各自计数 (一个请求两类 timeout 各占 1 次).
+			if !headerWritten {
+				return resultWithUsage(), &UpstreamFailoverError{
+					StatusCode:  http.StatusBadGateway,
+					BreakSticky: true,
+					Reason:      "stream_data_interval_timeout",
+				}
+			}
 			return resultWithUsage(), fmt.Errorf("stream data interval timeout")
 
 		case <-firstMeaningfulDeadlineCh:

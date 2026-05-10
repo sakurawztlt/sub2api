@@ -623,7 +623,8 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	// 一个请求 timeout=120s × 10 次 = 20min, 客户体验差且烧账号多.
 	perReasonSwitchCount := make(map[string]int)
 	perReasonSwitchCap := map[string]int{
-		"first_meaningful_timeout": 1,
+		"first_meaningful_timeout":     1,
+		"stream_data_interval_timeout": 1, // 5/10 R38: data interval 同样限 1 次防烧账号
 	}
 	var lastFailoverErr *service.UpstreamFailoverError
 	effectiveMappedModel := preferredMappedModel
