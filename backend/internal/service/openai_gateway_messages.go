@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -85,6 +86,14 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 				promptCacheKey = promptCacheKeyFromAnthropicDigest(anthropicDigestChain)
 			}
 		}
+		// 5/10 codex P3 #5: namespace derived keys per account+apiKey so two
+		// sub2api accounts hitting same content don't collide on upstream
+		// OpenAI prefix cache. Skipped for client-supplied keys (already
+		// scoped by client) and for cached digest matches that came from
+		// our own namespaced storage (re-prefixing would double-prefix).
+		if promptCacheKey != "" && anthropicMatchedDigestChain == "" {
+			promptCacheKey = applyOpenAICompatPromptCacheKeyNamespace(account, apiKeyID, promptCacheKey)
+		}
 		compatPromptCacheInjected = promptCacheKey != ""
 	}
 
@@ -143,6 +152,13 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			zap.Bool("compat_prompt_cache_key_injected", true),
 			zap.String("compat_prompt_cache_key_sha256", hashSensitiveValueForLog(promptCacheKey)),
 		)
+		// 5/10 codex P3 #5 验证用: env on 时打明文 promptCacheKey 看 namespace
+		// 前缀 a{accountID}k{apiKeyID}_ 是否生效. backup 108 临时调试, 验完关.
+		if os.Getenv("SUB2API_DEBUG_PROMPT_CACHE_KEY") == "1" {
+			logFields = append(logFields,
+				zap.String("compat_prompt_cache_key_plain", promptCacheKey),
+			)
+		}
 	}
 	if compatReplayTrimmed {
 		logFields = append(logFields,

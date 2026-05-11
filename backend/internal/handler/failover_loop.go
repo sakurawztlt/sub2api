@@ -48,15 +48,41 @@ type FailoverState struct {
 	LastFailoverErr       *service.UpstreamFailoverError
 	ForceCacheBilling     bool
 	hasBoundSession       bool
+	// 5/11 codex xhigh prod 51 慢 502 修: per-reason cap.
+	// `handler.gateway.messages` 之前没限制单 reason 的 retry 次数, 如
+	// `first_meaningful_timeout` (实测 100-346s 后才返 502) 可以跨 10
+	// 账号反复触发, 单请求拖 30+ min + 烧 10 账号. OpenAI handler 已经
+	// 有同样保护 (openai_gateway_handler.go:626), 这里抄过来. 默认 cap
+	// 见 NewFailoverState 初始化.
+	PerReasonCount map[string]int
+	PerReasonCap   map[string]int
+}
+
+// gatewayHandlerPerReasonCap 默认 per-reason cap. cap=1 表示 reason 出现
+// 一次就 FailoverExhausted, 不跨账号再试. 这些 reason 都是"等了很久才知
+// 道账号挂"类, 重试只会让客户更等更烧账号 + 不会成功.
+//
+// 5/11 codex xhigh: 跟 OpenAI handler line 626 同步.
+var gatewayHandlerPerReasonCap = map[string]int{
+	"first_meaningful_timeout":     1,
+	"stream_data_interval_timeout": 1,
+	"buffered_stream_read_error":   1,
+	"buffered_empty_stream":        1,
 }
 
 // NewFailoverState 创建 failover 状态
 func NewFailoverState(maxSwitches int, hasBoundSession bool) *FailoverState {
+	cap := make(map[string]int, len(gatewayHandlerPerReasonCap))
+	for k, v := range gatewayHandlerPerReasonCap {
+		cap[k] = v
+	}
 	return &FailoverState{
 		MaxSwitches:           maxSwitches,
 		FailedAccountIDs:      make(map[int64]struct{}),
 		SameAccountRetryCount: make(map[int64]int),
 		hasBoundSession:       hasBoundSession,
+		PerReasonCount:        make(map[string]int),
+		PerReasonCap:          cap,
 	}
 }
 
@@ -98,6 +124,23 @@ func (s *FailoverState) HandleFailoverError(
 
 	// 加入失败列表
 	s.FailedAccountIDs[accountID] = struct{}{}
+
+	// 5/11 codex xhigh: per-reason cap 检查. 如 first_meaningful_timeout
+	// 单请求只允许触发 1 次, 之后直接 Exhausted, 不再换号继续等同样的
+	// 慢上游 timeout. reason="" (默认共享 maxSwitches 计数) 时 skip.
+	if reason := failoverErr.Reason; reason != "" {
+		if cap, ok := s.PerReasonCap[reason]; ok {
+			s.PerReasonCount[reason]++
+			if s.PerReasonCount[reason] >= cap {
+				logger.FromContext(ctx).Warn("gateway.failover_per_reason_cap_hit",
+					zap.String("reason", reason),
+					zap.Int("count", s.PerReasonCount[reason]),
+					zap.Int("cap", cap),
+				)
+				return FailoverExhausted
+			}
+		}
+	}
 
 	// 检查是否耗尽
 	if s.SwitchCount >= s.MaxSwitches {

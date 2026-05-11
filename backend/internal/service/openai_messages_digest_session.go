@@ -19,7 +19,23 @@ func buildOpenAICompatAnthropicDigestChain(req *apicompat.AnthropicRequest) stri
 		return ""
 	}
 
-	parts := make([]string, 0, len(req.Messages)+1)
+	parts := make([]string, 0, len(req.Messages)+4)
+	// 5/10 codex P3 #5: digest chain must include model + tools + tool_choice
+	// so different tool sets / models don't collide on the same key. Without
+	// this, request A (model=gpt-5.4, tools=X) and request B (model=gpt-5.5,
+	// tools=Y) with same messages share a cache binding — wrong cache replay
+	// + wrong session continuity attached to a different model.
+	if m := strings.TrimSpace(req.Model); m != "" {
+		parts = append(parts, "m:"+m)
+	}
+	if len(req.Tools) > 0 {
+		if raw, err := json.Marshal(req.Tools); err == nil {
+			parts = append(parts, "tl:"+shortHash(raw))
+		}
+	}
+	if len(req.ToolChoice) > 0 {
+		parts = append(parts, "tc:"+shortHash(req.ToolChoice))
+	}
 	if len(req.System) > 0 && strings.TrimSpace(string(req.System)) != "" && strings.TrimSpace(string(req.System)) != "null" {
 		parts = append(parts, "s:"+shortHash(req.System))
 	}

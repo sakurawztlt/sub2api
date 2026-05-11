@@ -83,10 +83,17 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	billingModel := resolveOpenAIForwardModel(account, originalModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 
+	apiKeyID := getAPIKeyIDFromContext(c)
 	promptCacheKey = strings.TrimSpace(promptCacheKey)
 	compatPromptCacheInjected := false
 	if promptCacheKey == "" && account.Type == AccountTypeOAuth && shouldAutoInjectPromptCacheKeyForCompat(upstreamModel) {
 		promptCacheKey = deriveCompatPromptCacheKey(&chatReq, upstreamModel)
+		// 5/10 codex P3 #5: namespace derived keys per account+apiKey so two
+		// sub2api accounts hitting same content don't collide on upstream
+		// OpenAI prefix cache. Mirrors openai_gateway_messages.go behavior.
+		if promptCacheKey != "" {
+			promptCacheKey = applyOpenAICompatPromptCacheKeyNamespace(account, apiKeyID, promptCacheKey)
+		}
 		compatPromptCacheInjected = promptCacheKey != ""
 	}
 
@@ -224,7 +231,13 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	}
 
 	if promptCacheKey != "" {
-		upstreamReq.Header.Set("session_id", generateSessionUUID(promptCacheKey))
+		// 5/10 codex P3 #5: session_id MUST be derived from the apiKey-isolated
+		// seed so two sub2api accounts sharing the same upstream OpenAI account
+		// don't collide on session affinity. Mirrors openai_gateway_messages.go:309.
+		// Direct generateSessionUUID(promptCacheKey) would let cross-account
+		// requests with same content reuse each other's upstream session state.
+		isolatedSessionID := generateSessionUUID(isolateOpenAISessionID(apiKeyID, promptCacheKey))
+		upstreamReq.Header.Set("session_id", isolatedSessionID)
 	}
 
 	// 7. Send request

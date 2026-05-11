@@ -161,8 +161,44 @@ func deriveAnthropicCacheControlPromptCacheKey(req *apicompat.AnthropicRequest) 
 	if len(parts) == 0 {
 		return ""
 	}
+	// 5/10 codex P3 #5: include model + tools + tool_choice in the anchor
+	// seed so two requests with same cache_control text but different tools
+	// don't collide — upstream prompt cache could otherwise replay prefix
+	// from request A (with tool set X) onto request B (with tool set Y),
+	// breaking semantics. Tools also affect the way the model interprets
+	// system text, so prefix cache must be invalidated when they change.
+	if model := strings.TrimSpace(req.Model); model != "" {
+		parts = append(parts, "model:"+model)
+	}
+	if len(req.Tools) > 0 {
+		if raw, err := json.Marshal(req.Tools); err == nil {
+			parts = append(parts, "tools:"+normalizeCompatSeedJSON(raw))
+		}
+	}
+	if len(req.ToolChoice) > 0 {
+		parts = append(parts, "tool_choice:"+normalizeCompatSeedJSON(req.ToolChoice))
+	}
 	sum := sha256.Sum256([]byte("anthropic-cache:" + strings.Join(parts, "\n")))
 	return fmt.Sprintf("anthropic-cache-%x", sum[:16])
+}
+
+// applyOpenAICompatPromptCacheKeyNamespace prefixes a derived prompt_cache_key
+// with `a{accountID}k{apiKeyID}_` so two sub2api accounts hitting same
+// content (different OAuth credentials but possibly same upstream pool)
+// don't share OpenAI prefix cache buckets. No-op when account info is
+// missing — caller's existing-key path stays untouched.
+//
+// 5/10 codex P3 #5: defense-in-depth. OpenAI segregates prefix cache by
+// API key already, but namespace makes the boundary explicit at the gateway
+// level + survives any future routing change that pools accounts.
+func applyOpenAICompatPromptCacheKeyNamespace(account *Account, apiKeyID int64, key string) string {
+	if account == nil || account.ID <= 0 {
+		return key
+	}
+	if strings.TrimSpace(key) == "" {
+		return key
+	}
+	return fmt.Sprintf("a%dk%d_%s", account.ID, apiKeyID, key)
 }
 
 func normalizeCompatSeedJSON(v json.RawMessage) string {

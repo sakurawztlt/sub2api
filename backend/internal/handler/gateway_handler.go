@@ -910,6 +910,22 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						h.handleFailoverExhausted(c, failoverErr, account.Platform, true)
 						return
 					}
+					// 5/11 codex xhigh prod 51 修: 网络层 / 慢 502 类错误 BreakSticky=true
+					// 时解绑 sticky session 防同 sessionHash 后续请求继续粘到坏账
+					// 号死循环. 镜像 openai_gateway_handler.go:713 行为. 之前
+					// `handler.gateway.messages` 漏了这层, 是 prod 51 慢 502 重要
+					// 来源 (sub2api 内部 sticky 队列卡住).
+					if failoverErr.BreakSticky && sessionKey != "" {
+						if err := h.gatewayService.DeleteStickySession(c.Request.Context(), apiKey.GroupID, sessionKey); err != nil {
+							reqLog.Warn("gateway.delete_sticky_on_break_sticky_failed",
+								zap.String("session_key", sessionKey),
+								zap.Int64("account_id", account.ID),
+								zap.Error(err),
+							)
+						}
+						sessionBoundAccountID = 0
+						sessionKey = ""
+					}
 					action := fs.HandleFailoverError(c.Request.Context(), h.gatewayService, account.ID, account.Platform, failoverErr)
 					switch action {
 					case FailoverContinue:
