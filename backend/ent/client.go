@@ -42,6 +42,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/setting"
 	"github.com/Wei-Shaw/sub2api/ent/subscriptionplan"
 	"github.com/Wei-Shaw/sub2api/ent/tlsfingerprintprofile"
+	"github.com/Wei-Shaw/sub2api/ent/trafficcapture"
 	"github.com/Wei-Shaw/sub2api/ent/usagecleanuptask"
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
 	"github.com/Wei-Shaw/sub2api/ent/user"
@@ -112,6 +113,8 @@ type Client struct {
 	SubscriptionPlan *SubscriptionPlanClient
 	// TLSFingerprintProfile is the client for interacting with the TLSFingerprintProfile builders.
 	TLSFingerprintProfile *TLSFingerprintProfileClient
+	// TrafficCapture is the client for interacting with the TrafficCapture builders.
+	TrafficCapture *TrafficCaptureClient
 	// UsageCleanupTask is the client for interacting with the UsageCleanupTask builders.
 	UsageCleanupTask *UsageCleanupTaskClient
 	// UsageLog is the client for interacting with the UsageLog builders.
@@ -164,6 +167,7 @@ func (c *Client) init() {
 	c.Setting = NewSettingClient(c.config)
 	c.SubscriptionPlan = NewSubscriptionPlanClient(c.config)
 	c.TLSFingerprintProfile = NewTLSFingerprintProfileClient(c.config)
+	c.TrafficCapture = NewTrafficCaptureClient(c.config)
 	c.UsageCleanupTask = NewUsageCleanupTaskClient(c.config)
 	c.UsageLog = NewUsageLogClient(c.config)
 	c.User = NewUserClient(c.config)
@@ -290,6 +294,7 @@ func (c *Client) Tx(ctx context.Context) (*Tx, error) {
 		Setting:                       NewSettingClient(cfg),
 		SubscriptionPlan:              NewSubscriptionPlanClient(cfg),
 		TLSFingerprintProfile:         NewTLSFingerprintProfileClient(cfg),
+		TrafficCapture:                NewTrafficCaptureClient(cfg),
 		UsageCleanupTask:              NewUsageCleanupTaskClient(cfg),
 		UsageLog:                      NewUsageLogClient(cfg),
 		User:                          NewUserClient(cfg),
@@ -343,6 +348,7 @@ func (c *Client) BeginTx(ctx context.Context, opts *sql.TxOptions) (*Tx, error) 
 		Setting:                       NewSettingClient(cfg),
 		SubscriptionPlan:              NewSubscriptionPlanClient(cfg),
 		TLSFingerprintProfile:         NewTLSFingerprintProfileClient(cfg),
+		TrafficCapture:                NewTrafficCaptureClient(cfg),
 		UsageCleanupTask:              NewUsageCleanupTaskClient(cfg),
 		UsageLog:                      NewUsageLogClient(cfg),
 		User:                          NewUserClient(cfg),
@@ -386,9 +392,9 @@ func (c *Client) Use(hooks ...Hook) {
 		c.IdempotencyRecord, c.IdentityAdoptionDecision, c.PaymentAuditLog,
 		c.PaymentOrder, c.PaymentProviderInstance, c.PendingAuthSession, c.PromoCode,
 		c.PromoCodeUsage, c.Proxy, c.RedeemCode, c.SecuritySecret, c.Setting,
-		c.SubscriptionPlan, c.TLSFingerprintProfile, c.UsageCleanupTask, c.UsageLog,
-		c.User, c.UserAllowedGroup, c.UserAttributeDefinition, c.UserAttributeValue,
-		c.UserSubscription,
+		c.SubscriptionPlan, c.TLSFingerprintProfile, c.TrafficCapture,
+		c.UsageCleanupTask, c.UsageLog, c.User, c.UserAllowedGroup,
+		c.UserAttributeDefinition, c.UserAttributeValue, c.UserSubscription,
 	} {
 		n.Use(hooks...)
 	}
@@ -405,9 +411,9 @@ func (c *Client) Intercept(interceptors ...Interceptor) {
 		c.IdempotencyRecord, c.IdentityAdoptionDecision, c.PaymentAuditLog,
 		c.PaymentOrder, c.PaymentProviderInstance, c.PendingAuthSession, c.PromoCode,
 		c.PromoCodeUsage, c.Proxy, c.RedeemCode, c.SecuritySecret, c.Setting,
-		c.SubscriptionPlan, c.TLSFingerprintProfile, c.UsageCleanupTask, c.UsageLog,
-		c.User, c.UserAllowedGroup, c.UserAttributeDefinition, c.UserAttributeValue,
-		c.UserSubscription,
+		c.SubscriptionPlan, c.TLSFingerprintProfile, c.TrafficCapture,
+		c.UsageCleanupTask, c.UsageLog, c.User, c.UserAllowedGroup,
+		c.UserAttributeDefinition, c.UserAttributeValue, c.UserSubscription,
 	} {
 		n.Intercept(interceptors...)
 	}
@@ -470,6 +476,8 @@ func (c *Client) Mutate(ctx context.Context, m Mutation) (Value, error) {
 		return c.SubscriptionPlan.mutate(ctx, m)
 	case *TLSFingerprintProfileMutation:
 		return c.TLSFingerprintProfile.mutate(ctx, m)
+	case *TrafficCaptureMutation:
+		return c.TrafficCapture.mutate(ctx, m)
 	case *UsageCleanupTaskMutation:
 		return c.UsageCleanupTask.mutate(ctx, m)
 	case *UsageLogMutation:
@@ -4695,6 +4703,139 @@ func (c *TLSFingerprintProfileClient) mutate(ctx context.Context, m *TLSFingerpr
 	}
 }
 
+// TrafficCaptureClient is a client for the TrafficCapture schema.
+type TrafficCaptureClient struct {
+	config
+}
+
+// NewTrafficCaptureClient returns a client for the TrafficCapture from the given config.
+func NewTrafficCaptureClient(c config) *TrafficCaptureClient {
+	return &TrafficCaptureClient{config: c}
+}
+
+// Use adds a list of mutation hooks to the hooks stack.
+// A call to `Use(f, g, h)` equals to `trafficcapture.Hooks(f(g(h())))`.
+func (c *TrafficCaptureClient) Use(hooks ...Hook) {
+	c.hooks.TrafficCapture = append(c.hooks.TrafficCapture, hooks...)
+}
+
+// Intercept adds a list of query interceptors to the interceptors stack.
+// A call to `Intercept(f, g, h)` equals to `trafficcapture.Intercept(f(g(h())))`.
+func (c *TrafficCaptureClient) Intercept(interceptors ...Interceptor) {
+	c.inters.TrafficCapture = append(c.inters.TrafficCapture, interceptors...)
+}
+
+// Create returns a builder for creating a TrafficCapture entity.
+func (c *TrafficCaptureClient) Create() *TrafficCaptureCreate {
+	mutation := newTrafficCaptureMutation(c.config, OpCreate)
+	return &TrafficCaptureCreate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// CreateBulk returns a builder for creating a bulk of TrafficCapture entities.
+func (c *TrafficCaptureClient) CreateBulk(builders ...*TrafficCaptureCreate) *TrafficCaptureCreateBulk {
+	return &TrafficCaptureCreateBulk{config: c.config, builders: builders}
+}
+
+// MapCreateBulk creates a bulk creation builder from the given slice. For each item in the slice, the function creates
+// a builder and applies setFunc on it.
+func (c *TrafficCaptureClient) MapCreateBulk(slice any, setFunc func(*TrafficCaptureCreate, int)) *TrafficCaptureCreateBulk {
+	rv := reflect.ValueOf(slice)
+	if rv.Kind() != reflect.Slice {
+		return &TrafficCaptureCreateBulk{err: fmt.Errorf("calling to TrafficCaptureClient.MapCreateBulk with wrong type %T, need slice", slice)}
+	}
+	builders := make([]*TrafficCaptureCreate, rv.Len())
+	for i := 0; i < rv.Len(); i++ {
+		builders[i] = c.Create()
+		setFunc(builders[i], i)
+	}
+	return &TrafficCaptureCreateBulk{config: c.config, builders: builders}
+}
+
+// Update returns an update builder for TrafficCapture.
+func (c *TrafficCaptureClient) Update() *TrafficCaptureUpdate {
+	mutation := newTrafficCaptureMutation(c.config, OpUpdate)
+	return &TrafficCaptureUpdate{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOne returns an update builder for the given entity.
+func (c *TrafficCaptureClient) UpdateOne(_m *TrafficCapture) *TrafficCaptureUpdateOne {
+	mutation := newTrafficCaptureMutation(c.config, OpUpdateOne, withTrafficCapture(_m))
+	return &TrafficCaptureUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// UpdateOneID returns an update builder for the given id.
+func (c *TrafficCaptureClient) UpdateOneID(id int64) *TrafficCaptureUpdateOne {
+	mutation := newTrafficCaptureMutation(c.config, OpUpdateOne, withTrafficCaptureID(id))
+	return &TrafficCaptureUpdateOne{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// Delete returns a delete builder for TrafficCapture.
+func (c *TrafficCaptureClient) Delete() *TrafficCaptureDelete {
+	mutation := newTrafficCaptureMutation(c.config, OpDelete)
+	return &TrafficCaptureDelete{config: c.config, hooks: c.Hooks(), mutation: mutation}
+}
+
+// DeleteOne returns a builder for deleting the given entity.
+func (c *TrafficCaptureClient) DeleteOne(_m *TrafficCapture) *TrafficCaptureDeleteOne {
+	return c.DeleteOneID(_m.ID)
+}
+
+// DeleteOneID returns a builder for deleting the given entity by its id.
+func (c *TrafficCaptureClient) DeleteOneID(id int64) *TrafficCaptureDeleteOne {
+	builder := c.Delete().Where(trafficcapture.ID(id))
+	builder.mutation.id = &id
+	builder.mutation.op = OpDeleteOne
+	return &TrafficCaptureDeleteOne{builder}
+}
+
+// Query returns a query builder for TrafficCapture.
+func (c *TrafficCaptureClient) Query() *TrafficCaptureQuery {
+	return &TrafficCaptureQuery{
+		config: c.config,
+		ctx:    &QueryContext{Type: TypeTrafficCapture},
+		inters: c.Interceptors(),
+	}
+}
+
+// Get returns a TrafficCapture entity by its id.
+func (c *TrafficCaptureClient) Get(ctx context.Context, id int64) (*TrafficCapture, error) {
+	return c.Query().Where(trafficcapture.ID(id)).Only(ctx)
+}
+
+// GetX is like Get, but panics if an error occurs.
+func (c *TrafficCaptureClient) GetX(ctx context.Context, id int64) *TrafficCapture {
+	obj, err := c.Get(ctx, id)
+	if err != nil {
+		panic(err)
+	}
+	return obj
+}
+
+// Hooks returns the client hooks.
+func (c *TrafficCaptureClient) Hooks() []Hook {
+	return c.hooks.TrafficCapture
+}
+
+// Interceptors returns the client interceptors.
+func (c *TrafficCaptureClient) Interceptors() []Interceptor {
+	return c.inters.TrafficCapture
+}
+
+func (c *TrafficCaptureClient) mutate(ctx context.Context, m *TrafficCaptureMutation) (Value, error) {
+	switch m.Op() {
+	case OpCreate:
+		return (&TrafficCaptureCreate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdate:
+		return (&TrafficCaptureUpdate{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpUpdateOne:
+		return (&TrafficCaptureUpdateOne{config: c.config, hooks: c.Hooks(), mutation: m}).Save(ctx)
+	case OpDelete, OpDeleteOne:
+		return (&TrafficCaptureDelete{config: c.config, hooks: c.Hooks(), mutation: m}).Exec(ctx)
+	default:
+		return nil, fmt.Errorf("ent: unknown TrafficCapture mutation op: %q", m.Op())
+	}
+}
+
 // UsageCleanupTaskClient is a client for the UsageCleanupTask schema.
 type UsageCleanupTaskClient struct {
 	config
@@ -6024,8 +6165,9 @@ type (
 		Group, IdempotencyRecord, IdentityAdoptionDecision, PaymentAuditLog,
 		PaymentOrder, PaymentProviderInstance, PendingAuthSession, PromoCode,
 		PromoCodeUsage, Proxy, RedeemCode, SecuritySecret, Setting, SubscriptionPlan,
-		TLSFingerprintProfile, UsageCleanupTask, UsageLog, User, UserAllowedGroup,
-		UserAttributeDefinition, UserAttributeValue, UserSubscription []ent.Hook
+		TLSFingerprintProfile, TrafficCapture, UsageCleanupTask, UsageLog, User,
+		UserAllowedGroup, UserAttributeDefinition, UserAttributeValue,
+		UserSubscription []ent.Hook
 	}
 	inters struct {
 		APIKey, Account, AccountGroup, Announcement, AnnouncementRead, AuthIdentity,
@@ -6034,8 +6176,9 @@ type (
 		Group, IdempotencyRecord, IdentityAdoptionDecision, PaymentAuditLog,
 		PaymentOrder, PaymentProviderInstance, PendingAuthSession, PromoCode,
 		PromoCodeUsage, Proxy, RedeemCode, SecuritySecret, Setting, SubscriptionPlan,
-		TLSFingerprintProfile, UsageCleanupTask, UsageLog, User, UserAllowedGroup,
-		UserAttributeDefinition, UserAttributeValue, UserSubscription []ent.Interceptor
+		TLSFingerprintProfile, TrafficCapture, UsageCleanupTask, UsageLog, User,
+		UserAllowedGroup, UserAttributeDefinition, UserAttributeValue,
+		UserSubscription []ent.Interceptor
 	}
 )
 

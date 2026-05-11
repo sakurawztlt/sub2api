@@ -20,11 +20,16 @@ func RegisterGatewayRoutes(
 	subscriptionService *service.SubscriptionService,
 	opsService *service.OpsService,
 	settingService *service.SettingService,
+	trafficCapture *service.TrafficCaptureService,
 	cfg *config.Config,
 ) {
 	bodyLimit := middleware.RequestBodyLimit(cfg.Gateway.MaxBodySize)
 	clientRequestID := middleware.ClientRequestID()
 	opsErrorLogger := handler.OpsErrorLoggerMiddleware(opsService)
+	// 2026-05-11 codex audit / R29: traffic capture middleware — 默认关闭, env on
+	// 后总是 capture 三份 body (inbound/outbound/response). 装最外层让 SSE 流响应
+	// 也被覆盖到. opsErrorLogger 只 buffer error 不冲突.
+	trafficCaptureMW := handler.TrafficCaptureMiddleware(trafficCapture)
 	endpointNorm := handler.InboundEndpointMiddleware()
 
 	// 未分组 Key 拦截中间件（按协议格式区分错误响应）
@@ -35,6 +40,7 @@ func RegisterGatewayRoutes(
 	gateway := r.Group("/v1")
 	gateway.Use(bodyLimit)
 	gateway.Use(clientRequestID)
+	gateway.Use(trafficCaptureMW)
 	gateway.Use(opsErrorLogger)
 	gateway.Use(endpointNorm)
 	gateway.Use(gin.HandlerFunc(apiKeyAuth))

@@ -33,6 +33,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/setting"
 	"github.com/Wei-Shaw/sub2api/ent/subscriptionplan"
 	"github.com/Wei-Shaw/sub2api/ent/tlsfingerprintprofile"
+	"github.com/Wei-Shaw/sub2api/ent/trafficcapture"
 	"github.com/Wei-Shaw/sub2api/ent/usagecleanuptask"
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
 	"github.com/Wei-Shaw/sub2api/ent/user"
@@ -1539,6 +1540,72 @@ func init() {
 	tlsfingerprintprofileDescEnableGrease := tlsfingerprintprofileFields[2].Descriptor()
 	// tlsfingerprintprofile.DefaultEnableGrease holds the default value on creation for the enable_grease field.
 	tlsfingerprintprofile.DefaultEnableGrease = tlsfingerprintprofileDescEnableGrease.Default.(bool)
+	trafficcaptureFields := schema.TrafficCapture{}.Fields()
+	_ = trafficcaptureFields
+	// trafficcaptureDescRequestID is the schema descriptor for request_id field.
+	trafficcaptureDescRequestID := trafficcaptureFields[1].Descriptor()
+	// trafficcapture.RequestIDValidator is a validator for the "request_id" field. It is called by the builders before save.
+	trafficcapture.RequestIDValidator = trafficcaptureDescRequestID.Validators[0].(func(string) error)
+	// trafficcaptureDescUpstreamRequestID is the schema descriptor for upstream_request_id field.
+	trafficcaptureDescUpstreamRequestID := trafficcaptureFields[2].Descriptor()
+	// trafficcapture.UpstreamRequestIDValidator is a validator for the "upstream_request_id" field. It is called by the builders before save.
+	trafficcapture.UpstreamRequestIDValidator = trafficcaptureDescUpstreamRequestID.Validators[0].(func(string) error)
+	// trafficcaptureDescPlatform is the schema descriptor for platform field.
+	trafficcaptureDescPlatform := trafficcaptureFields[6].Descriptor()
+	// trafficcapture.PlatformValidator is a validator for the "platform" field. It is called by the builders before save.
+	trafficcapture.PlatformValidator = trafficcaptureDescPlatform.Validators[0].(func(string) error)
+	// trafficcaptureDescAccountType is the schema descriptor for account_type field.
+	trafficcaptureDescAccountType := trafficcaptureFields[7].Descriptor()
+	// trafficcapture.AccountTypeValidator is a validator for the "account_type" field. It is called by the builders before save.
+	trafficcapture.AccountTypeValidator = trafficcaptureDescAccountType.Validators[0].(func(string) error)
+	// trafficcaptureDescModel is the schema descriptor for model field.
+	trafficcaptureDescModel := trafficcaptureFields[8].Descriptor()
+	// trafficcapture.ModelValidator is a validator for the "model" field. It is called by the builders before save.
+	trafficcapture.ModelValidator = trafficcaptureDescModel.Validators[0].(func(string) error)
+	// trafficcaptureDescUpstreamStatus is the schema descriptor for upstream_status field.
+	trafficcaptureDescUpstreamStatus := trafficcaptureFields[9].Descriptor()
+	// trafficcapture.DefaultUpstreamStatus holds the default value on creation for the upstream_status field.
+	trafficcapture.DefaultUpstreamStatus = trafficcaptureDescUpstreamStatus.Default.(int)
+	// trafficcaptureDescStream is the schema descriptor for stream field.
+	trafficcaptureDescStream := trafficcaptureFields[10].Descriptor()
+	// trafficcapture.DefaultStream holds the default value on creation for the stream field.
+	trafficcapture.DefaultStream = trafficcaptureDescStream.Default.(bool)
+	// trafficcaptureDescUseTimeMs is the schema descriptor for use_time_ms field.
+	trafficcaptureDescUseTimeMs := trafficcaptureFields[11].Descriptor()
+	// trafficcapture.DefaultUseTimeMs holds the default value on creation for the use_time_ms field.
+	trafficcapture.DefaultUseTimeMs = trafficcaptureDescUseTimeMs.Default.(int64)
+	// trafficcaptureDescInboundBodyBytes is the schema descriptor for inbound_body_bytes field.
+	trafficcaptureDescInboundBodyBytes := trafficcaptureFields[13].Descriptor()
+	// trafficcapture.DefaultInboundBodyBytes holds the default value on creation for the inbound_body_bytes field.
+	trafficcapture.DefaultInboundBodyBytes = trafficcaptureDescInboundBodyBytes.Default.(int)
+	// trafficcaptureDescInboundBodyTruncated is the schema descriptor for inbound_body_truncated field.
+	trafficcaptureDescInboundBodyTruncated := trafficcaptureFields[14].Descriptor()
+	// trafficcapture.DefaultInboundBodyTruncated holds the default value on creation for the inbound_body_truncated field.
+	trafficcapture.DefaultInboundBodyTruncated = trafficcaptureDescInboundBodyTruncated.Default.(bool)
+	// trafficcaptureDescOutboundBodyBytes is the schema descriptor for outbound_body_bytes field.
+	trafficcaptureDescOutboundBodyBytes := trafficcaptureFields[16].Descriptor()
+	// trafficcapture.DefaultOutboundBodyBytes holds the default value on creation for the outbound_body_bytes field.
+	trafficcapture.DefaultOutboundBodyBytes = trafficcaptureDescOutboundBodyBytes.Default.(int)
+	// trafficcaptureDescOutboundBodyTruncated is the schema descriptor for outbound_body_truncated field.
+	trafficcaptureDescOutboundBodyTruncated := trafficcaptureFields[17].Descriptor()
+	// trafficcapture.DefaultOutboundBodyTruncated holds the default value on creation for the outbound_body_truncated field.
+	trafficcapture.DefaultOutboundBodyTruncated = trafficcaptureDescOutboundBodyTruncated.Default.(bool)
+	// trafficcaptureDescResponseBodyBytes is the schema descriptor for response_body_bytes field.
+	trafficcaptureDescResponseBodyBytes := trafficcaptureFields[19].Descriptor()
+	// trafficcapture.DefaultResponseBodyBytes holds the default value on creation for the response_body_bytes field.
+	trafficcapture.DefaultResponseBodyBytes = trafficcaptureDescResponseBodyBytes.Default.(int)
+	// trafficcaptureDescResponseBodyTruncated is the schema descriptor for response_body_truncated field.
+	trafficcaptureDescResponseBodyTruncated := trafficcaptureFields[20].Descriptor()
+	// trafficcapture.DefaultResponseBodyTruncated holds the default value on creation for the response_body_truncated field.
+	trafficcapture.DefaultResponseBodyTruncated = trafficcaptureDescResponseBodyTruncated.Default.(bool)
+	// trafficcaptureDescErrorKind is the schema descriptor for error_kind field.
+	trafficcaptureDescErrorKind := trafficcaptureFields[23].Descriptor()
+	// trafficcapture.ErrorKindValidator is a validator for the "error_kind" field. It is called by the builders before save.
+	trafficcapture.ErrorKindValidator = trafficcaptureDescErrorKind.Validators[0].(func(string) error)
+	// trafficcaptureDescErrorMsg is the schema descriptor for error_msg field.
+	trafficcaptureDescErrorMsg := trafficcaptureFields[24].Descriptor()
+	// trafficcapture.ErrorMsgValidator is a validator for the "error_msg" field. It is called by the builders before save.
+	trafficcapture.ErrorMsgValidator = trafficcaptureDescErrorMsg.Validators[0].(func(string) error)
 	usagecleanuptaskMixin := schema.UsageCleanupTask{}.Mixin()
 	usagecleanuptaskMixinFields0 := usagecleanuptaskMixin[0].Fields()
 	_ = usagecleanuptaskMixinFields0

@@ -40,6 +40,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/setting"
 	"github.com/Wei-Shaw/sub2api/ent/subscriptionplan"
 	"github.com/Wei-Shaw/sub2api/ent/tlsfingerprintprofile"
+	"github.com/Wei-Shaw/sub2api/ent/trafficcapture"
 	"github.com/Wei-Shaw/sub2api/ent/usagecleanuptask"
 	"github.com/Wei-Shaw/sub2api/ent/usagelog"
 	"github.com/Wei-Shaw/sub2api/ent/user"
@@ -86,6 +87,7 @@ const (
 	TypeSetting                       = "Setting"
 	TypeSubscriptionPlan              = "SubscriptionPlan"
 	TypeTLSFingerprintProfile         = "TLSFingerprintProfile"
+	TypeTrafficCapture                = "TrafficCapture"
 	TypeUsageCleanupTask              = "UsageCleanupTask"
 	TypeUsageLog                      = "UsageLog"
 	TypeUser                          = "User"
@@ -32925,6 +32927,2259 @@ func (m *TLSFingerprintProfileMutation) ClearEdge(name string) error {
 // It returns an error if the edge is not defined in the schema.
 func (m *TLSFingerprintProfileMutation) ResetEdge(name string) error {
 	return fmt.Errorf("unknown TLSFingerprintProfile edge %s", name)
+}
+
+// TrafficCaptureMutation represents an operation that mutates the TrafficCapture nodes in the graph.
+type TrafficCaptureMutation struct {
+	config
+	op                      Op
+	typ                     string
+	id                      *int64
+	ts                      *time.Time
+	request_id              *string
+	upstream_request_id     *string
+	api_key_id              *int64
+	addapi_key_id           *int64
+	account_id              *int64
+	addaccount_id           *int64
+	group_id                *int64
+	addgroup_id             *int64
+	platform                *string
+	account_type            *string
+	model                   *string
+	upstream_status         *int
+	addupstream_status      *int
+	stream                  *bool
+	use_time_ms             *int64
+	adduse_time_ms          *int64
+	inbound_body            *string
+	inbound_body_bytes      *int
+	addinbound_body_bytes   *int
+	inbound_body_truncated  *bool
+	outbound_body           *string
+	outbound_body_bytes     *int
+	addoutbound_body_bytes  *int
+	outbound_body_truncated *bool
+	response_body           *string
+	response_body_bytes     *int
+	addresponse_body_bytes  *int
+	response_body_truncated *bool
+	outbound_headers        *map[string]string
+	response_headers        *map[string]string
+	error_kind              *string
+	error_msg               *string
+	expires_at              *time.Time
+	clearedFields           map[string]struct{}
+	done                    bool
+	oldValue                func(context.Context) (*TrafficCapture, error)
+	predicates              []predicate.TrafficCapture
+}
+
+var _ ent.Mutation = (*TrafficCaptureMutation)(nil)
+
+// trafficcaptureOption allows management of the mutation configuration using functional options.
+type trafficcaptureOption func(*TrafficCaptureMutation)
+
+// newTrafficCaptureMutation creates new mutation for the TrafficCapture entity.
+func newTrafficCaptureMutation(c config, op Op, opts ...trafficcaptureOption) *TrafficCaptureMutation {
+	m := &TrafficCaptureMutation{
+		config:        c,
+		op:            op,
+		typ:           TypeTrafficCapture,
+		clearedFields: make(map[string]struct{}),
+	}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
+}
+
+// withTrafficCaptureID sets the ID field of the mutation.
+func withTrafficCaptureID(id int64) trafficcaptureOption {
+	return func(m *TrafficCaptureMutation) {
+		var (
+			err   error
+			once  sync.Once
+			value *TrafficCapture
+		)
+		m.oldValue = func(ctx context.Context) (*TrafficCapture, error) {
+			once.Do(func() {
+				if m.done {
+					err = errors.New("querying old values post mutation is not allowed")
+				} else {
+					value, err = m.Client().TrafficCapture.Get(ctx, id)
+				}
+			})
+			return value, err
+		}
+		m.id = &id
+	}
+}
+
+// withTrafficCapture sets the old TrafficCapture of the mutation.
+func withTrafficCapture(node *TrafficCapture) trafficcaptureOption {
+	return func(m *TrafficCaptureMutation) {
+		m.oldValue = func(context.Context) (*TrafficCapture, error) {
+			return node, nil
+		}
+		m.id = &node.ID
+	}
+}
+
+// Client returns a new `ent.Client` from the mutation. If the mutation was
+// executed in a transaction (ent.Tx), a transactional client is returned.
+func (m TrafficCaptureMutation) Client() *Client {
+	client := &Client{config: m.config}
+	client.init()
+	return client
+}
+
+// Tx returns an `ent.Tx` for mutations that were executed in transactions;
+// it returns an error otherwise.
+func (m TrafficCaptureMutation) Tx() (*Tx, error) {
+	if _, ok := m.driver.(*txDriver); !ok {
+		return nil, errors.New("ent: mutation is not running in a transaction")
+	}
+	tx := &Tx{config: m.config}
+	tx.init()
+	return tx, nil
+}
+
+// ID returns the ID value in the mutation. Note that the ID is only available
+// if it was provided to the builder or after it was returned from the database.
+func (m *TrafficCaptureMutation) ID() (id int64, exists bool) {
+	if m.id == nil {
+		return
+	}
+	return *m.id, true
+}
+
+// IDs queries the database and returns the entity ids that match the mutation's predicate.
+// That means, if the mutation is applied within a transaction with an isolation level such
+// as sql.LevelSerializable, the returned ids match the ids of the rows that will be updated
+// or updated by the mutation.
+func (m *TrafficCaptureMutation) IDs(ctx context.Context) ([]int64, error) {
+	switch {
+	case m.op.Is(OpUpdateOne | OpDeleteOne):
+		id, exists := m.ID()
+		if exists {
+			return []int64{id}, nil
+		}
+		fallthrough
+	case m.op.Is(OpUpdate | OpDelete):
+		return m.Client().TrafficCapture.Query().Where(m.predicates...).IDs(ctx)
+	default:
+		return nil, fmt.Errorf("IDs is not allowed on %s operations", m.op)
+	}
+}
+
+// SetTs sets the "ts" field.
+func (m *TrafficCaptureMutation) SetTs(t time.Time) {
+	m.ts = &t
+}
+
+// Ts returns the value of the "ts" field in the mutation.
+func (m *TrafficCaptureMutation) Ts() (r time.Time, exists bool) {
+	v := m.ts
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTs returns the old "ts" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldTs(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTs is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTs requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTs: %w", err)
+	}
+	return oldValue.Ts, nil
+}
+
+// ResetTs resets all changes to the "ts" field.
+func (m *TrafficCaptureMutation) ResetTs() {
+	m.ts = nil
+}
+
+// SetRequestID sets the "request_id" field.
+func (m *TrafficCaptureMutation) SetRequestID(s string) {
+	m.request_id = &s
+}
+
+// RequestID returns the value of the "request_id" field in the mutation.
+func (m *TrafficCaptureMutation) RequestID() (r string, exists bool) {
+	v := m.request_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRequestID returns the old "request_id" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldRequestID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRequestID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRequestID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRequestID: %w", err)
+	}
+	return oldValue.RequestID, nil
+}
+
+// ClearRequestID clears the value of the "request_id" field.
+func (m *TrafficCaptureMutation) ClearRequestID() {
+	m.request_id = nil
+	m.clearedFields[trafficcapture.FieldRequestID] = struct{}{}
+}
+
+// RequestIDCleared returns if the "request_id" field was cleared in this mutation.
+func (m *TrafficCaptureMutation) RequestIDCleared() bool {
+	_, ok := m.clearedFields[trafficcapture.FieldRequestID]
+	return ok
+}
+
+// ResetRequestID resets all changes to the "request_id" field.
+func (m *TrafficCaptureMutation) ResetRequestID() {
+	m.request_id = nil
+	delete(m.clearedFields, trafficcapture.FieldRequestID)
+}
+
+// SetUpstreamRequestID sets the "upstream_request_id" field.
+func (m *TrafficCaptureMutation) SetUpstreamRequestID(s string) {
+	m.upstream_request_id = &s
+}
+
+// UpstreamRequestID returns the value of the "upstream_request_id" field in the mutation.
+func (m *TrafficCaptureMutation) UpstreamRequestID() (r string, exists bool) {
+	v := m.upstream_request_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpstreamRequestID returns the old "upstream_request_id" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldUpstreamRequestID(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpstreamRequestID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpstreamRequestID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpstreamRequestID: %w", err)
+	}
+	return oldValue.UpstreamRequestID, nil
+}
+
+// ClearUpstreamRequestID clears the value of the "upstream_request_id" field.
+func (m *TrafficCaptureMutation) ClearUpstreamRequestID() {
+	m.upstream_request_id = nil
+	m.clearedFields[trafficcapture.FieldUpstreamRequestID] = struct{}{}
+}
+
+// UpstreamRequestIDCleared returns if the "upstream_request_id" field was cleared in this mutation.
+func (m *TrafficCaptureMutation) UpstreamRequestIDCleared() bool {
+	_, ok := m.clearedFields[trafficcapture.FieldUpstreamRequestID]
+	return ok
+}
+
+// ResetUpstreamRequestID resets all changes to the "upstream_request_id" field.
+func (m *TrafficCaptureMutation) ResetUpstreamRequestID() {
+	m.upstream_request_id = nil
+	delete(m.clearedFields, trafficcapture.FieldUpstreamRequestID)
+}
+
+// SetAPIKeyID sets the "api_key_id" field.
+func (m *TrafficCaptureMutation) SetAPIKeyID(i int64) {
+	m.api_key_id = &i
+	m.addapi_key_id = nil
+}
+
+// APIKeyID returns the value of the "api_key_id" field in the mutation.
+func (m *TrafficCaptureMutation) APIKeyID() (r int64, exists bool) {
+	v := m.api_key_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAPIKeyID returns the old "api_key_id" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldAPIKeyID(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAPIKeyID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAPIKeyID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAPIKeyID: %w", err)
+	}
+	return oldValue.APIKeyID, nil
+}
+
+// AddAPIKeyID adds i to the "api_key_id" field.
+func (m *TrafficCaptureMutation) AddAPIKeyID(i int64) {
+	if m.addapi_key_id != nil {
+		*m.addapi_key_id += i
+	} else {
+		m.addapi_key_id = &i
+	}
+}
+
+// AddedAPIKeyID returns the value that was added to the "api_key_id" field in this mutation.
+func (m *TrafficCaptureMutation) AddedAPIKeyID() (r int64, exists bool) {
+	v := m.addapi_key_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearAPIKeyID clears the value of the "api_key_id" field.
+func (m *TrafficCaptureMutation) ClearAPIKeyID() {
+	m.api_key_id = nil
+	m.addapi_key_id = nil
+	m.clearedFields[trafficcapture.FieldAPIKeyID] = struct{}{}
+}
+
+// APIKeyIDCleared returns if the "api_key_id" field was cleared in this mutation.
+func (m *TrafficCaptureMutation) APIKeyIDCleared() bool {
+	_, ok := m.clearedFields[trafficcapture.FieldAPIKeyID]
+	return ok
+}
+
+// ResetAPIKeyID resets all changes to the "api_key_id" field.
+func (m *TrafficCaptureMutation) ResetAPIKeyID() {
+	m.api_key_id = nil
+	m.addapi_key_id = nil
+	delete(m.clearedFields, trafficcapture.FieldAPIKeyID)
+}
+
+// SetAccountID sets the "account_id" field.
+func (m *TrafficCaptureMutation) SetAccountID(i int64) {
+	m.account_id = &i
+	m.addaccount_id = nil
+}
+
+// AccountID returns the value of the "account_id" field in the mutation.
+func (m *TrafficCaptureMutation) AccountID() (r int64, exists bool) {
+	v := m.account_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAccountID returns the old "account_id" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldAccountID(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAccountID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAccountID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAccountID: %w", err)
+	}
+	return oldValue.AccountID, nil
+}
+
+// AddAccountID adds i to the "account_id" field.
+func (m *TrafficCaptureMutation) AddAccountID(i int64) {
+	if m.addaccount_id != nil {
+		*m.addaccount_id += i
+	} else {
+		m.addaccount_id = &i
+	}
+}
+
+// AddedAccountID returns the value that was added to the "account_id" field in this mutation.
+func (m *TrafficCaptureMutation) AddedAccountID() (r int64, exists bool) {
+	v := m.addaccount_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearAccountID clears the value of the "account_id" field.
+func (m *TrafficCaptureMutation) ClearAccountID() {
+	m.account_id = nil
+	m.addaccount_id = nil
+	m.clearedFields[trafficcapture.FieldAccountID] = struct{}{}
+}
+
+// AccountIDCleared returns if the "account_id" field was cleared in this mutation.
+func (m *TrafficCaptureMutation) AccountIDCleared() bool {
+	_, ok := m.clearedFields[trafficcapture.FieldAccountID]
+	return ok
+}
+
+// ResetAccountID resets all changes to the "account_id" field.
+func (m *TrafficCaptureMutation) ResetAccountID() {
+	m.account_id = nil
+	m.addaccount_id = nil
+	delete(m.clearedFields, trafficcapture.FieldAccountID)
+}
+
+// SetGroupID sets the "group_id" field.
+func (m *TrafficCaptureMutation) SetGroupID(i int64) {
+	m.group_id = &i
+	m.addgroup_id = nil
+}
+
+// GroupID returns the value of the "group_id" field in the mutation.
+func (m *TrafficCaptureMutation) GroupID() (r int64, exists bool) {
+	v := m.group_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGroupID returns the old "group_id" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldGroupID(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGroupID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGroupID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGroupID: %w", err)
+	}
+	return oldValue.GroupID, nil
+}
+
+// AddGroupID adds i to the "group_id" field.
+func (m *TrafficCaptureMutation) AddGroupID(i int64) {
+	if m.addgroup_id != nil {
+		*m.addgroup_id += i
+	} else {
+		m.addgroup_id = &i
+	}
+}
+
+// AddedGroupID returns the value that was added to the "group_id" field in this mutation.
+func (m *TrafficCaptureMutation) AddedGroupID() (r int64, exists bool) {
+	v := m.addgroup_id
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearGroupID clears the value of the "group_id" field.
+func (m *TrafficCaptureMutation) ClearGroupID() {
+	m.group_id = nil
+	m.addgroup_id = nil
+	m.clearedFields[trafficcapture.FieldGroupID] = struct{}{}
+}
+
+// GroupIDCleared returns if the "group_id" field was cleared in this mutation.
+func (m *TrafficCaptureMutation) GroupIDCleared() bool {
+	_, ok := m.clearedFields[trafficcapture.FieldGroupID]
+	return ok
+}
+
+// ResetGroupID resets all changes to the "group_id" field.
+func (m *TrafficCaptureMutation) ResetGroupID() {
+	m.group_id = nil
+	m.addgroup_id = nil
+	delete(m.clearedFields, trafficcapture.FieldGroupID)
+}
+
+// SetPlatform sets the "platform" field.
+func (m *TrafficCaptureMutation) SetPlatform(s string) {
+	m.platform = &s
+}
+
+// Platform returns the value of the "platform" field in the mutation.
+func (m *TrafficCaptureMutation) Platform() (r string, exists bool) {
+	v := m.platform
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPlatform returns the old "platform" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldPlatform(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPlatform is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPlatform requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPlatform: %w", err)
+	}
+	return oldValue.Platform, nil
+}
+
+// ClearPlatform clears the value of the "platform" field.
+func (m *TrafficCaptureMutation) ClearPlatform() {
+	m.platform = nil
+	m.clearedFields[trafficcapture.FieldPlatform] = struct{}{}
+}
+
+// PlatformCleared returns if the "platform" field was cleared in this mutation.
+func (m *TrafficCaptureMutation) PlatformCleared() bool {
+	_, ok := m.clearedFields[trafficcapture.FieldPlatform]
+	return ok
+}
+
+// ResetPlatform resets all changes to the "platform" field.
+func (m *TrafficCaptureMutation) ResetPlatform() {
+	m.platform = nil
+	delete(m.clearedFields, trafficcapture.FieldPlatform)
+}
+
+// SetAccountType sets the "account_type" field.
+func (m *TrafficCaptureMutation) SetAccountType(s string) {
+	m.account_type = &s
+}
+
+// AccountType returns the value of the "account_type" field in the mutation.
+func (m *TrafficCaptureMutation) AccountType() (r string, exists bool) {
+	v := m.account_type
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldAccountType returns the old "account_type" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldAccountType(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldAccountType is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldAccountType requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldAccountType: %w", err)
+	}
+	return oldValue.AccountType, nil
+}
+
+// ClearAccountType clears the value of the "account_type" field.
+func (m *TrafficCaptureMutation) ClearAccountType() {
+	m.account_type = nil
+	m.clearedFields[trafficcapture.FieldAccountType] = struct{}{}
+}
+
+// AccountTypeCleared returns if the "account_type" field was cleared in this mutation.
+func (m *TrafficCaptureMutation) AccountTypeCleared() bool {
+	_, ok := m.clearedFields[trafficcapture.FieldAccountType]
+	return ok
+}
+
+// ResetAccountType resets all changes to the "account_type" field.
+func (m *TrafficCaptureMutation) ResetAccountType() {
+	m.account_type = nil
+	delete(m.clearedFields, trafficcapture.FieldAccountType)
+}
+
+// SetModel sets the "model" field.
+func (m *TrafficCaptureMutation) SetModel(s string) {
+	m.model = &s
+}
+
+// Model returns the value of the "model" field in the mutation.
+func (m *TrafficCaptureMutation) Model() (r string, exists bool) {
+	v := m.model
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldModel returns the old "model" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldModel(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldModel is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldModel requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldModel: %w", err)
+	}
+	return oldValue.Model, nil
+}
+
+// ClearModel clears the value of the "model" field.
+func (m *TrafficCaptureMutation) ClearModel() {
+	m.model = nil
+	m.clearedFields[trafficcapture.FieldModel] = struct{}{}
+}
+
+// ModelCleared returns if the "model" field was cleared in this mutation.
+func (m *TrafficCaptureMutation) ModelCleared() bool {
+	_, ok := m.clearedFields[trafficcapture.FieldModel]
+	return ok
+}
+
+// ResetModel resets all changes to the "model" field.
+func (m *TrafficCaptureMutation) ResetModel() {
+	m.model = nil
+	delete(m.clearedFields, trafficcapture.FieldModel)
+}
+
+// SetUpstreamStatus sets the "upstream_status" field.
+func (m *TrafficCaptureMutation) SetUpstreamStatus(i int) {
+	m.upstream_status = &i
+	m.addupstream_status = nil
+}
+
+// UpstreamStatus returns the value of the "upstream_status" field in the mutation.
+func (m *TrafficCaptureMutation) UpstreamStatus() (r int, exists bool) {
+	v := m.upstream_status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUpstreamStatus returns the old "upstream_status" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldUpstreamStatus(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUpstreamStatus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUpstreamStatus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUpstreamStatus: %w", err)
+	}
+	return oldValue.UpstreamStatus, nil
+}
+
+// AddUpstreamStatus adds i to the "upstream_status" field.
+func (m *TrafficCaptureMutation) AddUpstreamStatus(i int) {
+	if m.addupstream_status != nil {
+		*m.addupstream_status += i
+	} else {
+		m.addupstream_status = &i
+	}
+}
+
+// AddedUpstreamStatus returns the value that was added to the "upstream_status" field in this mutation.
+func (m *TrafficCaptureMutation) AddedUpstreamStatus() (r int, exists bool) {
+	v := m.addupstream_status
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetUpstreamStatus resets all changes to the "upstream_status" field.
+func (m *TrafficCaptureMutation) ResetUpstreamStatus() {
+	m.upstream_status = nil
+	m.addupstream_status = nil
+}
+
+// SetStream sets the "stream" field.
+func (m *TrafficCaptureMutation) SetStream(b bool) {
+	m.stream = &b
+}
+
+// Stream returns the value of the "stream" field in the mutation.
+func (m *TrafficCaptureMutation) Stream() (r bool, exists bool) {
+	v := m.stream
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldStream returns the old "stream" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldStream(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldStream is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldStream requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldStream: %w", err)
+	}
+	return oldValue.Stream, nil
+}
+
+// ResetStream resets all changes to the "stream" field.
+func (m *TrafficCaptureMutation) ResetStream() {
+	m.stream = nil
+}
+
+// SetUseTimeMs sets the "use_time_ms" field.
+func (m *TrafficCaptureMutation) SetUseTimeMs(i int64) {
+	m.use_time_ms = &i
+	m.adduse_time_ms = nil
+}
+
+// UseTimeMs returns the value of the "use_time_ms" field in the mutation.
+func (m *TrafficCaptureMutation) UseTimeMs() (r int64, exists bool) {
+	v := m.use_time_ms
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUseTimeMs returns the old "use_time_ms" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldUseTimeMs(ctx context.Context) (v int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUseTimeMs is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUseTimeMs requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUseTimeMs: %w", err)
+	}
+	return oldValue.UseTimeMs, nil
+}
+
+// AddUseTimeMs adds i to the "use_time_ms" field.
+func (m *TrafficCaptureMutation) AddUseTimeMs(i int64) {
+	if m.adduse_time_ms != nil {
+		*m.adduse_time_ms += i
+	} else {
+		m.adduse_time_ms = &i
+	}
+}
+
+// AddedUseTimeMs returns the value that was added to the "use_time_ms" field in this mutation.
+func (m *TrafficCaptureMutation) AddedUseTimeMs() (r int64, exists bool) {
+	v := m.adduse_time_ms
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetUseTimeMs resets all changes to the "use_time_ms" field.
+func (m *TrafficCaptureMutation) ResetUseTimeMs() {
+	m.use_time_ms = nil
+	m.adduse_time_ms = nil
+}
+
+// SetInboundBody sets the "inbound_body" field.
+func (m *TrafficCaptureMutation) SetInboundBody(s string) {
+	m.inbound_body = &s
+}
+
+// InboundBody returns the value of the "inbound_body" field in the mutation.
+func (m *TrafficCaptureMutation) InboundBody() (r string, exists bool) {
+	v := m.inbound_body
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldInboundBody returns the old "inbound_body" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldInboundBody(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldInboundBody is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldInboundBody requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldInboundBody: %w", err)
+	}
+	return oldValue.InboundBody, nil
+}
+
+// ClearInboundBody clears the value of the "inbound_body" field.
+func (m *TrafficCaptureMutation) ClearInboundBody() {
+	m.inbound_body = nil
+	m.clearedFields[trafficcapture.FieldInboundBody] = struct{}{}
+}
+
+// InboundBodyCleared returns if the "inbound_body" field was cleared in this mutation.
+func (m *TrafficCaptureMutation) InboundBodyCleared() bool {
+	_, ok := m.clearedFields[trafficcapture.FieldInboundBody]
+	return ok
+}
+
+// ResetInboundBody resets all changes to the "inbound_body" field.
+func (m *TrafficCaptureMutation) ResetInboundBody() {
+	m.inbound_body = nil
+	delete(m.clearedFields, trafficcapture.FieldInboundBody)
+}
+
+// SetInboundBodyBytes sets the "inbound_body_bytes" field.
+func (m *TrafficCaptureMutation) SetInboundBodyBytes(i int) {
+	m.inbound_body_bytes = &i
+	m.addinbound_body_bytes = nil
+}
+
+// InboundBodyBytes returns the value of the "inbound_body_bytes" field in the mutation.
+func (m *TrafficCaptureMutation) InboundBodyBytes() (r int, exists bool) {
+	v := m.inbound_body_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldInboundBodyBytes returns the old "inbound_body_bytes" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldInboundBodyBytes(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldInboundBodyBytes is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldInboundBodyBytes requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldInboundBodyBytes: %w", err)
+	}
+	return oldValue.InboundBodyBytes, nil
+}
+
+// AddInboundBodyBytes adds i to the "inbound_body_bytes" field.
+func (m *TrafficCaptureMutation) AddInboundBodyBytes(i int) {
+	if m.addinbound_body_bytes != nil {
+		*m.addinbound_body_bytes += i
+	} else {
+		m.addinbound_body_bytes = &i
+	}
+}
+
+// AddedInboundBodyBytes returns the value that was added to the "inbound_body_bytes" field in this mutation.
+func (m *TrafficCaptureMutation) AddedInboundBodyBytes() (r int, exists bool) {
+	v := m.addinbound_body_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetInboundBodyBytes resets all changes to the "inbound_body_bytes" field.
+func (m *TrafficCaptureMutation) ResetInboundBodyBytes() {
+	m.inbound_body_bytes = nil
+	m.addinbound_body_bytes = nil
+}
+
+// SetInboundBodyTruncated sets the "inbound_body_truncated" field.
+func (m *TrafficCaptureMutation) SetInboundBodyTruncated(b bool) {
+	m.inbound_body_truncated = &b
+}
+
+// InboundBodyTruncated returns the value of the "inbound_body_truncated" field in the mutation.
+func (m *TrafficCaptureMutation) InboundBodyTruncated() (r bool, exists bool) {
+	v := m.inbound_body_truncated
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldInboundBodyTruncated returns the old "inbound_body_truncated" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldInboundBodyTruncated(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldInboundBodyTruncated is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldInboundBodyTruncated requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldInboundBodyTruncated: %w", err)
+	}
+	return oldValue.InboundBodyTruncated, nil
+}
+
+// ResetInboundBodyTruncated resets all changes to the "inbound_body_truncated" field.
+func (m *TrafficCaptureMutation) ResetInboundBodyTruncated() {
+	m.inbound_body_truncated = nil
+}
+
+// SetOutboundBody sets the "outbound_body" field.
+func (m *TrafficCaptureMutation) SetOutboundBody(s string) {
+	m.outbound_body = &s
+}
+
+// OutboundBody returns the value of the "outbound_body" field in the mutation.
+func (m *TrafficCaptureMutation) OutboundBody() (r string, exists bool) {
+	v := m.outbound_body
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldOutboundBody returns the old "outbound_body" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldOutboundBody(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldOutboundBody is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldOutboundBody requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldOutboundBody: %w", err)
+	}
+	return oldValue.OutboundBody, nil
+}
+
+// ClearOutboundBody clears the value of the "outbound_body" field.
+func (m *TrafficCaptureMutation) ClearOutboundBody() {
+	m.outbound_body = nil
+	m.clearedFields[trafficcapture.FieldOutboundBody] = struct{}{}
+}
+
+// OutboundBodyCleared returns if the "outbound_body" field was cleared in this mutation.
+func (m *TrafficCaptureMutation) OutboundBodyCleared() bool {
+	_, ok := m.clearedFields[trafficcapture.FieldOutboundBody]
+	return ok
+}
+
+// ResetOutboundBody resets all changes to the "outbound_body" field.
+func (m *TrafficCaptureMutation) ResetOutboundBody() {
+	m.outbound_body = nil
+	delete(m.clearedFields, trafficcapture.FieldOutboundBody)
+}
+
+// SetOutboundBodyBytes sets the "outbound_body_bytes" field.
+func (m *TrafficCaptureMutation) SetOutboundBodyBytes(i int) {
+	m.outbound_body_bytes = &i
+	m.addoutbound_body_bytes = nil
+}
+
+// OutboundBodyBytes returns the value of the "outbound_body_bytes" field in the mutation.
+func (m *TrafficCaptureMutation) OutboundBodyBytes() (r int, exists bool) {
+	v := m.outbound_body_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldOutboundBodyBytes returns the old "outbound_body_bytes" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldOutboundBodyBytes(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldOutboundBodyBytes is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldOutboundBodyBytes requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldOutboundBodyBytes: %w", err)
+	}
+	return oldValue.OutboundBodyBytes, nil
+}
+
+// AddOutboundBodyBytes adds i to the "outbound_body_bytes" field.
+func (m *TrafficCaptureMutation) AddOutboundBodyBytes(i int) {
+	if m.addoutbound_body_bytes != nil {
+		*m.addoutbound_body_bytes += i
+	} else {
+		m.addoutbound_body_bytes = &i
+	}
+}
+
+// AddedOutboundBodyBytes returns the value that was added to the "outbound_body_bytes" field in this mutation.
+func (m *TrafficCaptureMutation) AddedOutboundBodyBytes() (r int, exists bool) {
+	v := m.addoutbound_body_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetOutboundBodyBytes resets all changes to the "outbound_body_bytes" field.
+func (m *TrafficCaptureMutation) ResetOutboundBodyBytes() {
+	m.outbound_body_bytes = nil
+	m.addoutbound_body_bytes = nil
+}
+
+// SetOutboundBodyTruncated sets the "outbound_body_truncated" field.
+func (m *TrafficCaptureMutation) SetOutboundBodyTruncated(b bool) {
+	m.outbound_body_truncated = &b
+}
+
+// OutboundBodyTruncated returns the value of the "outbound_body_truncated" field in the mutation.
+func (m *TrafficCaptureMutation) OutboundBodyTruncated() (r bool, exists bool) {
+	v := m.outbound_body_truncated
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldOutboundBodyTruncated returns the old "outbound_body_truncated" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldOutboundBodyTruncated(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldOutboundBodyTruncated is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldOutboundBodyTruncated requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldOutboundBodyTruncated: %w", err)
+	}
+	return oldValue.OutboundBodyTruncated, nil
+}
+
+// ResetOutboundBodyTruncated resets all changes to the "outbound_body_truncated" field.
+func (m *TrafficCaptureMutation) ResetOutboundBodyTruncated() {
+	m.outbound_body_truncated = nil
+}
+
+// SetResponseBody sets the "response_body" field.
+func (m *TrafficCaptureMutation) SetResponseBody(s string) {
+	m.response_body = &s
+}
+
+// ResponseBody returns the value of the "response_body" field in the mutation.
+func (m *TrafficCaptureMutation) ResponseBody() (r string, exists bool) {
+	v := m.response_body
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldResponseBody returns the old "response_body" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldResponseBody(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldResponseBody is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldResponseBody requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldResponseBody: %w", err)
+	}
+	return oldValue.ResponseBody, nil
+}
+
+// ClearResponseBody clears the value of the "response_body" field.
+func (m *TrafficCaptureMutation) ClearResponseBody() {
+	m.response_body = nil
+	m.clearedFields[trafficcapture.FieldResponseBody] = struct{}{}
+}
+
+// ResponseBodyCleared returns if the "response_body" field was cleared in this mutation.
+func (m *TrafficCaptureMutation) ResponseBodyCleared() bool {
+	_, ok := m.clearedFields[trafficcapture.FieldResponseBody]
+	return ok
+}
+
+// ResetResponseBody resets all changes to the "response_body" field.
+func (m *TrafficCaptureMutation) ResetResponseBody() {
+	m.response_body = nil
+	delete(m.clearedFields, trafficcapture.FieldResponseBody)
+}
+
+// SetResponseBodyBytes sets the "response_body_bytes" field.
+func (m *TrafficCaptureMutation) SetResponseBodyBytes(i int) {
+	m.response_body_bytes = &i
+	m.addresponse_body_bytes = nil
+}
+
+// ResponseBodyBytes returns the value of the "response_body_bytes" field in the mutation.
+func (m *TrafficCaptureMutation) ResponseBodyBytes() (r int, exists bool) {
+	v := m.response_body_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldResponseBodyBytes returns the old "response_body_bytes" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldResponseBodyBytes(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldResponseBodyBytes is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldResponseBodyBytes requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldResponseBodyBytes: %w", err)
+	}
+	return oldValue.ResponseBodyBytes, nil
+}
+
+// AddResponseBodyBytes adds i to the "response_body_bytes" field.
+func (m *TrafficCaptureMutation) AddResponseBodyBytes(i int) {
+	if m.addresponse_body_bytes != nil {
+		*m.addresponse_body_bytes += i
+	} else {
+		m.addresponse_body_bytes = &i
+	}
+}
+
+// AddedResponseBodyBytes returns the value that was added to the "response_body_bytes" field in this mutation.
+func (m *TrafficCaptureMutation) AddedResponseBodyBytes() (r int, exists bool) {
+	v := m.addresponse_body_bytes
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetResponseBodyBytes resets all changes to the "response_body_bytes" field.
+func (m *TrafficCaptureMutation) ResetResponseBodyBytes() {
+	m.response_body_bytes = nil
+	m.addresponse_body_bytes = nil
+}
+
+// SetResponseBodyTruncated sets the "response_body_truncated" field.
+func (m *TrafficCaptureMutation) SetResponseBodyTruncated(b bool) {
+	m.response_body_truncated = &b
+}
+
+// ResponseBodyTruncated returns the value of the "response_body_truncated" field in the mutation.
+func (m *TrafficCaptureMutation) ResponseBodyTruncated() (r bool, exists bool) {
+	v := m.response_body_truncated
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldResponseBodyTruncated returns the old "response_body_truncated" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldResponseBodyTruncated(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldResponseBodyTruncated is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldResponseBodyTruncated requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldResponseBodyTruncated: %w", err)
+	}
+	return oldValue.ResponseBodyTruncated, nil
+}
+
+// ResetResponseBodyTruncated resets all changes to the "response_body_truncated" field.
+func (m *TrafficCaptureMutation) ResetResponseBodyTruncated() {
+	m.response_body_truncated = nil
+}
+
+// SetOutboundHeaders sets the "outbound_headers" field.
+func (m *TrafficCaptureMutation) SetOutboundHeaders(value map[string]string) {
+	m.outbound_headers = &value
+}
+
+// OutboundHeaders returns the value of the "outbound_headers" field in the mutation.
+func (m *TrafficCaptureMutation) OutboundHeaders() (r map[string]string, exists bool) {
+	v := m.outbound_headers
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldOutboundHeaders returns the old "outbound_headers" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldOutboundHeaders(ctx context.Context) (v map[string]string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldOutboundHeaders is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldOutboundHeaders requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldOutboundHeaders: %w", err)
+	}
+	return oldValue.OutboundHeaders, nil
+}
+
+// ClearOutboundHeaders clears the value of the "outbound_headers" field.
+func (m *TrafficCaptureMutation) ClearOutboundHeaders() {
+	m.outbound_headers = nil
+	m.clearedFields[trafficcapture.FieldOutboundHeaders] = struct{}{}
+}
+
+// OutboundHeadersCleared returns if the "outbound_headers" field was cleared in this mutation.
+func (m *TrafficCaptureMutation) OutboundHeadersCleared() bool {
+	_, ok := m.clearedFields[trafficcapture.FieldOutboundHeaders]
+	return ok
+}
+
+// ResetOutboundHeaders resets all changes to the "outbound_headers" field.
+func (m *TrafficCaptureMutation) ResetOutboundHeaders() {
+	m.outbound_headers = nil
+	delete(m.clearedFields, trafficcapture.FieldOutboundHeaders)
+}
+
+// SetResponseHeaders sets the "response_headers" field.
+func (m *TrafficCaptureMutation) SetResponseHeaders(value map[string]string) {
+	m.response_headers = &value
+}
+
+// ResponseHeaders returns the value of the "response_headers" field in the mutation.
+func (m *TrafficCaptureMutation) ResponseHeaders() (r map[string]string, exists bool) {
+	v := m.response_headers
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldResponseHeaders returns the old "response_headers" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldResponseHeaders(ctx context.Context) (v map[string]string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldResponseHeaders is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldResponseHeaders requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldResponseHeaders: %w", err)
+	}
+	return oldValue.ResponseHeaders, nil
+}
+
+// ClearResponseHeaders clears the value of the "response_headers" field.
+func (m *TrafficCaptureMutation) ClearResponseHeaders() {
+	m.response_headers = nil
+	m.clearedFields[trafficcapture.FieldResponseHeaders] = struct{}{}
+}
+
+// ResponseHeadersCleared returns if the "response_headers" field was cleared in this mutation.
+func (m *TrafficCaptureMutation) ResponseHeadersCleared() bool {
+	_, ok := m.clearedFields[trafficcapture.FieldResponseHeaders]
+	return ok
+}
+
+// ResetResponseHeaders resets all changes to the "response_headers" field.
+func (m *TrafficCaptureMutation) ResetResponseHeaders() {
+	m.response_headers = nil
+	delete(m.clearedFields, trafficcapture.FieldResponseHeaders)
+}
+
+// SetErrorKind sets the "error_kind" field.
+func (m *TrafficCaptureMutation) SetErrorKind(s string) {
+	m.error_kind = &s
+}
+
+// ErrorKind returns the value of the "error_kind" field in the mutation.
+func (m *TrafficCaptureMutation) ErrorKind() (r string, exists bool) {
+	v := m.error_kind
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldErrorKind returns the old "error_kind" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldErrorKind(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldErrorKind is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldErrorKind requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldErrorKind: %w", err)
+	}
+	return oldValue.ErrorKind, nil
+}
+
+// ClearErrorKind clears the value of the "error_kind" field.
+func (m *TrafficCaptureMutation) ClearErrorKind() {
+	m.error_kind = nil
+	m.clearedFields[trafficcapture.FieldErrorKind] = struct{}{}
+}
+
+// ErrorKindCleared returns if the "error_kind" field was cleared in this mutation.
+func (m *TrafficCaptureMutation) ErrorKindCleared() bool {
+	_, ok := m.clearedFields[trafficcapture.FieldErrorKind]
+	return ok
+}
+
+// ResetErrorKind resets all changes to the "error_kind" field.
+func (m *TrafficCaptureMutation) ResetErrorKind() {
+	m.error_kind = nil
+	delete(m.clearedFields, trafficcapture.FieldErrorKind)
+}
+
+// SetErrorMsg sets the "error_msg" field.
+func (m *TrafficCaptureMutation) SetErrorMsg(s string) {
+	m.error_msg = &s
+}
+
+// ErrorMsg returns the value of the "error_msg" field in the mutation.
+func (m *TrafficCaptureMutation) ErrorMsg() (r string, exists bool) {
+	v := m.error_msg
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldErrorMsg returns the old "error_msg" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldErrorMsg(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldErrorMsg is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldErrorMsg requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldErrorMsg: %w", err)
+	}
+	return oldValue.ErrorMsg, nil
+}
+
+// ClearErrorMsg clears the value of the "error_msg" field.
+func (m *TrafficCaptureMutation) ClearErrorMsg() {
+	m.error_msg = nil
+	m.clearedFields[trafficcapture.FieldErrorMsg] = struct{}{}
+}
+
+// ErrorMsgCleared returns if the "error_msg" field was cleared in this mutation.
+func (m *TrafficCaptureMutation) ErrorMsgCleared() bool {
+	_, ok := m.clearedFields[trafficcapture.FieldErrorMsg]
+	return ok
+}
+
+// ResetErrorMsg resets all changes to the "error_msg" field.
+func (m *TrafficCaptureMutation) ResetErrorMsg() {
+	m.error_msg = nil
+	delete(m.clearedFields, trafficcapture.FieldErrorMsg)
+}
+
+// SetExpiresAt sets the "expires_at" field.
+func (m *TrafficCaptureMutation) SetExpiresAt(t time.Time) {
+	m.expires_at = &t
+}
+
+// ExpiresAt returns the value of the "expires_at" field in the mutation.
+func (m *TrafficCaptureMutation) ExpiresAt() (r time.Time, exists bool) {
+	v := m.expires_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldExpiresAt returns the old "expires_at" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldExpiresAt(ctx context.Context) (v time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldExpiresAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldExpiresAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldExpiresAt: %w", err)
+	}
+	return oldValue.ExpiresAt, nil
+}
+
+// ClearExpiresAt clears the value of the "expires_at" field.
+func (m *TrafficCaptureMutation) ClearExpiresAt() {
+	m.expires_at = nil
+	m.clearedFields[trafficcapture.FieldExpiresAt] = struct{}{}
+}
+
+// ExpiresAtCleared returns if the "expires_at" field was cleared in this mutation.
+func (m *TrafficCaptureMutation) ExpiresAtCleared() bool {
+	_, ok := m.clearedFields[trafficcapture.FieldExpiresAt]
+	return ok
+}
+
+// ResetExpiresAt resets all changes to the "expires_at" field.
+func (m *TrafficCaptureMutation) ResetExpiresAt() {
+	m.expires_at = nil
+	delete(m.clearedFields, trafficcapture.FieldExpiresAt)
+}
+
+// Where appends a list predicates to the TrafficCaptureMutation builder.
+func (m *TrafficCaptureMutation) Where(ps ...predicate.TrafficCapture) {
+	m.predicates = append(m.predicates, ps...)
+}
+
+// WhereP appends storage-level predicates to the TrafficCaptureMutation builder. Using this method,
+// users can use type-assertion to append predicates that do not depend on any generated package.
+func (m *TrafficCaptureMutation) WhereP(ps ...func(*sql.Selector)) {
+	p := make([]predicate.TrafficCapture, len(ps))
+	for i := range ps {
+		p[i] = ps[i]
+	}
+	m.Where(p...)
+}
+
+// Op returns the operation name.
+func (m *TrafficCaptureMutation) Op() Op {
+	return m.op
+}
+
+// SetOp allows setting the mutation operation.
+func (m *TrafficCaptureMutation) SetOp(op Op) {
+	m.op = op
+}
+
+// Type returns the node type of this mutation (TrafficCapture).
+func (m *TrafficCaptureMutation) Type() string {
+	return m.typ
+}
+
+// Fields returns all fields that were changed during this mutation. Note that in
+// order to get all numeric fields that were incremented/decremented, call
+// AddedFields().
+func (m *TrafficCaptureMutation) Fields() []string {
+	fields := make([]string, 0, 26)
+	if m.ts != nil {
+		fields = append(fields, trafficcapture.FieldTs)
+	}
+	if m.request_id != nil {
+		fields = append(fields, trafficcapture.FieldRequestID)
+	}
+	if m.upstream_request_id != nil {
+		fields = append(fields, trafficcapture.FieldUpstreamRequestID)
+	}
+	if m.api_key_id != nil {
+		fields = append(fields, trafficcapture.FieldAPIKeyID)
+	}
+	if m.account_id != nil {
+		fields = append(fields, trafficcapture.FieldAccountID)
+	}
+	if m.group_id != nil {
+		fields = append(fields, trafficcapture.FieldGroupID)
+	}
+	if m.platform != nil {
+		fields = append(fields, trafficcapture.FieldPlatform)
+	}
+	if m.account_type != nil {
+		fields = append(fields, trafficcapture.FieldAccountType)
+	}
+	if m.model != nil {
+		fields = append(fields, trafficcapture.FieldModel)
+	}
+	if m.upstream_status != nil {
+		fields = append(fields, trafficcapture.FieldUpstreamStatus)
+	}
+	if m.stream != nil {
+		fields = append(fields, trafficcapture.FieldStream)
+	}
+	if m.use_time_ms != nil {
+		fields = append(fields, trafficcapture.FieldUseTimeMs)
+	}
+	if m.inbound_body != nil {
+		fields = append(fields, trafficcapture.FieldInboundBody)
+	}
+	if m.inbound_body_bytes != nil {
+		fields = append(fields, trafficcapture.FieldInboundBodyBytes)
+	}
+	if m.inbound_body_truncated != nil {
+		fields = append(fields, trafficcapture.FieldInboundBodyTruncated)
+	}
+	if m.outbound_body != nil {
+		fields = append(fields, trafficcapture.FieldOutboundBody)
+	}
+	if m.outbound_body_bytes != nil {
+		fields = append(fields, trafficcapture.FieldOutboundBodyBytes)
+	}
+	if m.outbound_body_truncated != nil {
+		fields = append(fields, trafficcapture.FieldOutboundBodyTruncated)
+	}
+	if m.response_body != nil {
+		fields = append(fields, trafficcapture.FieldResponseBody)
+	}
+	if m.response_body_bytes != nil {
+		fields = append(fields, trafficcapture.FieldResponseBodyBytes)
+	}
+	if m.response_body_truncated != nil {
+		fields = append(fields, trafficcapture.FieldResponseBodyTruncated)
+	}
+	if m.outbound_headers != nil {
+		fields = append(fields, trafficcapture.FieldOutboundHeaders)
+	}
+	if m.response_headers != nil {
+		fields = append(fields, trafficcapture.FieldResponseHeaders)
+	}
+	if m.error_kind != nil {
+		fields = append(fields, trafficcapture.FieldErrorKind)
+	}
+	if m.error_msg != nil {
+		fields = append(fields, trafficcapture.FieldErrorMsg)
+	}
+	if m.expires_at != nil {
+		fields = append(fields, trafficcapture.FieldExpiresAt)
+	}
+	return fields
+}
+
+// Field returns the value of a field with the given name. The second boolean
+// return value indicates that this field was not set, or was not defined in the
+// schema.
+func (m *TrafficCaptureMutation) Field(name string) (ent.Value, bool) {
+	switch name {
+	case trafficcapture.FieldTs:
+		return m.Ts()
+	case trafficcapture.FieldRequestID:
+		return m.RequestID()
+	case trafficcapture.FieldUpstreamRequestID:
+		return m.UpstreamRequestID()
+	case trafficcapture.FieldAPIKeyID:
+		return m.APIKeyID()
+	case trafficcapture.FieldAccountID:
+		return m.AccountID()
+	case trafficcapture.FieldGroupID:
+		return m.GroupID()
+	case trafficcapture.FieldPlatform:
+		return m.Platform()
+	case trafficcapture.FieldAccountType:
+		return m.AccountType()
+	case trafficcapture.FieldModel:
+		return m.Model()
+	case trafficcapture.FieldUpstreamStatus:
+		return m.UpstreamStatus()
+	case trafficcapture.FieldStream:
+		return m.Stream()
+	case trafficcapture.FieldUseTimeMs:
+		return m.UseTimeMs()
+	case trafficcapture.FieldInboundBody:
+		return m.InboundBody()
+	case trafficcapture.FieldInboundBodyBytes:
+		return m.InboundBodyBytes()
+	case trafficcapture.FieldInboundBodyTruncated:
+		return m.InboundBodyTruncated()
+	case trafficcapture.FieldOutboundBody:
+		return m.OutboundBody()
+	case trafficcapture.FieldOutboundBodyBytes:
+		return m.OutboundBodyBytes()
+	case trafficcapture.FieldOutboundBodyTruncated:
+		return m.OutboundBodyTruncated()
+	case trafficcapture.FieldResponseBody:
+		return m.ResponseBody()
+	case trafficcapture.FieldResponseBodyBytes:
+		return m.ResponseBodyBytes()
+	case trafficcapture.FieldResponseBodyTruncated:
+		return m.ResponseBodyTruncated()
+	case trafficcapture.FieldOutboundHeaders:
+		return m.OutboundHeaders()
+	case trafficcapture.FieldResponseHeaders:
+		return m.ResponseHeaders()
+	case trafficcapture.FieldErrorKind:
+		return m.ErrorKind()
+	case trafficcapture.FieldErrorMsg:
+		return m.ErrorMsg()
+	case trafficcapture.FieldExpiresAt:
+		return m.ExpiresAt()
+	}
+	return nil, false
+}
+
+// OldField returns the old value of the field from the database. An error is
+// returned if the mutation operation is not UpdateOne, or the query to the
+// database failed.
+func (m *TrafficCaptureMutation) OldField(ctx context.Context, name string) (ent.Value, error) {
+	switch name {
+	case trafficcapture.FieldTs:
+		return m.OldTs(ctx)
+	case trafficcapture.FieldRequestID:
+		return m.OldRequestID(ctx)
+	case trafficcapture.FieldUpstreamRequestID:
+		return m.OldUpstreamRequestID(ctx)
+	case trafficcapture.FieldAPIKeyID:
+		return m.OldAPIKeyID(ctx)
+	case trafficcapture.FieldAccountID:
+		return m.OldAccountID(ctx)
+	case trafficcapture.FieldGroupID:
+		return m.OldGroupID(ctx)
+	case trafficcapture.FieldPlatform:
+		return m.OldPlatform(ctx)
+	case trafficcapture.FieldAccountType:
+		return m.OldAccountType(ctx)
+	case trafficcapture.FieldModel:
+		return m.OldModel(ctx)
+	case trafficcapture.FieldUpstreamStatus:
+		return m.OldUpstreamStatus(ctx)
+	case trafficcapture.FieldStream:
+		return m.OldStream(ctx)
+	case trafficcapture.FieldUseTimeMs:
+		return m.OldUseTimeMs(ctx)
+	case trafficcapture.FieldInboundBody:
+		return m.OldInboundBody(ctx)
+	case trafficcapture.FieldInboundBodyBytes:
+		return m.OldInboundBodyBytes(ctx)
+	case trafficcapture.FieldInboundBodyTruncated:
+		return m.OldInboundBodyTruncated(ctx)
+	case trafficcapture.FieldOutboundBody:
+		return m.OldOutboundBody(ctx)
+	case trafficcapture.FieldOutboundBodyBytes:
+		return m.OldOutboundBodyBytes(ctx)
+	case trafficcapture.FieldOutboundBodyTruncated:
+		return m.OldOutboundBodyTruncated(ctx)
+	case trafficcapture.FieldResponseBody:
+		return m.OldResponseBody(ctx)
+	case trafficcapture.FieldResponseBodyBytes:
+		return m.OldResponseBodyBytes(ctx)
+	case trafficcapture.FieldResponseBodyTruncated:
+		return m.OldResponseBodyTruncated(ctx)
+	case trafficcapture.FieldOutboundHeaders:
+		return m.OldOutboundHeaders(ctx)
+	case trafficcapture.FieldResponseHeaders:
+		return m.OldResponseHeaders(ctx)
+	case trafficcapture.FieldErrorKind:
+		return m.OldErrorKind(ctx)
+	case trafficcapture.FieldErrorMsg:
+		return m.OldErrorMsg(ctx)
+	case trafficcapture.FieldExpiresAt:
+		return m.OldExpiresAt(ctx)
+	}
+	return nil, fmt.Errorf("unknown TrafficCapture field %s", name)
+}
+
+// SetField sets the value of a field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *TrafficCaptureMutation) SetField(name string, value ent.Value) error {
+	switch name {
+	case trafficcapture.FieldTs:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTs(v)
+		return nil
+	case trafficcapture.FieldRequestID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRequestID(v)
+		return nil
+	case trafficcapture.FieldUpstreamRequestID:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpstreamRequestID(v)
+		return nil
+	case trafficcapture.FieldAPIKeyID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAPIKeyID(v)
+		return nil
+	case trafficcapture.FieldAccountID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAccountID(v)
+		return nil
+	case trafficcapture.FieldGroupID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGroupID(v)
+		return nil
+	case trafficcapture.FieldPlatform:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPlatform(v)
+		return nil
+	case trafficcapture.FieldAccountType:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetAccountType(v)
+		return nil
+	case trafficcapture.FieldModel:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetModel(v)
+		return nil
+	case trafficcapture.FieldUpstreamStatus:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUpstreamStatus(v)
+		return nil
+	case trafficcapture.FieldStream:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetStream(v)
+		return nil
+	case trafficcapture.FieldUseTimeMs:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUseTimeMs(v)
+		return nil
+	case trafficcapture.FieldInboundBody:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetInboundBody(v)
+		return nil
+	case trafficcapture.FieldInboundBodyBytes:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetInboundBodyBytes(v)
+		return nil
+	case trafficcapture.FieldInboundBodyTruncated:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetInboundBodyTruncated(v)
+		return nil
+	case trafficcapture.FieldOutboundBody:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetOutboundBody(v)
+		return nil
+	case trafficcapture.FieldOutboundBodyBytes:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetOutboundBodyBytes(v)
+		return nil
+	case trafficcapture.FieldOutboundBodyTruncated:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetOutboundBodyTruncated(v)
+		return nil
+	case trafficcapture.FieldResponseBody:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetResponseBody(v)
+		return nil
+	case trafficcapture.FieldResponseBodyBytes:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetResponseBodyBytes(v)
+		return nil
+	case trafficcapture.FieldResponseBodyTruncated:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetResponseBodyTruncated(v)
+		return nil
+	case trafficcapture.FieldOutboundHeaders:
+		v, ok := value.(map[string]string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetOutboundHeaders(v)
+		return nil
+	case trafficcapture.FieldResponseHeaders:
+		v, ok := value.(map[string]string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetResponseHeaders(v)
+		return nil
+	case trafficcapture.FieldErrorKind:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetErrorKind(v)
+		return nil
+	case trafficcapture.FieldErrorMsg:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetErrorMsg(v)
+		return nil
+	case trafficcapture.FieldExpiresAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetExpiresAt(v)
+		return nil
+	}
+	return fmt.Errorf("unknown TrafficCapture field %s", name)
+}
+
+// AddedFields returns all numeric fields that were incremented/decremented during
+// this mutation.
+func (m *TrafficCaptureMutation) AddedFields() []string {
+	var fields []string
+	if m.addapi_key_id != nil {
+		fields = append(fields, trafficcapture.FieldAPIKeyID)
+	}
+	if m.addaccount_id != nil {
+		fields = append(fields, trafficcapture.FieldAccountID)
+	}
+	if m.addgroup_id != nil {
+		fields = append(fields, trafficcapture.FieldGroupID)
+	}
+	if m.addupstream_status != nil {
+		fields = append(fields, trafficcapture.FieldUpstreamStatus)
+	}
+	if m.adduse_time_ms != nil {
+		fields = append(fields, trafficcapture.FieldUseTimeMs)
+	}
+	if m.addinbound_body_bytes != nil {
+		fields = append(fields, trafficcapture.FieldInboundBodyBytes)
+	}
+	if m.addoutbound_body_bytes != nil {
+		fields = append(fields, trafficcapture.FieldOutboundBodyBytes)
+	}
+	if m.addresponse_body_bytes != nil {
+		fields = append(fields, trafficcapture.FieldResponseBodyBytes)
+	}
+	return fields
+}
+
+// AddedField returns the numeric value that was incremented/decremented on a field
+// with the given name. The second boolean return value indicates that this field
+// was not set, or was not defined in the schema.
+func (m *TrafficCaptureMutation) AddedField(name string) (ent.Value, bool) {
+	switch name {
+	case trafficcapture.FieldAPIKeyID:
+		return m.AddedAPIKeyID()
+	case trafficcapture.FieldAccountID:
+		return m.AddedAccountID()
+	case trafficcapture.FieldGroupID:
+		return m.AddedGroupID()
+	case trafficcapture.FieldUpstreamStatus:
+		return m.AddedUpstreamStatus()
+	case trafficcapture.FieldUseTimeMs:
+		return m.AddedUseTimeMs()
+	case trafficcapture.FieldInboundBodyBytes:
+		return m.AddedInboundBodyBytes()
+	case trafficcapture.FieldOutboundBodyBytes:
+		return m.AddedOutboundBodyBytes()
+	case trafficcapture.FieldResponseBodyBytes:
+		return m.AddedResponseBodyBytes()
+	}
+	return nil, false
+}
+
+// AddField adds the value to the field with the given name. It returns an error if
+// the field is not defined in the schema, or if the type mismatched the field
+// type.
+func (m *TrafficCaptureMutation) AddField(name string, value ent.Value) error {
+	switch name {
+	case trafficcapture.FieldAPIKeyID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddAPIKeyID(v)
+		return nil
+	case trafficcapture.FieldAccountID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddAccountID(v)
+		return nil
+	case trafficcapture.FieldGroupID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddGroupID(v)
+		return nil
+	case trafficcapture.FieldUpstreamStatus:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddUpstreamStatus(v)
+		return nil
+	case trafficcapture.FieldUseTimeMs:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddUseTimeMs(v)
+		return nil
+	case trafficcapture.FieldInboundBodyBytes:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddInboundBodyBytes(v)
+		return nil
+	case trafficcapture.FieldOutboundBodyBytes:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddOutboundBodyBytes(v)
+		return nil
+	case trafficcapture.FieldResponseBodyBytes:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddResponseBodyBytes(v)
+		return nil
+	}
+	return fmt.Errorf("unknown TrafficCapture numeric field %s", name)
+}
+
+// ClearedFields returns all nullable fields that were cleared during this
+// mutation.
+func (m *TrafficCaptureMutation) ClearedFields() []string {
+	var fields []string
+	if m.FieldCleared(trafficcapture.FieldRequestID) {
+		fields = append(fields, trafficcapture.FieldRequestID)
+	}
+	if m.FieldCleared(trafficcapture.FieldUpstreamRequestID) {
+		fields = append(fields, trafficcapture.FieldUpstreamRequestID)
+	}
+	if m.FieldCleared(trafficcapture.FieldAPIKeyID) {
+		fields = append(fields, trafficcapture.FieldAPIKeyID)
+	}
+	if m.FieldCleared(trafficcapture.FieldAccountID) {
+		fields = append(fields, trafficcapture.FieldAccountID)
+	}
+	if m.FieldCleared(trafficcapture.FieldGroupID) {
+		fields = append(fields, trafficcapture.FieldGroupID)
+	}
+	if m.FieldCleared(trafficcapture.FieldPlatform) {
+		fields = append(fields, trafficcapture.FieldPlatform)
+	}
+	if m.FieldCleared(trafficcapture.FieldAccountType) {
+		fields = append(fields, trafficcapture.FieldAccountType)
+	}
+	if m.FieldCleared(trafficcapture.FieldModel) {
+		fields = append(fields, trafficcapture.FieldModel)
+	}
+	if m.FieldCleared(trafficcapture.FieldInboundBody) {
+		fields = append(fields, trafficcapture.FieldInboundBody)
+	}
+	if m.FieldCleared(trafficcapture.FieldOutboundBody) {
+		fields = append(fields, trafficcapture.FieldOutboundBody)
+	}
+	if m.FieldCleared(trafficcapture.FieldResponseBody) {
+		fields = append(fields, trafficcapture.FieldResponseBody)
+	}
+	if m.FieldCleared(trafficcapture.FieldOutboundHeaders) {
+		fields = append(fields, trafficcapture.FieldOutboundHeaders)
+	}
+	if m.FieldCleared(trafficcapture.FieldResponseHeaders) {
+		fields = append(fields, trafficcapture.FieldResponseHeaders)
+	}
+	if m.FieldCleared(trafficcapture.FieldErrorKind) {
+		fields = append(fields, trafficcapture.FieldErrorKind)
+	}
+	if m.FieldCleared(trafficcapture.FieldErrorMsg) {
+		fields = append(fields, trafficcapture.FieldErrorMsg)
+	}
+	if m.FieldCleared(trafficcapture.FieldExpiresAt) {
+		fields = append(fields, trafficcapture.FieldExpiresAt)
+	}
+	return fields
+}
+
+// FieldCleared returns a boolean indicating if a field with the given name was
+// cleared in this mutation.
+func (m *TrafficCaptureMutation) FieldCleared(name string) bool {
+	_, ok := m.clearedFields[name]
+	return ok
+}
+
+// ClearField clears the value of the field with the given name. It returns an
+// error if the field is not defined in the schema.
+func (m *TrafficCaptureMutation) ClearField(name string) error {
+	switch name {
+	case trafficcapture.FieldRequestID:
+		m.ClearRequestID()
+		return nil
+	case trafficcapture.FieldUpstreamRequestID:
+		m.ClearUpstreamRequestID()
+		return nil
+	case trafficcapture.FieldAPIKeyID:
+		m.ClearAPIKeyID()
+		return nil
+	case trafficcapture.FieldAccountID:
+		m.ClearAccountID()
+		return nil
+	case trafficcapture.FieldGroupID:
+		m.ClearGroupID()
+		return nil
+	case trafficcapture.FieldPlatform:
+		m.ClearPlatform()
+		return nil
+	case trafficcapture.FieldAccountType:
+		m.ClearAccountType()
+		return nil
+	case trafficcapture.FieldModel:
+		m.ClearModel()
+		return nil
+	case trafficcapture.FieldInboundBody:
+		m.ClearInboundBody()
+		return nil
+	case trafficcapture.FieldOutboundBody:
+		m.ClearOutboundBody()
+		return nil
+	case trafficcapture.FieldResponseBody:
+		m.ClearResponseBody()
+		return nil
+	case trafficcapture.FieldOutboundHeaders:
+		m.ClearOutboundHeaders()
+		return nil
+	case trafficcapture.FieldResponseHeaders:
+		m.ClearResponseHeaders()
+		return nil
+	case trafficcapture.FieldErrorKind:
+		m.ClearErrorKind()
+		return nil
+	case trafficcapture.FieldErrorMsg:
+		m.ClearErrorMsg()
+		return nil
+	case trafficcapture.FieldExpiresAt:
+		m.ClearExpiresAt()
+		return nil
+	}
+	return fmt.Errorf("unknown TrafficCapture nullable field %s", name)
+}
+
+// ResetField resets all changes in the mutation for the field with the given name.
+// It returns an error if the field is not defined in the schema.
+func (m *TrafficCaptureMutation) ResetField(name string) error {
+	switch name {
+	case trafficcapture.FieldTs:
+		m.ResetTs()
+		return nil
+	case trafficcapture.FieldRequestID:
+		m.ResetRequestID()
+		return nil
+	case trafficcapture.FieldUpstreamRequestID:
+		m.ResetUpstreamRequestID()
+		return nil
+	case trafficcapture.FieldAPIKeyID:
+		m.ResetAPIKeyID()
+		return nil
+	case trafficcapture.FieldAccountID:
+		m.ResetAccountID()
+		return nil
+	case trafficcapture.FieldGroupID:
+		m.ResetGroupID()
+		return nil
+	case trafficcapture.FieldPlatform:
+		m.ResetPlatform()
+		return nil
+	case trafficcapture.FieldAccountType:
+		m.ResetAccountType()
+		return nil
+	case trafficcapture.FieldModel:
+		m.ResetModel()
+		return nil
+	case trafficcapture.FieldUpstreamStatus:
+		m.ResetUpstreamStatus()
+		return nil
+	case trafficcapture.FieldStream:
+		m.ResetStream()
+		return nil
+	case trafficcapture.FieldUseTimeMs:
+		m.ResetUseTimeMs()
+		return nil
+	case trafficcapture.FieldInboundBody:
+		m.ResetInboundBody()
+		return nil
+	case trafficcapture.FieldInboundBodyBytes:
+		m.ResetInboundBodyBytes()
+		return nil
+	case trafficcapture.FieldInboundBodyTruncated:
+		m.ResetInboundBodyTruncated()
+		return nil
+	case trafficcapture.FieldOutboundBody:
+		m.ResetOutboundBody()
+		return nil
+	case trafficcapture.FieldOutboundBodyBytes:
+		m.ResetOutboundBodyBytes()
+		return nil
+	case trafficcapture.FieldOutboundBodyTruncated:
+		m.ResetOutboundBodyTruncated()
+		return nil
+	case trafficcapture.FieldResponseBody:
+		m.ResetResponseBody()
+		return nil
+	case trafficcapture.FieldResponseBodyBytes:
+		m.ResetResponseBodyBytes()
+		return nil
+	case trafficcapture.FieldResponseBodyTruncated:
+		m.ResetResponseBodyTruncated()
+		return nil
+	case trafficcapture.FieldOutboundHeaders:
+		m.ResetOutboundHeaders()
+		return nil
+	case trafficcapture.FieldResponseHeaders:
+		m.ResetResponseHeaders()
+		return nil
+	case trafficcapture.FieldErrorKind:
+		m.ResetErrorKind()
+		return nil
+	case trafficcapture.FieldErrorMsg:
+		m.ResetErrorMsg()
+		return nil
+	case trafficcapture.FieldExpiresAt:
+		m.ResetExpiresAt()
+		return nil
+	}
+	return fmt.Errorf("unknown TrafficCapture field %s", name)
+}
+
+// AddedEdges returns all edge names that were set/added in this mutation.
+func (m *TrafficCaptureMutation) AddedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// AddedIDs returns all IDs (to other nodes) that were added for the given edge
+// name in this mutation.
+func (m *TrafficCaptureMutation) AddedIDs(name string) []ent.Value {
+	return nil
+}
+
+// RemovedEdges returns all edge names that were removed in this mutation.
+func (m *TrafficCaptureMutation) RemovedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// RemovedIDs returns all IDs (to other nodes) that were removed for the edge with
+// the given name in this mutation.
+func (m *TrafficCaptureMutation) RemovedIDs(name string) []ent.Value {
+	return nil
+}
+
+// ClearedEdges returns all edge names that were cleared in this mutation.
+func (m *TrafficCaptureMutation) ClearedEdges() []string {
+	edges := make([]string, 0, 0)
+	return edges
+}
+
+// EdgeCleared returns a boolean which indicates if the edge with the given name
+// was cleared in this mutation.
+func (m *TrafficCaptureMutation) EdgeCleared(name string) bool {
+	return false
+}
+
+// ClearEdge clears the value of the edge with the given name. It returns an error
+// if that edge is not defined in the schema.
+func (m *TrafficCaptureMutation) ClearEdge(name string) error {
+	return fmt.Errorf("unknown TrafficCapture unique edge %s", name)
+}
+
+// ResetEdge resets all changes to the edge with the given name in this mutation.
+// It returns an error if the edge is not defined in the schema.
+func (m *TrafficCaptureMutation) ResetEdge(name string) error {
+	return fmt.Errorf("unknown TrafficCapture edge %s", name)
 }
 
 // UsageCleanupTaskMutation represents an operation that mutates the UsageCleanupTask nodes in the graph.

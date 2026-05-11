@@ -1244,6 +1244,74 @@ var (
 		Columns:    TLSFingerprintProfilesColumns,
 		PrimaryKey: []*schema.Column{TLSFingerprintProfilesColumns[0]},
 	}
+	// TrafficCapturesColumns holds the columns for the "traffic_captures" table.
+	TrafficCapturesColumns = []*schema.Column{
+		{Name: "id", Type: field.TypeInt64, Increment: true},
+		{Name: "ts", Type: field.TypeTime},
+		{Name: "request_id", Type: field.TypeString, Nullable: true, Size: 128},
+		{Name: "upstream_request_id", Type: field.TypeString, Nullable: true, Size: 128},
+		{Name: "api_key_id", Type: field.TypeInt64, Nullable: true},
+		{Name: "account_id", Type: field.TypeInt64, Nullable: true},
+		{Name: "group_id", Type: field.TypeInt64, Nullable: true},
+		{Name: "platform", Type: field.TypeString, Nullable: true, Size: 40},
+		{Name: "account_type", Type: field.TypeString, Nullable: true, Size: 40},
+		{Name: "model", Type: field.TypeString, Nullable: true, Size: 120},
+		{Name: "upstream_status", Type: field.TypeInt, Default: 0},
+		{Name: "stream", Type: field.TypeBool, Default: false},
+		{Name: "use_time_ms", Type: field.TypeInt64, Default: 0},
+		{Name: "inbound_body", Type: field.TypeString, Nullable: true, Size: 2147483647},
+		{Name: "inbound_body_bytes", Type: field.TypeInt, Default: 0},
+		{Name: "inbound_body_truncated", Type: field.TypeBool, Default: false},
+		{Name: "outbound_body", Type: field.TypeString, Nullable: true, Size: 2147483647},
+		{Name: "outbound_body_bytes", Type: field.TypeInt, Default: 0},
+		{Name: "outbound_body_truncated", Type: field.TypeBool, Default: false},
+		{Name: "response_body", Type: field.TypeString, Nullable: true, Size: 2147483647},
+		{Name: "response_body_bytes", Type: field.TypeInt, Default: 0},
+		{Name: "response_body_truncated", Type: field.TypeBool, Default: false},
+		{Name: "outbound_headers", Type: field.TypeJSON, Nullable: true},
+		{Name: "response_headers", Type: field.TypeJSON, Nullable: true},
+		{Name: "error_kind", Type: field.TypeString, Nullable: true, Size: 80},
+		{Name: "error_msg", Type: field.TypeString, Nullable: true, Size: 400},
+		{Name: "expires_at", Type: field.TypeTime, Nullable: true},
+	}
+	// TrafficCapturesTable holds the schema information for the "traffic_captures" table.
+	TrafficCapturesTable = &schema.Table{
+		Name:       "traffic_captures",
+		Columns:    TrafficCapturesColumns,
+		PrimaryKey: []*schema.Column{TrafficCapturesColumns[0]},
+		Indexes: []*schema.Index{
+			{
+				Name:    "trafficcapture_ts",
+				Unique:  false,
+				Columns: []*schema.Column{TrafficCapturesColumns[1]},
+			},
+			{
+				Name:    "trafficcapture_request_id",
+				Unique:  false,
+				Columns: []*schema.Column{TrafficCapturesColumns[2]},
+			},
+			{
+				Name:    "trafficcapture_api_key_id_ts",
+				Unique:  false,
+				Columns: []*schema.Column{TrafficCapturesColumns[4], TrafficCapturesColumns[1]},
+			},
+			{
+				Name:    "trafficcapture_account_id_ts",
+				Unique:  false,
+				Columns: []*schema.Column{TrafficCapturesColumns[5], TrafficCapturesColumns[1]},
+			},
+			{
+				Name:    "trafficcapture_expires_at",
+				Unique:  false,
+				Columns: []*schema.Column{TrafficCapturesColumns[26]},
+			},
+			{
+				Name:    "trafficcapture_upstream_status_ts",
+				Unique:  false,
+				Columns: []*schema.Column{TrafficCapturesColumns[10], TrafficCapturesColumns[1]},
+			},
+		},
+	}
 	// UsageCleanupTasksColumns holds the columns for the "usage_cleanup_tasks" table.
 	UsageCleanupTasksColumns = []*schema.Column{
 		{Name: "id", Type: field.TypeInt64, Increment: true},
@@ -1705,6 +1773,7 @@ var (
 		SettingsTable,
 		SubscriptionPlansTable,
 		TLSFingerprintProfilesTable,
+		TrafficCapturesTable,
 		UsageCleanupTasksTable,
 		UsageLogsTable,
 		UsersTable,
@@ -1816,6 +1885,9 @@ func init() {
 	}
 	TLSFingerprintProfilesTable.Annotation = &entsql.Annotation{
 		Table: "tls_fingerprint_profiles",
+	}
+	TrafficCapturesTable.Annotation = &entsql.Annotation{
+		Table: "traffic_captures",
 	}
 	UsageCleanupTasksTable.Annotation = &entsql.Annotation{
 		Table: "usage_cleanup_tasks",

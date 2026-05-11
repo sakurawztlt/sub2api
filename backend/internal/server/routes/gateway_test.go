@@ -36,6 +36,7 @@ func newGatewayRoutesTestRouter() *gin.Engine {
 		nil,
 		nil,
 		nil,
+		nil, // trafficCapture — nil = disabled (test 不需要 capture)
 		&config.Config{},
 	)
 

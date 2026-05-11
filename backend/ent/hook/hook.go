@@ -333,6 +333,18 @@ func (f TLSFingerprintProfileFunc) Mutate(ctx context.Context, m ent.Mutation) (
 	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.TLSFingerprintProfileMutation", m)
 }
 
+// The TrafficCaptureFunc type is an adapter to allow the use of ordinary
+// function as TrafficCapture mutator.
+type TrafficCaptureFunc func(context.Context, *ent.TrafficCaptureMutation) (ent.Value, error)
+
+// Mutate calls f(ctx, m).
+func (f TrafficCaptureFunc) Mutate(ctx context.Context, m ent.Mutation) (ent.Value, error) {
+	if mv, ok := m.(*ent.TrafficCaptureMutation); ok {
+		return f(ctx, mv)
+	}
+	return nil, fmt.Errorf("unexpected mutation type %T. expect *ent.TrafficCaptureMutation", m)
+}
+
 // The UsageCleanupTaskFunc type is an adapter to allow the use of ordinary
 // function as UsageCleanupTask mutator.
 type UsageCleanupTaskFunc func(context.Context, *ent.UsageCleanupTaskMutation) (ent.Value, error)

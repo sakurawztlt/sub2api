@@ -87,6 +87,9 @@ type SubscriptionPlan func(*sql.Selector)
 // TLSFingerprintProfile is the predicate function for tlsfingerprintprofile builders.
 type TLSFingerprintProfile func(*sql.Selector)
 
+// TrafficCapture is the predicate function for trafficcapture builders.
+type TrafficCapture func(*sql.Selector)
+
 // UsageCleanupTask is the predicate function for usagecleanuptask builders.
 type UsageCleanupTask func(*sql.Selector)
 

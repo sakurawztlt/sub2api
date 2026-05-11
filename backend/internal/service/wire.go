@@ -420,11 +420,18 @@ func ProvideAPIKeyService(
 	return svc
 }
 
+// ProvideTrafficCaptureService — 2026-05-11 codex audit / R29 backup-only.
+// env SUB2API_TRAFFIC_CAPTURE_ENABLED=true 才真启用, 否则 Submit 全 noop.
+func ProvideTrafficCaptureService(client *dbent.Client) *TrafficCaptureService {
+	return NewTrafficCaptureService(client, LoadTrafficCaptureConfig())
+}
+
 // ProviderSet is the Wire provider set for all services
 var ProviderSet = wire.NewSet(
 	// Core services
 	NewAuthService,
 	NewUserService,
+	ProvideTrafficCaptureService,
 	ProvideAPIKeyService,
 	ProvideAPIKeyAuthCacheInvalidator,
 	NewGroupService,
