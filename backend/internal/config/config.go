@@ -19,6 +19,13 @@ const (
 	RunModeSimple   = "simple"
 )
 
+const (
+	BatchAccountTestDefaultConcurrency       = 5
+	BatchAccountTestMaxConcurrency           = 10
+	BatchAccountTestMaxAccounts              = 500
+	BatchAccountTestPerAccountTimeoutSeconds = 30
+)
+
 // 使用量记录队列溢出策略
 const (
 	UsageRecordOverflowPolicyDrop   = "drop"
@@ -73,6 +80,7 @@ type Config struct {
 	WeChat                  WeChatConnectConfig           `mapstructure:"wechat_connect"`
 	OIDC                    OIDCConnectConfig             `mapstructure:"oidc_connect"`
 	Default                 DefaultConfig                 `mapstructure:"default"`
+	BatchAccountTest        BatchAccountTestConfig        `mapstructure:"batch_account_test"`
 	RateLimit               RateLimitConfig               `mapstructure:"rate_limit"`
 	Pricing                 PricingConfig                 `mapstructure:"pricing"`
 	Gateway                 GatewayConfig                 `mapstructure:"gateway"`
@@ -1140,6 +1148,22 @@ type DefaultConfig struct {
 	RateMultiplier  float64 `mapstructure:"rate_multiplier"`
 }
 
+type BatchAccountTestConfig struct {
+	DefaultConcurrency       int `mapstructure:"default_concurrency"`
+	MaxConcurrency           int `mapstructure:"max_concurrency"`
+	MaxAccounts              int `mapstructure:"max_accounts"`
+	PerAccountTimeoutSeconds int `mapstructure:"per_account_timeout_seconds"`
+}
+
+func DefaultBatchAccountTestConfig() BatchAccountTestConfig {
+	return BatchAccountTestConfig{
+		DefaultConcurrency:       BatchAccountTestDefaultConcurrency,
+		MaxConcurrency:           BatchAccountTestMaxConcurrency,
+		MaxAccounts:              BatchAccountTestMaxAccounts,
+		PerAccountTimeoutSeconds: BatchAccountTestPerAccountTimeoutSeconds,
+	}
+}
+
 type RateLimitConfig struct {
 	OverloadCooldownMinutes int `mapstructure:"overload_cooldown_minutes"`  // 529过载冷却时间(分钟)
 	OAuth401CooldownMinutes int `mapstructure:"oauth_401_cooldown_minutes"` // OAuth 401临时不可调度冷却(分钟)
@@ -1600,6 +1624,12 @@ func setDefaults() {
 	viper.SetDefault("default.api_key_prefix", "sk-")
 	viper.SetDefault("default.rate_multiplier", 1.0)
 
+	// Batch account test
+	viper.SetDefault("batch_account_test.default_concurrency", BatchAccountTestDefaultConcurrency)
+	viper.SetDefault("batch_account_test.max_concurrency", BatchAccountTestMaxConcurrency)
+	viper.SetDefault("batch_account_test.max_accounts", BatchAccountTestMaxAccounts)
+	viper.SetDefault("batch_account_test.per_account_timeout_seconds", BatchAccountTestPerAccountTimeoutSeconds)
+
 	// RateLimit
 	viper.SetDefault("rate_limit.overload_cooldown_minutes", 10)
 	// 2026-05-05 跟 upstream 11ae6f21: 删除 rate_limit_429_cooldown_seconds
@@ -1884,6 +1914,21 @@ func (c *Config) Validate() error {
 	}
 	if c.SubscriptionMaintenance.QueueSize < 0 {
 		return fmt.Errorf("subscription_maintenance.queue_size must be non-negative")
+	}
+	if c.BatchAccountTest.DefaultConcurrency <= 0 {
+		return fmt.Errorf("batch_account_test.default_concurrency must be positive")
+	}
+	if c.BatchAccountTest.MaxConcurrency <= 0 {
+		return fmt.Errorf("batch_account_test.max_concurrency must be positive")
+	}
+	if c.BatchAccountTest.MaxConcurrency < c.BatchAccountTest.DefaultConcurrency {
+		return fmt.Errorf("batch_account_test.max_concurrency must be >= default_concurrency")
+	}
+	if c.BatchAccountTest.MaxAccounts <= 0 {
+		return fmt.Errorf("batch_account_test.max_accounts must be positive")
+	}
+	if c.BatchAccountTest.PerAccountTimeoutSeconds <= 0 {
+		return fmt.Errorf("batch_account_test.per_account_timeout_seconds must be positive")
 	}
 
 	// Gemini OAuth 配置校验：client_id 与 client_secret 必须同时设置或同时留空。
