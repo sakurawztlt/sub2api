@@ -669,3 +669,83 @@ func TestForwardAsAnthropic_UpstreamRequestIgnoresClientCancel(t *testing.T) {
 	require.NotNil(t, upstream.lastReq)
 	require.NoError(t, upstream.lastReq.Context().Err())
 }
+
+// 2026-05-13 cherry-pick PR #2356 (87d73236): preserve multi-tool context
+// in OpenAI messages continuation. Claude Code 一个 assistant turn 含多个
+// tool_use blocks + 后面 user turn 含对应 tool_result blocks. 老逻辑 trim
+// 到最新轮次时会留 function_call_output 但丢掉对应 function_call →
+// upstream Responses API 找不到 call_id → 400. 新 helper
+// latestAnthropicCompatResponsesInputTurnStart 反向扫找所有 needed
+// function_call 一起保留.
+func TestForwardAsAnthropic_PreviousResponseIDKeepsMultiToolCallContext(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	upstream := &httpUpstreamRecorder{}
+	svc := &OpenAIGatewayService{
+		httpUpstream: upstream,
+		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+	}
+	account := &Account{
+		ID:          1,
+		Name:        "openai-apikey",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":  "sk-test",
+			"base_url": "https://api.openai.com/v1",
+		},
+	}
+
+	firstBody := []byte(`{"model":"claude-sonnet-4-5","max_tokens":16,"messages":[{"role":"user","content":"inspect files"}],"stream":false}`)
+	upstream.resp = openAICompatSSECompletedResponseForToolContext("resp_first_tools", "gpt-5.3-codex")
+	firstRec := httptest.NewRecorder()
+	firstCtx, _ := gin.CreateTestContext(firstRec)
+	firstCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(firstBody))
+	firstCtx.Request.Header.Set("Content-Type", "application/json")
+
+	firstResult, err := svc.ForwardAsAnthropic(context.Background(), firstCtx, account, firstBody, "stable-cache-key", "gpt-5.3-codex")
+	require.NoError(t, err)
+	require.NotNil(t, firstResult)
+
+	secondBody := []byte(`{"model":"claude-sonnet-4-5","max_tokens":16,"messages":[{"role":"user","content":"inspect files"},{"role":"assistant","content":[{"type":"tool_use","id":"call_one","name":"Read","input":{"file_path":"a.go"}},{"type":"tool_use","id":"call_two","name":"Read","input":{"file_path":"b.go"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_one","content":"package a"},{"type":"tool_result","tool_use_id":"call_two","content":"package b"},{"type":"text","text":"continue"}]}],"tools":[{"name":"Read","description":"read a file","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}}}}],"stream":false}`)
+	upstream.resp = openAICompatSSECompletedResponseForToolContext("resp_second_tools", "gpt-5.3-codex")
+	secondRec := httptest.NewRecorder()
+	secondCtx, _ := gin.CreateTestContext(secondRec)
+	secondCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(secondBody))
+	secondCtx.Request.Header.Set("Content-Type", "application/json")
+
+	secondResult, err := svc.ForwardAsAnthropic(context.Background(), secondCtx, account, secondBody, "stable-cache-key", "gpt-5.3-codex")
+	require.NoError(t, err)
+	require.NotNil(t, secondResult)
+	require.Equal(t, "resp_first_tools", gjson.GetBytes(upstream.lastBody, "previous_response_id").String())
+
+	// PR #2356 core assertion — function_call 跟 function_call_output 都保留, call_id 必须能 match.
+	require.Equal(t, "function_call", gjson.GetBytes(upstream.lastBody, "input.1.type").String())
+	require.Equal(t, "call_one", gjson.GetBytes(upstream.lastBody, "input.1.call_id").String())
+	require.Equal(t, "function_call", gjson.GetBytes(upstream.lastBody, "input.2.type").String())
+	require.Equal(t, "call_two", gjson.GetBytes(upstream.lastBody, "input.2.call_id").String())
+	require.Equal(t, "function_call_output", gjson.GetBytes(upstream.lastBody, "input.3.type").String())
+	require.Equal(t, "call_one", gjson.GetBytes(upstream.lastBody, "input.3.call_id").String())
+	require.Equal(t, "function_call_output", gjson.GetBytes(upstream.lastBody, "input.4.type").String())
+	require.Equal(t, "call_two", gjson.GetBytes(upstream.lastBody, "input.4.call_id").String())
+	require.Equal(t, "continue", gjson.GetBytes(upstream.lastBody, "input.5.content.0.text").String())
+}
+
+// 2026-05-13 PR #2356 helper. 跟 upstream openAICompatSSECompletedResponse
+// 同 shape (含 usage 字段). 重命名加 ForToolContext 后缀防跟未来 upstream
+// 合并冲突.
+func openAICompatSSECompletedResponseForToolContext(responseID, model string) *http.Response {
+	body := strings.Join([]string{
+		`data: {"type":"response.completed","response":{"id":"` + responseID + `","object":"response","model":"` + model + `","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":5,"output_tokens":2,"total_tokens":7}}}`,
+		"",
+		"data: [DONE]",
+		"",
+	}, "\n")
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_" + responseID}},
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+}

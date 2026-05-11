@@ -28,6 +28,13 @@ type httpUpstreamRecorder struct {
 
 	resp *http.Response
 	err  error
+
+	// 2026-05-13 PR #2356 multi-call recording. Tests that exercise
+	// continuation / replay paths fire multiple upstream calls and need
+	// to assert per-call bodies + supply per-call responses.
+	requests  []*http.Request
+	bodies    [][]byte
+	responses []*http.Response
 }
 
 func (u *httpUpstreamRecorder) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
@@ -38,8 +45,17 @@ func (u *httpUpstreamRecorder) Do(req *http.Request, proxyURL string, accountID 
 		_ = req.Body.Close()
 		req.Body = io.NopCloser(bytes.NewReader(b))
 	}
+	u.requests = append(u.requests, req)
+	u.bodies = append(u.bodies, append([]byte{}, u.lastBody...))
 	if u.err != nil {
 		return nil, u.err
+	}
+	if len(u.responses) > 0 {
+		// Pop the next prepared response from the queue. Once exhausted,
+		// fall back to u.resp (legacy single-shot mode).
+		next := u.responses[0]
+		u.responses = u.responses[1:]
+		return next, nil
 	}
 	return u.resp, nil
 }

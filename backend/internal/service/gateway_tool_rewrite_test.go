@@ -110,22 +110,26 @@ func TestApplyToolNameRewriteToBody_RenamesToolsAndToolChoice(t *testing.T) {
 
 
 func TestApplyToolNameRewriteToBody_RenamesToolUseInMessages(t *testing.T) {
-	// sessions_list -> cc_sess_list (static prefix: sessions_ -> sessions_)
-	// web_search is a server tool (type != ""), not rewritten
-	// messages tool_use names must be rewritten to match tools[]
+	// 2026-05-13 PR #2340 cherry-pick: tools.name 改名后 messages tool_use.name
+	// 必须同步改, 否则上游 Anthropic 找不到 tool 报 400.
+	//
+	// 注: 我们 codebase 用 dynamic alias pool (跟 upstream static prefix 不
+	// 同). 不验具体 alias 字面, 只验"两边名字一致 + server tool 不动".
 	body := []byte(`{"tools":[{"name":"sessions_list","input_schema":{}},{"name":"web_search","type":"web_search_20250305"}],"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]},{"role":"assistant","content":[{"type":"tool_use","id":"tu_01","name":"sessions_list","input":{}},{"type":"text","text":"thinking"}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_01","content":"ok"}]}]}`)
 	rw := buildToolNameRewriteFromBody(body)
 	require.NotNil(t, rw)
-	require.Equal(t, "cc_sess_list", rw.Forward["sessions_list"])
+	require.Contains(t, rw.Forward, "sessions_list")
+	fakeName := rw.Forward["sessions_list"]
+	require.NotEqual(t, "sessions_list", fakeName, "alias should differ from original")
 
 	out := applyToolNameRewriteToBody(body, rw)
 
-	// tools[0].name rewritten
-	require.Equal(t, "cc_sess_list", gjson.GetBytes(out, "tools.0.name").String())
+	// tools[0].name rewritten to alias
+	require.Equal(t, fakeName, gjson.GetBytes(out, "tools.0.name").String())
 	// tools[1].name untouched (server tool)
 	require.Equal(t, "web_search", gjson.GetBytes(out, "tools.1.name").String())
-	// messages[1].content[0].name (tool_use) also rewritten to match tools
-	require.Equal(t, "cc_sess_list", gjson.GetBytes(out, "messages.1.content.0.name").String())
+	// messages[1].content[0].name (tool_use) MUST be rewritten to same alias
+	require.Equal(t, fakeName, gjson.GetBytes(out, "messages.1.content.0.name").String())
 	// messages[1].content[1] (text) untouched
 	require.Equal(t, "thinking", gjson.GetBytes(out, "messages.1.content.1.text").String())
 	// messages[2].content[0] (tool_result) untouched — no name field in tool_result
