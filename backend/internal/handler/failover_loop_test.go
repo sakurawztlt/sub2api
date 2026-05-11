@@ -727,3 +727,73 @@ func TestHandleSelectionExhausted(t *testing.T) {
 		require.Equal(t, FailoverContinue, action)
 	})
 }
+
+// ---------------------------------------------------------------------------
+// 5/11 codex xhigh prod 51 慢 502 修 — per-reason cap 单测
+// 明确策略: cap=1 reason 第一次出现就 FailoverExhausted, 不再换号继续等同样
+// 的慢上游 timeout. 牺牲"第一个账号慢但第二个账号能成功" 的恢复能力换取
+// "单请求拖 30 分钟烧 10 账号" 的防御 (OpenAI handler R34 已用此策略).
+// ---------------------------------------------------------------------------
+
+func newTestFailoverErrWithReason(statusCode int, reason string) *service.UpstreamFailoverError {
+	return &service.UpstreamFailoverError{
+		StatusCode: statusCode,
+		Reason:     reason,
+	}
+}
+
+func TestHandleFailoverError_PerReasonCap_FirstMeaningfulTimeoutExhaustsImmediately(t *testing.T) {
+	mock := &mockTempUnscheduler{}
+	fs := NewFailoverState(10, false) // MaxSwitches=10, 但 reason cap=1 应优先
+	err := newTestFailoverErrWithReason(504, "first_meaningful_timeout")
+
+	action := fs.HandleFailoverError(context.Background(), mock, 100, "openai", err)
+
+	require.Equal(t, FailoverExhausted, action,
+		"first_meaningful_timeout 第一次出现就应 Exhausted, 不再换号")
+	require.Equal(t, 1, fs.PerReasonCount["first_meaningful_timeout"])
+}
+
+func TestHandleFailoverError_PerReasonCap_StreamDataIntervalTimeoutExhaustsImmediately(t *testing.T) {
+	mock := &mockTempUnscheduler{}
+	fs := NewFailoverState(10, false)
+	err := newTestFailoverErrWithReason(504, "stream_data_interval_timeout")
+
+	action := fs.HandleFailoverError(context.Background(), mock, 100, "openai", err)
+	require.Equal(t, FailoverExhausted, action)
+}
+
+func TestHandleFailoverError_PerReasonCap_BufferedReasonsAlsoCapped(t *testing.T) {
+	for _, reason := range []string{"buffered_stream_read_error", "buffered_empty_stream"} {
+		t.Run(reason, func(t *testing.T) {
+			mock := &mockTempUnscheduler{}
+			fs := NewFailoverState(10, false)
+			err := newTestFailoverErrWithReason(502, reason)
+			action := fs.HandleFailoverError(context.Background(), mock, 100, "openai", err)
+			require.Equal(t, FailoverExhausted, action,
+				"%s cap=1 第一次就应 Exhausted", reason)
+		})
+	}
+}
+
+func TestHandleFailoverError_PerReasonCap_OtherReasonsNotCapped(t *testing.T) {
+	// Reason 不在 gatewayHandlerPerReasonCap 表中 → 走默认 maxSwitches=10 路径
+	mock := &mockTempUnscheduler{}
+	fs := NewFailoverState(10, false)
+	err := newTestFailoverErrWithReason(502, "some_other_transient_reason")
+
+	action := fs.HandleFailoverError(context.Background(), mock, 100, "openai", err)
+	require.Equal(t, FailoverContinue, action,
+		"未注册的 reason 不应被 per-reason cap 拦截, 走默认 maxSwitches")
+}
+
+func TestHandleFailoverError_PerReasonCap_EmptyReasonNotCapped(t *testing.T) {
+	// Reason="" → skip per-reason cap, 走默认 maxSwitches
+	mock := &mockTempUnscheduler{}
+	fs := NewFailoverState(10, false)
+	err := newTestFailoverErrWithReason(502, "")
+
+	action := fs.HandleFailoverError(context.Background(), mock, 100, "openai", err)
+	require.Equal(t, FailoverContinue, action,
+		"空 reason 走 maxSwitches 默认 (不应 exhausted)")
+}
