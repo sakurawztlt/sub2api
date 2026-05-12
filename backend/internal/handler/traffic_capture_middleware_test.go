@@ -180,3 +180,73 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// codex r3 fix #1: api_key context 类型是 *service.APIKey, 不是 int64
+func TestTrafficCaptureMiddleware_APIKeyIDExtraction(t *testing.T) {
+	cfg := service.TrafficCaptureConfig{Enabled: true, MaxBytes: 1024, TTL: time.Hour, Sampling: 1.0}
+	svc := service.NewTrafficCaptureService(nil, cfg)
+	defer svc.Close(context.Background())
+
+	r := gin.New()
+	// 模拟 ApiKeyAuth: set api_key 为 *service.APIKey
+	r.Use(func(c *gin.Context) {
+		gid := int64(42)
+		c.Set("api_key", &service.APIKey{
+			ID:      777,
+			GroupID: &gid,
+		})
+		c.Next()
+	})
+	r.Use(TrafficCaptureMiddleware(svc))
+	r.POST("/v1/messages", func(c *gin.Context) {
+		// 在 handler 里调用 extractor 验证能拿到 777
+		gotID := extractAPIKeyIDFromContext(c)
+		if gotID != 777 {
+			t.Errorf("extractAPIKeyIDFromContext = %d, want 777", gotID)
+		}
+		gotGID := extractAPIKeyGroupIDFromContext(c)
+		if gotGID != 42 {
+			t.Errorf("extractAPIKeyGroupIDFromContext = %d, want 42", gotGID)
+		}
+		c.JSON(200, gin.H{"ok": true})
+	})
+
+	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{}`))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+}
+
+// codex r3 fix #2: inbound > 16MB hard ceiling → 413, 不 drain body 给 handler
+func TestTrafficCaptureMiddleware_OversizeReturns413(t *testing.T) {
+	cfg := service.TrafficCaptureConfig{Enabled: true, MaxBytes: 1024, TTL: time.Hour, Sampling: 1.0}
+	svc := service.NewTrafficCaptureService(nil, cfg)
+	defer svc.Close(context.Background())
+
+	r := gin.New()
+	r.Use(TrafficCaptureMiddleware(svc))
+	handlerCalled := false
+	r.POST("/v1/messages", func(c *gin.Context) {
+		handlerCalled = true
+		c.JSON(200, gin.H{"ok": true})
+	})
+
+	// 模拟 17MB body (> 16MB hard ceiling)
+	bigBody := bytes.Repeat([]byte("X"), 17*1024*1024)
+	req := httptest.NewRequest("POST", "/v1/messages", bytes.NewReader(bigBody))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("oversize status = %d, want 413", w.Code)
+	}
+	if handlerCalled {
+		t.Error("handler should NOT be called when inbound > 16MB (codex r3 fix)")
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "invalid_request_error") {
+		t.Errorf("response body should be Anthropic-shaped 413, got: %s", body)
+	}
+}

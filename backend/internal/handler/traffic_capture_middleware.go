@@ -174,16 +174,24 @@ func TrafficCaptureMiddleware(svc *service.TrafficCaptureService) gin.HandlerFun
 		// 1. P1 fix: **完整** 读 inbound body, 不用 LimitReader 截断业务 handler.
 		// 落库时再按 cap 截断 (在 service.persist 里走 captureBodyMaxBytes).
 		// 用 MaxBytesReader 给硬上限 防恶意大请求 OOM.
+		//
+		// 2026-05-12 codex r3 fix (洞 2): MaxBytesReader 超 cap 时 body 已被 drain
+		// 一部分, handler 再读会拿到残缺 body 破坏测试结果. 改用 413 直接 abort
+		// 不继续 c.Next(). 16MB hard ceiling > 任何 cctest 多模态 (5-10MB), 异常
+		// 大请求是恶意流量直接拒.
 		var inboundBody []byte
 		if c.Request.Body != nil {
 			limited := http.MaxBytesReader(c.Writer, c.Request.Body, maxInboundBodyForCapture)
 			b, err := io.ReadAll(limited)
 			if err != nil {
-				// 超 maxInboundBodyForCapture (16MB) 或读失败 — 不 capture 让业务处理
-				log.Printf("[traffic-capture] inbound read failed (body too big or read error): %v", err)
-				// 这种 case 已读到部分 body, 不能塞回去, 改让 handler 拿到 c.Request.Body
-				// 的剩余部分 (但 limited 已 drain). 安全降级: noop, 让 ops 接管.
-				c.Next()
+				log.Printf("[traffic-capture] inbound exceeded %d byte hard ceiling or read error: %v", maxInboundBodyForCapture, err)
+				c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{
+					"type": "error",
+					"error": gin.H{
+						"type":    "invalid_request_error",
+						"message": "request body exceeds capture hard ceiling",
+					},
+				})
 				return
 			}
 			inboundBody = b
@@ -235,10 +243,16 @@ func TrafficCaptureMiddleware(svc *service.TrafficCaptureService) gin.HandlerFun
 				entry.UpstreamRequestID = s
 			}
 		}
-		// P2 fix: 不再用错误的 "api_key_id" key, 用 sub2api 标准的 helper
+		// P2 fix + codex r3: 不再用错误的 "api_key_id" key, 用 *service.APIKey type assert.
 		entry.APIKeyID = extractAPIKeyIDFromContext(c)
 		entry.AccountID = getInt64FromCtx(c, TrafficCaptureAccountIDKey)
-		entry.GroupID = getInt64FromCtx(c, TrafficCaptureGroupIDKey)
+		// codex r3: group_id 优先用 APIKey.GroupID (准确绑定当前 key), fallback
+		// gateway_service stash 的 (account.GroupIDs[0], multi-group 时不一定准).
+		if gid := extractAPIKeyGroupIDFromContext(c); gid != 0 {
+			entry.GroupID = gid
+		} else {
+			entry.GroupID = getInt64FromCtx(c, TrafficCaptureGroupIDKey)
+		}
 		entry.Platform = getStrFromCtx(c, TrafficCapturePlatformKey)
 		entry.AccountType = getStrFromCtx(c, TrafficCaptureAccountTypeKey)
 		entry.Model = getStrFromCtx(c, TrafficCaptureModelKey)
@@ -283,28 +297,37 @@ func TrafficCaptureMiddleware(svc *service.TrafficCaptureService) gin.HandlerFun
 	}
 }
 
-// extractAPIKeyIDFromContext — P2 fix. sub2api APIKeyAuth set 多种 key, 我们
-// 全部 try 一遍. 实际 key 名见 internal/server/middleware/api_key_auth.go 跟
-// internal/middleware/api_key.go (新旧 path).
+// extractAPIKeyIDFromContext — P2 fix + codex r3 fix.
+//
+// sub2api 标准 ApiKeyAuth set 的 context key 是 "api_key" (constant
+// ContextKeyAPIKey, 见 internal/server/middleware/middleware.go:23), value
+// 是 *service.APIKey. codex r3 audit 指出之前 try 的 5 个 key 名全错失
+// "api_key" + 没 type assert *service.APIKey, 导致 api_key_id 永远 0,
+// FILTER_API_KEY env 完全失效.
 func extractAPIKeyIDFromContext(c *gin.Context) int64 {
-	// 常见 key 名 (按 sub2api 代码实际使用):
-	keys := []string{
-		"apiKeyID",
-		"api_key_id",
-		"APIKeyID",
-		"apikey_id",
+	// 标准位置 (sub2api ApiKeyAuth 实际写的位置)
+	if v, ok := c.Get("api_key"); ok {
+		if ak, ok := v.(*service.APIKey); ok && ak != nil {
+			return ak.ID
+		}
 	}
+	// 旧代码或 test mock 可能直接 set int64
+	keys := []string{"apiKeyID", "api_key_id", "APIKeyID", "apikey_id"}
 	for _, k := range keys {
 		if id := getInt64FromCtx(c, k); id != 0 {
 			return id
 		}
 	}
-	// 也试一下 APIKey object 形式
-	if v, ok := c.Get("apiKey"); ok {
-		// reflective best-effort, 实际类型由 ApiKeyAuth 决定. 不行就 0
-		type idGetter interface{ GetID() int64 }
-		if g, ok := v.(idGetter); ok {
-			return g.GetID()
+	return 0
+}
+
+// extractAPIKeyGroupIDFromContext — codex r3 fix: 优先从 APIKey.GroupID 取,
+// 比 account.GroupIDs[0] 准确. APIKey 直接绑定一个 group, account 可能 multi-
+// group 取第一个不一定对应当前请求.
+func extractAPIKeyGroupIDFromContext(c *gin.Context) int64 {
+	if v, ok := c.Get("api_key"); ok {
+		if ak, ok := v.(*service.APIKey); ok && ak != nil && ak.GroupID != nil {
+			return *ak.GroupID
 		}
 	}
 	return 0
