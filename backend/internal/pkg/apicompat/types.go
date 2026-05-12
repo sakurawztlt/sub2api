@@ -296,6 +296,11 @@ type ResponsesInputItem struct {
 
 	// type=function_call_output
 	Output string `json:"output,omitempty"`
+
+	// type=reasoning — 2026-05-12 cctest profile 项 6 (codex audit): 历史
+	// assistant thinking blocks 转 Responses input 时不再 ignore, 用 reasoning
+	// item + summary 保留语义. 让 GPT 上游看到历史推理摘要, 多轮工具行为不漂.
+	Summary []ResponsesSummary `json:"summary,omitempty"`
 }
 
 // ResponsesContentPart is a typed content part in a Responses message.

@@ -795,6 +795,12 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 
 	state := apicompat.NewResponsesEventToAnthropicState()
 	state.Model = originalModel
+	// 2026-05-12 cctest profile 项 5 (codex audit): message_start.usage.input_tokens
+	// 不能是 0, 用客户请求 ContentLength 粗估 token (bytes/4). 真 Claude 这里报
+	// 5K-11K (cctest system prompt 估算) 不报 0.
+	if c.Request != nil && c.Request.ContentLength > 0 {
+		state.SetPreflightInputEstimate(int(c.Request.ContentLength))
+	}
 	var usage OpenAIUsage
 	responseID := ""
 	var firstTokenMs *int

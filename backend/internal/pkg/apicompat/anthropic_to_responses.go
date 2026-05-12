@@ -425,7 +425,12 @@ func anthropicUserToResponses(raw json.RawMessage) ([]ResponsesInputItem, error)
 // anthropicAssistantToResponses handles an Anthropic assistant message.
 // Text content → assistant message with output_text parts.
 // tool_use blocks → function_call items.
-// thinking blocks → ignored (OpenAI doesn't accept them as input).
+// thinking blocks → 2026-05-12 cctest profile 项 6 (codex audit): 不再 ignore,
+//
+//	转 Responses input reasoning item + summary_text 让 GPT 上游看到历史推理摘要.
+//	真 Claude 多轮工具行为依赖历史 thinking, 丢了行为会漂. signature 不塞
+//	encrypted_content (会触发 invalid). env SUB2API_DROP_HISTORY_THINKING=1
+//	应急回退 drop.
 func anthropicAssistantToResponses(raw json.RawMessage) ([]ResponsesInputItem, error) {
 	// Try plain string. An empty string MUST be skipped entirely: emitting
 	// {Type:"output_text", Text:""} serializes to {"type":"output_text"}
@@ -463,6 +468,21 @@ func anthropicAssistantToResponses(raw json.RawMessage) ([]ResponsesInputItem, e
 		items = append(items, ResponsesInputItem{Type: "message", Role: "assistant", Content: partsJSON})
 	}
 
+	// 2026-05-12 cctest profile 项 6: thinking blocks → reasoning input item.
+	// 不塞 signature (encrypted_content 会触发 OpenAI invalid). 只放 summary_text.
+	// env SUB2API_DROP_HISTORY_THINKING=1 应急回退 drop (跟旧行为兼容).
+	if !shouldDropHistoryThinking() {
+		thinkingText := extractAnthropicThinkingFromBlocks(blocks)
+		if thinkingText != "" {
+			items = append(items, ResponsesInputItem{
+				Type: "reasoning",
+				Summary: []ResponsesSummary{
+					{Type: "summary_text", Text: thinkingText},
+				},
+			})
+		}
+	}
+
 	// tool_use → function_call items.
 	for _, b := range blocks {
 		if b.Type != "tool_use" {
@@ -482,6 +502,30 @@ func anthropicAssistantToResponses(raw json.RawMessage) ([]ResponsesInputItem, e
 	}
 
 	return items, nil
+}
+
+// 2026-05-12 cctest profile 项 6: 从 assistant content blocks 抽 thinking 文本.
+// 多个 thinking block 拼一起换行. signature 字段 ignore (codex audit: 不能塞
+// encrypted_content 会触发 invalid).
+func extractAnthropicThinkingFromBlocks(blocks []AnthropicContentBlock) string {
+	var buf strings.Builder
+	for _, b := range blocks {
+		if b.Type != "thinking" {
+			continue
+		}
+		if b.Thinking != "" {
+			if buf.Len() > 0 {
+				buf.WriteString("\n\n")
+			}
+			buf.WriteString(b.Thinking)
+		}
+	}
+	return buf.String()
+}
+
+func shouldDropHistoryThinking() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("SUB2API_DROP_HISTORY_THINKING")))
+	return v == "1" || v == "true" || v == "yes" || v == "on"
 }
 
 // sanitizeOpenAIName preserves already-valid OpenAI names verbatim and

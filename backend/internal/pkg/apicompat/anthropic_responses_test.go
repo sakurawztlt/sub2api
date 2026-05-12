@@ -149,7 +149,10 @@ func TestAnthropicToResponses_ToolUse(t *testing.T) {
 	assert.False(t, *resp.Tools[0].Strict)
 }
 
-func TestAnthropicToResponses_ThinkingIgnored(t *testing.T) {
+// 2026-05-12 cctest profile 项 6 (codex audit): 历史 thinking 不再 ignore,
+// 转 reasoning item + summary_text. signature 不塞 encrypted_content.
+// 旧测试名 ThinkingIgnored 已过时, 行为变更测试更新.
+func TestAnthropicToResponses_ThinkingPreservedAsReasoning(t *testing.T) {
 	req := &AnthropicRequest{
 		Model:     "gpt-5.2",
 		MaxTokens: 1024,
@@ -165,15 +168,37 @@ func TestAnthropicToResponses_ThinkingIgnored(t *testing.T) {
 
 	var items []ResponsesInputItem
 	require.NoError(t, json.Unmarshal(resp.Input, &items))
-	// user + assistant(text only, thinking ignored) + user = 3
-	require.Len(t, items, 3)
+	// user + assistant(text) + reasoning(thinking) + user = 4
+	require.Len(t, items, 4)
+	// assistant text 仍在
 	assert.Equal(t, "assistant", items[1].Role)
-	// Assistant content should only have text, not thinking.
 	var parts []ResponsesContentPart
 	require.NoError(t, json.Unmarshal(items[1].Content, &parts))
 	require.Len(t, parts, 1)
-	assert.Equal(t, "output_text", parts[0].Type)
 	assert.Equal(t, "Hi!", parts[0].Text)
+	// 第 3 项是 reasoning item (项 6 新行为)
+	assert.Equal(t, "reasoning", items[2].Type)
+	require.Len(t, items[2].Summary, 1)
+	assert.Equal(t, "summary_text", items[2].Summary[0].Type)
+	assert.Equal(t, "deep thought", items[2].Summary[0].Text)
+}
+
+// env SUB2API_DROP_HISTORY_THINKING=1 应急回退 drop, 保旧行为
+func TestAnthropicToResponses_ThinkingDropWithEnv(t *testing.T) {
+	t.Setenv("SUB2API_DROP_HISTORY_THINKING", "1")
+	req := &AnthropicRequest{
+		Model:     "gpt-5.2",
+		MaxTokens: 1024,
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: json.RawMessage(`"Hello"`)},
+			{Role: "assistant", Content: json.RawMessage(`[{"type":"thinking","thinking":"deep thought"},{"type":"text","text":"Hi!"}]`)},
+		},
+	}
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+	var items []ResponsesInputItem
+	require.NoError(t, json.Unmarshal(resp.Input, &items))
+	require.Len(t, items, 2) // 没 reasoning item, 跟旧行为一致
 }
 
 func TestAnthropicToResponses_MaxTokensFloor(t *testing.T) {

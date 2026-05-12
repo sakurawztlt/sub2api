@@ -286,6 +286,27 @@ type ResponsesEventToAnthropicState struct {
 	ResponseID string
 	Model      string
 	Created    int64
+
+	// 2026-05-12 cctest profile 项 5 (codex audit): message_start.usage.input_tokens
+	// 不能是 0 — 真 Claude 这里报 5K-11K (system prompt 估算). caller 在 stream
+	// 开始前调 SetPreflightInputEstimate(bodySize) 提供粗估 (bytes/4). OpenAI 真
+	// usage 回来后会更新但 message_start 已发, 这个值定 message_start 行为.
+	PreflightInputTokens int
+}
+
+// SetPreflightInputEstimate — 2026-05-12 cctest profile 项 5. caller 在 stream
+// 开始前调, 提供 anthropic 原始 body 大小 (bytes). 我们用 bytes/4 粗估 token,
+// 让 message_start.usage.input_tokens 不是 0. 调用方一般是 gateway_service stream
+// 起点拿 inboundBody size 传过来. 不调时 fallback 0 (跟旧行为兼容).
+func (s *ResponsesEventToAnthropicState) SetPreflightInputEstimate(bodyBytes int) {
+	if bodyBytes <= 0 {
+		s.PreflightInputTokens = 0
+		return
+	}
+	// 粗估 4 bytes/token (英文 prompt), Claude Code 短系统 prompt 多 ASCII 准.
+	// 真 OpenAI usage 回来后 RawTotalInputTokens 会有更准值, 但 message_start
+	// 已经发出去了, 这是 best-effort 防 0.
+	s.PreflightInputTokens = (bodyBytes + 3) / 4
 }
 
 // NewResponsesEventToAnthropicState returns an initialised stream state.
@@ -429,6 +450,9 @@ func resToAnthHandleCreated(evt *ResponsesStreamEvent, state *ResponsesEventToAn
 		state.ResponseID = generateAnthropicMessageID()
 	}
 
+	// 2026-05-12 cctest profile 项 5 (codex audit): message_start.usage.input_tokens
+	// 用 PreflightInputTokens (caller 已 SetPreflightInputEstimate). 真 Claude 这里
+	// 不报 0 — cctest 5K-10K system 估 5000-11000 区间. cache 字段保 0 不伪造.
 	return []AnthropicStreamEvent{{
 		Type: "message_start",
 		Message: &AnthropicResponse{
@@ -438,11 +462,18 @@ func resToAnthHandleCreated(evt *ResponsesStreamEvent, state *ResponsesEventToAn
 			Content: []AnthropicContentBlock{},
 			Model:   state.Model,
 			Usage: AnthropicUsage{
-				InputTokens:  0,
+				InputTokens:  state.PreflightInputTokens,
 				OutputTokens: 0,
 			},
 		},
 	}}
+}
+
+// 2026-05-12 cctest profile 项 5: PingEvent — content_block_start 后 idle 5s
+// 没新 event 时 caller 发一个 ping event 防超时 + 跟真 Claude stream 形态对齐.
+// stream loop 实现 idle ticker, ticker 触发时调本函数生成 event.
+func PingEvent() AnthropicStreamEvent {
+	return AnthropicStreamEvent{Type: "ping"}
 }
 
 func resToAnthHandleOutputItemAdded(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
