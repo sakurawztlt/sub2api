@@ -38,6 +38,7 @@ func ProvideAdminHandlers(
 	channelMonitorTemplateHandler *admin.ChannelMonitorRequestTemplateHandler,
 	paymentHandler *admin.PaymentHandler,
 	affiliateHandler *admin.AffiliateHandler,
+	trafficCaptureHandler *admin.TrafficCaptureHandler,
 ) *AdminHandlers {
 	return &AdminHandlers{
 		Dashboard:              dashboardHandler,
@@ -69,7 +70,13 @@ func ProvideAdminHandlers(
 		ChannelMonitorTemplate: channelMonitorTemplateHandler,
 		Payment:                paymentHandler,
 		Affiliate:              affiliateHandler,
+		TrafficCapture:         trafficCaptureHandler,
 	}
+}
+
+// ProvideTrafficCaptureHandler — wire 注入. service 那边 ProvideTrafficCaptureService 已注 ent.Client.
+func ProvideTrafficCaptureHandler(svc *service.TrafficCaptureService) *admin.TrafficCaptureHandler {
+	return admin.NewTrafficCaptureHandler(svc)
 }
 
 // ProvideSystemHandler creates admin.SystemHandler with UpdateService

@@ -1272,6 +1272,8 @@ var (
 		{Name: "response_headers", Type: field.TypeJSON, Nullable: true},
 		{Name: "error_kind", Type: field.TypeString, Nullable: true, Size: 80},
 		{Name: "error_msg", Type: field.TypeString, Nullable: true, Size: 400},
+		{Name: "client_ip", Type: field.TypeString, Nullable: true, Size: 64},
+		{Name: "user_agent", Type: field.TypeString, Nullable: true, Size: 400},
 		{Name: "expires_at", Type: field.TypeTime, Nullable: true},
 	}
 	// TrafficCapturesTable holds the schema information for the "traffic_captures" table.
@@ -1303,7 +1305,7 @@ var (
 			{
 				Name:    "trafficcapture_expires_at",
 				Unique:  false,
-				Columns: []*schema.Column{TrafficCapturesColumns[26]},
+				Columns: []*schema.Column{TrafficCapturesColumns[28]},
 			},
 			{
 				Name:    "trafficcapture_upstream_status_ts",

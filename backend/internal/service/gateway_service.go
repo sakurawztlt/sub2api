@@ -4704,6 +4704,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 	// 重试间复用同一请求体，避免每次 string(body) 产生额外分配。
 	setOpsUpstreamRequestBody(c, body)
+	// 2026-05-12 R29 P2: 选完 account 后 stash metadata 给 traffic_capture middleware.
+	// account_id / group_id / platform / account_type / model 都从这里来. 落到
+	// gin context, middleware defer 阶段拼装 entry 时取出.
+	setTrafficCaptureAccountContext(c, account, reqModel)
 
 	// 重试循环
 	var resp *http.Response
@@ -4716,6 +4720,8 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		if err != nil {
 			return nil, err
 		}
+		// P4: stash outbound headers (sub2api 改完 OAuth path/auth/signature 后的最终 header).
+		setTrafficCaptureOutboundHeaders(c, upstreamReq.Header)
 
 		// 发送请求
 		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
@@ -5099,6 +5105,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	}
 
 	// 处理正常响应
+
+	// 2026-05-12 R29 P3: stash upstream x-request-id 给 traffic_capture middleware
+	// (resp 走到这里说明 200 OK, headers 已 ready).
+	setTrafficCaptureUpstreamRequestID(c, resp.Header.Get("x-request-id"))
 
 	// 触发上游接受回调（提前释放串行锁，不等流完成）
 	if parsed.OnUpstreamAccepted != nil {

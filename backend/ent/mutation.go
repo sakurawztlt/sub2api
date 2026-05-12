@@ -32968,6 +32968,8 @@ type TrafficCaptureMutation struct {
 	response_headers        *map[string]string
 	error_kind              *string
 	error_msg               *string
+	client_ip               *string
+	user_agent              *string
 	expires_at              *time.Time
 	clearedFields           map[string]struct{}
 	done                    bool
@@ -34331,6 +34333,104 @@ func (m *TrafficCaptureMutation) ResetErrorMsg() {
 	delete(m.clearedFields, trafficcapture.FieldErrorMsg)
 }
 
+// SetClientIP sets the "client_ip" field.
+func (m *TrafficCaptureMutation) SetClientIP(s string) {
+	m.client_ip = &s
+}
+
+// ClientIP returns the value of the "client_ip" field in the mutation.
+func (m *TrafficCaptureMutation) ClientIP() (r string, exists bool) {
+	v := m.client_ip
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldClientIP returns the old "client_ip" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldClientIP(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldClientIP is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldClientIP requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldClientIP: %w", err)
+	}
+	return oldValue.ClientIP, nil
+}
+
+// ClearClientIP clears the value of the "client_ip" field.
+func (m *TrafficCaptureMutation) ClearClientIP() {
+	m.client_ip = nil
+	m.clearedFields[trafficcapture.FieldClientIP] = struct{}{}
+}
+
+// ClientIPCleared returns if the "client_ip" field was cleared in this mutation.
+func (m *TrafficCaptureMutation) ClientIPCleared() bool {
+	_, ok := m.clearedFields[trafficcapture.FieldClientIP]
+	return ok
+}
+
+// ResetClientIP resets all changes to the "client_ip" field.
+func (m *TrafficCaptureMutation) ResetClientIP() {
+	m.client_ip = nil
+	delete(m.clearedFields, trafficcapture.FieldClientIP)
+}
+
+// SetUserAgent sets the "user_agent" field.
+func (m *TrafficCaptureMutation) SetUserAgent(s string) {
+	m.user_agent = &s
+}
+
+// UserAgent returns the value of the "user_agent" field in the mutation.
+func (m *TrafficCaptureMutation) UserAgent() (r string, exists bool) {
+	v := m.user_agent
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldUserAgent returns the old "user_agent" field's value of the TrafficCapture entity.
+// If the TrafficCapture object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *TrafficCaptureMutation) OldUserAgent(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldUserAgent is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldUserAgent requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldUserAgent: %w", err)
+	}
+	return oldValue.UserAgent, nil
+}
+
+// ClearUserAgent clears the value of the "user_agent" field.
+func (m *TrafficCaptureMutation) ClearUserAgent() {
+	m.user_agent = nil
+	m.clearedFields[trafficcapture.FieldUserAgent] = struct{}{}
+}
+
+// UserAgentCleared returns if the "user_agent" field was cleared in this mutation.
+func (m *TrafficCaptureMutation) UserAgentCleared() bool {
+	_, ok := m.clearedFields[trafficcapture.FieldUserAgent]
+	return ok
+}
+
+// ResetUserAgent resets all changes to the "user_agent" field.
+func (m *TrafficCaptureMutation) ResetUserAgent() {
+	m.user_agent = nil
+	delete(m.clearedFields, trafficcapture.FieldUserAgent)
+}
+
 // SetExpiresAt sets the "expires_at" field.
 func (m *TrafficCaptureMutation) SetExpiresAt(t time.Time) {
 	m.expires_at = &t
@@ -34414,7 +34514,7 @@ func (m *TrafficCaptureMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *TrafficCaptureMutation) Fields() []string {
-	fields := make([]string, 0, 26)
+	fields := make([]string, 0, 28)
 	if m.ts != nil {
 		fields = append(fields, trafficcapture.FieldTs)
 	}
@@ -34490,6 +34590,12 @@ func (m *TrafficCaptureMutation) Fields() []string {
 	if m.error_msg != nil {
 		fields = append(fields, trafficcapture.FieldErrorMsg)
 	}
+	if m.client_ip != nil {
+		fields = append(fields, trafficcapture.FieldClientIP)
+	}
+	if m.user_agent != nil {
+		fields = append(fields, trafficcapture.FieldUserAgent)
+	}
 	if m.expires_at != nil {
 		fields = append(fields, trafficcapture.FieldExpiresAt)
 	}
@@ -34551,6 +34657,10 @@ func (m *TrafficCaptureMutation) Field(name string) (ent.Value, bool) {
 		return m.ErrorKind()
 	case trafficcapture.FieldErrorMsg:
 		return m.ErrorMsg()
+	case trafficcapture.FieldClientIP:
+		return m.ClientIP()
+	case trafficcapture.FieldUserAgent:
+		return m.UserAgent()
 	case trafficcapture.FieldExpiresAt:
 		return m.ExpiresAt()
 	}
@@ -34612,6 +34722,10 @@ func (m *TrafficCaptureMutation) OldField(ctx context.Context, name string) (ent
 		return m.OldErrorKind(ctx)
 	case trafficcapture.FieldErrorMsg:
 		return m.OldErrorMsg(ctx)
+	case trafficcapture.FieldClientIP:
+		return m.OldClientIP(ctx)
+	case trafficcapture.FieldUserAgent:
+		return m.OldUserAgent(ctx)
 	case trafficcapture.FieldExpiresAt:
 		return m.OldExpiresAt(ctx)
 	}
@@ -34798,6 +34912,20 @@ func (m *TrafficCaptureMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetErrorMsg(v)
 		return nil
+	case trafficcapture.FieldClientIP:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetClientIP(v)
+		return nil
+	case trafficcapture.FieldUserAgent:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetUserAgent(v)
+		return nil
 	case trafficcapture.FieldExpiresAt:
 		v, ok := value.(time.Time)
 		if !ok {
@@ -34979,6 +35107,12 @@ func (m *TrafficCaptureMutation) ClearedFields() []string {
 	if m.FieldCleared(trafficcapture.FieldErrorMsg) {
 		fields = append(fields, trafficcapture.FieldErrorMsg)
 	}
+	if m.FieldCleared(trafficcapture.FieldClientIP) {
+		fields = append(fields, trafficcapture.FieldClientIP)
+	}
+	if m.FieldCleared(trafficcapture.FieldUserAgent) {
+		fields = append(fields, trafficcapture.FieldUserAgent)
+	}
 	if m.FieldCleared(trafficcapture.FieldExpiresAt) {
 		fields = append(fields, trafficcapture.FieldExpiresAt)
 	}
@@ -35040,6 +35174,12 @@ func (m *TrafficCaptureMutation) ClearField(name string) error {
 		return nil
 	case trafficcapture.FieldErrorMsg:
 		m.ClearErrorMsg()
+		return nil
+	case trafficcapture.FieldClientIP:
+		m.ClearClientIP()
+		return nil
+	case trafficcapture.FieldUserAgent:
+		m.ClearUserAgent()
 		return nil
 	case trafficcapture.FieldExpiresAt:
 		m.ClearExpiresAt()
@@ -35126,6 +35266,12 @@ func (m *TrafficCaptureMutation) ResetField(name string) error {
 		return nil
 	case trafficcapture.FieldErrorMsg:
 		m.ResetErrorMsg()
+		return nil
+	case trafficcapture.FieldClientIP:
+		m.ResetClientIP()
+		return nil
+	case trafficcapture.FieldUserAgent:
+		m.ResetUserAgent()
 		return nil
 	case trafficcapture.FieldExpiresAt:
 		m.ResetExpiresAt()

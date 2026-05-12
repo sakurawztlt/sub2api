@@ -61,6 +61,10 @@ const (
 	FieldErrorKind = "error_kind"
 	// FieldErrorMsg holds the string denoting the error_msg field in the database.
 	FieldErrorMsg = "error_msg"
+	// FieldClientIP holds the string denoting the client_ip field in the database.
+	FieldClientIP = "client_ip"
+	// FieldUserAgent holds the string denoting the user_agent field in the database.
+	FieldUserAgent = "user_agent"
 	// FieldExpiresAt holds the string denoting the expires_at field in the database.
 	FieldExpiresAt = "expires_at"
 	// Table holds the table name of the trafficcapture in the database.
@@ -95,6 +99,8 @@ var Columns = []string{
 	FieldResponseHeaders,
 	FieldErrorKind,
 	FieldErrorMsg,
+	FieldClientIP,
+	FieldUserAgent,
 	FieldExpiresAt,
 }
 
@@ -141,6 +147,10 @@ var (
 	ErrorKindValidator func(string) error
 	// ErrorMsgValidator is a validator for the "error_msg" field. It is called by the builders before save.
 	ErrorMsgValidator func(string) error
+	// ClientIPValidator is a validator for the "client_ip" field. It is called by the builders before save.
+	ClientIPValidator func(string) error
+	// UserAgentValidator is a validator for the "user_agent" field. It is called by the builders before save.
+	UserAgentValidator func(string) error
 )
 
 // OrderOption defines the ordering options for the TrafficCapture queries.
@@ -264,6 +274,16 @@ func ByErrorKind(opts ...sql.OrderTermOption) OrderOption {
 // ByErrorMsg orders the results by the error_msg field.
 func ByErrorMsg(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldErrorMsg, opts...).ToFunc()
+}
+
+// ByClientIP orders the results by the client_ip field.
+func ByClientIP(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldClientIP, opts...).ToFunc()
+}
+
+// ByUserAgent orders the results by the user_agent field.
+func ByUserAgent(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldUserAgent, opts...).ToFunc()
 }
 
 // ByExpiresAt orders the results by the expires_at field.

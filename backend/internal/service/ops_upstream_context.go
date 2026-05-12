@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"net/http"
 	"strings"
 	"time"
 
@@ -44,6 +45,72 @@ func setOpsUpstreamRequestBody(c *gin.Context, body []byte) {
 	}
 	// 热路径避免 string(body) 额外分配，按需在落库前再转换。
 	c.Set(OpsUpstreamRequestBodyKey, body)
+}
+
+// 2026-05-12 R29 traffic_capture 桥 — service 包不能 import handler 包 (circular),
+// 复用 gin context key 间接传递. middleware 拿到这些 key 时按 handler 包定义的
+// key 名读取. 这里硬编码 string 跟 handler/traffic_capture_middleware.go 保持一致.
+const (
+	trafficCaptureAccountIDKey       = "traffic_capture_account_id"
+	trafficCaptureGroupIDKey         = "traffic_capture_group_id"
+	trafficCapturePlatformKey        = "traffic_capture_platform"
+	trafficCaptureAccountTypeKey     = "traffic_capture_account_type"
+	trafficCaptureModelKey           = "traffic_capture_model"
+	trafficCaptureUpstreamReqIDKey   = "traffic_capture_upstream_req_id"
+	trafficCaptureOutboundHeadersKey = "traffic_capture_outbound_headers"
+)
+
+// setTrafficCaptureAccountContext — P2 fix. 选完 account 后 stash 元数据.
+// account 类型 *Account (sub2api 内部 ent-wrapped). reqModel 是映射后的 model.
+func setTrafficCaptureAccountContext(c *gin.Context, account *Account, reqModel string) {
+	if c == nil || account == nil {
+		return
+	}
+	if account.ID > 0 {
+		c.Set(trafficCaptureAccountIDKey, account.ID)
+	}
+	// Account 是多 group 绑定的, 取第一个非零 group_id (cctest 一般一个 group)
+	if len(account.GroupIDs) > 0 {
+		for _, gid := range account.GroupIDs {
+			if gid > 0 {
+				c.Set(trafficCaptureGroupIDKey, gid)
+				break
+			}
+		}
+	}
+	if account.Platform != "" {
+		c.Set(trafficCapturePlatformKey, account.Platform)
+	}
+	if account.Type != "" {
+		c.Set(trafficCaptureAccountTypeKey, account.Type)
+	}
+	if strings.TrimSpace(reqModel) != "" {
+		c.Set(trafficCaptureModelKey, reqModel)
+	}
+}
+
+// setTrafficCaptureUpstreamRequestID — P3 fix. 上游响应回来后调.
+func setTrafficCaptureUpstreamRequestID(c *gin.Context, id string) {
+	if c == nil || strings.TrimSpace(id) == "" {
+		return
+	}
+	c.Set(trafficCaptureUpstreamReqIDKey, id)
+}
+
+// setTrafficCaptureOutboundHeaders — P4 fix. buildUpstreamRequest 后调,
+// stash sub2api → upstream 真实 header (含 Authorization / OAuth path 等改写后值).
+// 落库时由 service 层 redactSensitiveHeaders 脱敏.
+func setTrafficCaptureOutboundHeaders(c *gin.Context, h http.Header) {
+	if c == nil || len(h) == 0 {
+		return
+	}
+	flat := make(map[string]string, len(h))
+	for k, vs := range h {
+		if len(vs) > 0 {
+			flat[k] = vs[0]
+		}
+	}
+	c.Set(trafficCaptureOutboundHeadersKey, flat)
 }
 
 func SetOpsLatencyMs(c *gin.Context, key string, value int64) {

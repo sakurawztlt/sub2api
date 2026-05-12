@@ -1606,6 +1606,14 @@ func init() {
 	trafficcaptureDescErrorMsg := trafficcaptureFields[24].Descriptor()
 	// trafficcapture.ErrorMsgValidator is a validator for the "error_msg" field. It is called by the builders before save.
 	trafficcapture.ErrorMsgValidator = trafficcaptureDescErrorMsg.Validators[0].(func(string) error)
+	// trafficcaptureDescClientIP is the schema descriptor for client_ip field.
+	trafficcaptureDescClientIP := trafficcaptureFields[25].Descriptor()
+	// trafficcapture.ClientIPValidator is a validator for the "client_ip" field. It is called by the builders before save.
+	trafficcapture.ClientIPValidator = trafficcaptureDescClientIP.Validators[0].(func(string) error)
+	// trafficcaptureDescUserAgent is the schema descriptor for user_agent field.
+	trafficcaptureDescUserAgent := trafficcaptureFields[26].Descriptor()
+	// trafficcapture.UserAgentValidator is a validator for the "user_agent" field. It is called by the builders before save.
+	trafficcapture.UserAgentValidator = trafficcaptureDescUserAgent.Validators[0].(func(string) error)
 	usagecleanuptaskMixin := schema.UsageCleanupTask{}.Mixin()
 	usagecleanuptaskMixinFields0 := usagecleanuptaskMixin[0].Fields()
 	_ = usagecleanuptaskMixinFields0

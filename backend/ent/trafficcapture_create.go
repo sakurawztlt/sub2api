@@ -348,6 +348,34 @@ func (_c *TrafficCaptureCreate) SetNillableErrorMsg(v *string) *TrafficCaptureCr
 	return _c
 }
 
+// SetClientIP sets the "client_ip" field.
+func (_c *TrafficCaptureCreate) SetClientIP(v string) *TrafficCaptureCreate {
+	_c.mutation.SetClientIP(v)
+	return _c
+}
+
+// SetNillableClientIP sets the "client_ip" field if the given value is not nil.
+func (_c *TrafficCaptureCreate) SetNillableClientIP(v *string) *TrafficCaptureCreate {
+	if v != nil {
+		_c.SetClientIP(*v)
+	}
+	return _c
+}
+
+// SetUserAgent sets the "user_agent" field.
+func (_c *TrafficCaptureCreate) SetUserAgent(v string) *TrafficCaptureCreate {
+	_c.mutation.SetUserAgent(v)
+	return _c
+}
+
+// SetNillableUserAgent sets the "user_agent" field if the given value is not nil.
+func (_c *TrafficCaptureCreate) SetNillableUserAgent(v *string) *TrafficCaptureCreate {
+	if v != nil {
+		_c.SetUserAgent(*v)
+	}
+	return _c
+}
+
 // SetExpiresAt sets the "expires_at" field.
 func (_c *TrafficCaptureCreate) SetExpiresAt(v time.Time) *TrafficCaptureCreate {
 	_c.mutation.SetExpiresAt(v)
@@ -502,6 +530,16 @@ func (_c *TrafficCaptureCreate) check() error {
 			return &ValidationError{Name: "error_msg", err: fmt.Errorf(`ent: validator failed for field "TrafficCapture.error_msg": %w`, err)}
 		}
 	}
+	if v, ok := _c.mutation.ClientIP(); ok {
+		if err := trafficcapture.ClientIPValidator(v); err != nil {
+			return &ValidationError{Name: "client_ip", err: fmt.Errorf(`ent: validator failed for field "TrafficCapture.client_ip": %w`, err)}
+		}
+	}
+	if v, ok := _c.mutation.UserAgent(); ok {
+		if err := trafficcapture.UserAgentValidator(v); err != nil {
+			return &ValidationError{Name: "user_agent", err: fmt.Errorf(`ent: validator failed for field "TrafficCapture.user_agent": %w`, err)}
+		}
+	}
 	return nil
 }
 
@@ -628,6 +666,14 @@ func (_c *TrafficCaptureCreate) createSpec() (*TrafficCapture, *sqlgraph.CreateS
 	if value, ok := _c.mutation.ErrorMsg(); ok {
 		_spec.SetField(trafficcapture.FieldErrorMsg, field.TypeString, value)
 		_node.ErrorMsg = value
+	}
+	if value, ok := _c.mutation.ClientIP(); ok {
+		_spec.SetField(trafficcapture.FieldClientIP, field.TypeString, value)
+		_node.ClientIP = value
+	}
+	if value, ok := _c.mutation.UserAgent(); ok {
+		_spec.SetField(trafficcapture.FieldUserAgent, field.TypeString, value)
+		_node.UserAgent = value
 	}
 	if value, ok := _c.mutation.ExpiresAt(); ok {
 		_spec.SetField(trafficcapture.FieldExpiresAt, field.TypeTime, value)
@@ -1108,6 +1154,42 @@ func (u *TrafficCaptureUpsert) UpdateErrorMsg() *TrafficCaptureUpsert {
 // ClearErrorMsg clears the value of the "error_msg" field.
 func (u *TrafficCaptureUpsert) ClearErrorMsg() *TrafficCaptureUpsert {
 	u.SetNull(trafficcapture.FieldErrorMsg)
+	return u
+}
+
+// SetClientIP sets the "client_ip" field.
+func (u *TrafficCaptureUpsert) SetClientIP(v string) *TrafficCaptureUpsert {
+	u.Set(trafficcapture.FieldClientIP, v)
+	return u
+}
+
+// UpdateClientIP sets the "client_ip" field to the value that was provided on create.
+func (u *TrafficCaptureUpsert) UpdateClientIP() *TrafficCaptureUpsert {
+	u.SetExcluded(trafficcapture.FieldClientIP)
+	return u
+}
+
+// ClearClientIP clears the value of the "client_ip" field.
+func (u *TrafficCaptureUpsert) ClearClientIP() *TrafficCaptureUpsert {
+	u.SetNull(trafficcapture.FieldClientIP)
+	return u
+}
+
+// SetUserAgent sets the "user_agent" field.
+func (u *TrafficCaptureUpsert) SetUserAgent(v string) *TrafficCaptureUpsert {
+	u.Set(trafficcapture.FieldUserAgent, v)
+	return u
+}
+
+// UpdateUserAgent sets the "user_agent" field to the value that was provided on create.
+func (u *TrafficCaptureUpsert) UpdateUserAgent() *TrafficCaptureUpsert {
+	u.SetExcluded(trafficcapture.FieldUserAgent)
+	return u
+}
+
+// ClearUserAgent clears the value of the "user_agent" field.
+func (u *TrafficCaptureUpsert) ClearUserAgent() *TrafficCaptureUpsert {
+	u.SetNull(trafficcapture.FieldUserAgent)
 	return u
 }
 
@@ -1668,6 +1750,48 @@ func (u *TrafficCaptureUpsertOne) UpdateErrorMsg() *TrafficCaptureUpsertOne {
 func (u *TrafficCaptureUpsertOne) ClearErrorMsg() *TrafficCaptureUpsertOne {
 	return u.Update(func(s *TrafficCaptureUpsert) {
 		s.ClearErrorMsg()
+	})
+}
+
+// SetClientIP sets the "client_ip" field.
+func (u *TrafficCaptureUpsertOne) SetClientIP(v string) *TrafficCaptureUpsertOne {
+	return u.Update(func(s *TrafficCaptureUpsert) {
+		s.SetClientIP(v)
+	})
+}
+
+// UpdateClientIP sets the "client_ip" field to the value that was provided on create.
+func (u *TrafficCaptureUpsertOne) UpdateClientIP() *TrafficCaptureUpsertOne {
+	return u.Update(func(s *TrafficCaptureUpsert) {
+		s.UpdateClientIP()
+	})
+}
+
+// ClearClientIP clears the value of the "client_ip" field.
+func (u *TrafficCaptureUpsertOne) ClearClientIP() *TrafficCaptureUpsertOne {
+	return u.Update(func(s *TrafficCaptureUpsert) {
+		s.ClearClientIP()
+	})
+}
+
+// SetUserAgent sets the "user_agent" field.
+func (u *TrafficCaptureUpsertOne) SetUserAgent(v string) *TrafficCaptureUpsertOne {
+	return u.Update(func(s *TrafficCaptureUpsert) {
+		s.SetUserAgent(v)
+	})
+}
+
+// UpdateUserAgent sets the "user_agent" field to the value that was provided on create.
+func (u *TrafficCaptureUpsertOne) UpdateUserAgent() *TrafficCaptureUpsertOne {
+	return u.Update(func(s *TrafficCaptureUpsert) {
+		s.UpdateUserAgent()
+	})
+}
+
+// ClearUserAgent clears the value of the "user_agent" field.
+func (u *TrafficCaptureUpsertOne) ClearUserAgent() *TrafficCaptureUpsertOne {
+	return u.Update(func(s *TrafficCaptureUpsert) {
+		s.ClearUserAgent()
 	})
 }
 
@@ -2397,6 +2521,48 @@ func (u *TrafficCaptureUpsertBulk) UpdateErrorMsg() *TrafficCaptureUpsertBulk {
 func (u *TrafficCaptureUpsertBulk) ClearErrorMsg() *TrafficCaptureUpsertBulk {
 	return u.Update(func(s *TrafficCaptureUpsert) {
 		s.ClearErrorMsg()
+	})
+}
+
+// SetClientIP sets the "client_ip" field.
+func (u *TrafficCaptureUpsertBulk) SetClientIP(v string) *TrafficCaptureUpsertBulk {
+	return u.Update(func(s *TrafficCaptureUpsert) {
+		s.SetClientIP(v)
+	})
+}
+
+// UpdateClientIP sets the "client_ip" field to the value that was provided on create.
+func (u *TrafficCaptureUpsertBulk) UpdateClientIP() *TrafficCaptureUpsertBulk {
+	return u.Update(func(s *TrafficCaptureUpsert) {
+		s.UpdateClientIP()
+	})
+}
+
+// ClearClientIP clears the value of the "client_ip" field.
+func (u *TrafficCaptureUpsertBulk) ClearClientIP() *TrafficCaptureUpsertBulk {
+	return u.Update(func(s *TrafficCaptureUpsert) {
+		s.ClearClientIP()
+	})
+}
+
+// SetUserAgent sets the "user_agent" field.
+func (u *TrafficCaptureUpsertBulk) SetUserAgent(v string) *TrafficCaptureUpsertBulk {
+	return u.Update(func(s *TrafficCaptureUpsert) {
+		s.SetUserAgent(v)
+	})
+}
+
+// UpdateUserAgent sets the "user_agent" field to the value that was provided on create.
+func (u *TrafficCaptureUpsertBulk) UpdateUserAgent() *TrafficCaptureUpsertBulk {
+	return u.Update(func(s *TrafficCaptureUpsert) {
+		s.UpdateUserAgent()
+	})
+}
+
+// ClearUserAgent clears the value of the "user_agent" field.
+func (u *TrafficCaptureUpsertBulk) ClearUserAgent() *TrafficCaptureUpsertBulk {
+	return u.Update(func(s *TrafficCaptureUpsert) {
+		s.ClearUserAgent()
 	})
 }
 

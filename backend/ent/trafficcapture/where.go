@@ -169,6 +169,16 @@ func ErrorMsg(v string) predicate.TrafficCapture {
 	return predicate.TrafficCapture(sql.FieldEQ(FieldErrorMsg, v))
 }
 
+// ClientIP applies equality check predicate on the "client_ip" field. It's identical to ClientIPEQ.
+func ClientIP(v string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldEQ(FieldClientIP, v))
+}
+
+// UserAgent applies equality check predicate on the "user_agent" field. It's identical to UserAgentEQ.
+func UserAgent(v string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldEQ(FieldUserAgent, v))
+}
+
 // ExpiresAt applies equality check predicate on the "expires_at" field. It's identical to ExpiresAtEQ.
 func ExpiresAt(v time.Time) predicate.TrafficCapture {
 	return predicate.TrafficCapture(sql.FieldEQ(FieldExpiresAt, v))
@@ -1372,6 +1382,156 @@ func ErrorMsgEqualFold(v string) predicate.TrafficCapture {
 // ErrorMsgContainsFold applies the ContainsFold predicate on the "error_msg" field.
 func ErrorMsgContainsFold(v string) predicate.TrafficCapture {
 	return predicate.TrafficCapture(sql.FieldContainsFold(FieldErrorMsg, v))
+}
+
+// ClientIPEQ applies the EQ predicate on the "client_ip" field.
+func ClientIPEQ(v string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldEQ(FieldClientIP, v))
+}
+
+// ClientIPNEQ applies the NEQ predicate on the "client_ip" field.
+func ClientIPNEQ(v string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldNEQ(FieldClientIP, v))
+}
+
+// ClientIPIn applies the In predicate on the "client_ip" field.
+func ClientIPIn(vs ...string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldIn(FieldClientIP, vs...))
+}
+
+// ClientIPNotIn applies the NotIn predicate on the "client_ip" field.
+func ClientIPNotIn(vs ...string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldNotIn(FieldClientIP, vs...))
+}
+
+// ClientIPGT applies the GT predicate on the "client_ip" field.
+func ClientIPGT(v string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldGT(FieldClientIP, v))
+}
+
+// ClientIPGTE applies the GTE predicate on the "client_ip" field.
+func ClientIPGTE(v string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldGTE(FieldClientIP, v))
+}
+
+// ClientIPLT applies the LT predicate on the "client_ip" field.
+func ClientIPLT(v string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldLT(FieldClientIP, v))
+}
+
+// ClientIPLTE applies the LTE predicate on the "client_ip" field.
+func ClientIPLTE(v string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldLTE(FieldClientIP, v))
+}
+
+// ClientIPContains applies the Contains predicate on the "client_ip" field.
+func ClientIPContains(v string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldContains(FieldClientIP, v))
+}
+
+// ClientIPHasPrefix applies the HasPrefix predicate on the "client_ip" field.
+func ClientIPHasPrefix(v string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldHasPrefix(FieldClientIP, v))
+}
+
+// ClientIPHasSuffix applies the HasSuffix predicate on the "client_ip" field.
+func ClientIPHasSuffix(v string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldHasSuffix(FieldClientIP, v))
+}
+
+// ClientIPIsNil applies the IsNil predicate on the "client_ip" field.
+func ClientIPIsNil() predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldIsNull(FieldClientIP))
+}
+
+// ClientIPNotNil applies the NotNil predicate on the "client_ip" field.
+func ClientIPNotNil() predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldNotNull(FieldClientIP))
+}
+
+// ClientIPEqualFold applies the EqualFold predicate on the "client_ip" field.
+func ClientIPEqualFold(v string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldEqualFold(FieldClientIP, v))
+}
+
+// ClientIPContainsFold applies the ContainsFold predicate on the "client_ip" field.
+func ClientIPContainsFold(v string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldContainsFold(FieldClientIP, v))
+}
+
+// UserAgentEQ applies the EQ predicate on the "user_agent" field.
+func UserAgentEQ(v string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldEQ(FieldUserAgent, v))
+}
+
+// UserAgentNEQ applies the NEQ predicate on the "user_agent" field.
+func UserAgentNEQ(v string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldNEQ(FieldUserAgent, v))
+}
+
+// UserAgentIn applies the In predicate on the "user_agent" field.
+func UserAgentIn(vs ...string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldIn(FieldUserAgent, vs...))
+}
+
+// UserAgentNotIn applies the NotIn predicate on the "user_agent" field.
+func UserAgentNotIn(vs ...string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldNotIn(FieldUserAgent, vs...))
+}
+
+// UserAgentGT applies the GT predicate on the "user_agent" field.
+func UserAgentGT(v string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldGT(FieldUserAgent, v))
+}
+
+// UserAgentGTE applies the GTE predicate on the "user_agent" field.
+func UserAgentGTE(v string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldGTE(FieldUserAgent, v))
+}
+
+// UserAgentLT applies the LT predicate on the "user_agent" field.
+func UserAgentLT(v string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldLT(FieldUserAgent, v))
+}
+
+// UserAgentLTE applies the LTE predicate on the "user_agent" field.
+func UserAgentLTE(v string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldLTE(FieldUserAgent, v))
+}
+
+// UserAgentContains applies the Contains predicate on the "user_agent" field.
+func UserAgentContains(v string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldContains(FieldUserAgent, v))
+}
+
+// UserAgentHasPrefix applies the HasPrefix predicate on the "user_agent" field.
+func UserAgentHasPrefix(v string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldHasPrefix(FieldUserAgent, v))
+}
+
+// UserAgentHasSuffix applies the HasSuffix predicate on the "user_agent" field.
+func UserAgentHasSuffix(v string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldHasSuffix(FieldUserAgent, v))
+}
+
+// UserAgentIsNil applies the IsNil predicate on the "user_agent" field.
+func UserAgentIsNil() predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldIsNull(FieldUserAgent))
+}
+
+// UserAgentNotNil applies the NotNil predicate on the "user_agent" field.
+func UserAgentNotNil() predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldNotNull(FieldUserAgent))
+}
+
+// UserAgentEqualFold applies the EqualFold predicate on the "user_agent" field.
+func UserAgentEqualFold(v string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldEqualFold(FieldUserAgent, v))
+}
+
+// UserAgentContainsFold applies the ContainsFold predicate on the "user_agent" field.
+func UserAgentContainsFold(v string) predicate.TrafficCapture {
+	return predicate.TrafficCapture(sql.FieldContainsFold(FieldUserAgent, v))
 }
 
 // ExpiresAtEQ applies the EQ predicate on the "expires_at" field.

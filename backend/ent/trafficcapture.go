@@ -68,6 +68,10 @@ type TrafficCapture struct {
 	ErrorKind string `json:"error_kind,omitempty"`
 	// ErrorMsg holds the value of the "error_msg" field.
 	ErrorMsg string `json:"error_msg,omitempty"`
+	// ClientIP holds the value of the "client_ip" field.
+	ClientIP string `json:"client_ip,omitempty"`
+	// UserAgent holds the value of the "user_agent" field.
+	UserAgent string `json:"user_agent,omitempty"`
 	// TTL 到期时间, janitor 清理
 	ExpiresAt    time.Time `json:"expires_at,omitempty"`
 	selectValues sql.SelectValues
@@ -84,7 +88,7 @@ func (*TrafficCapture) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullBool)
 		case trafficcapture.FieldID, trafficcapture.FieldAPIKeyID, trafficcapture.FieldAccountID, trafficcapture.FieldGroupID, trafficcapture.FieldUpstreamStatus, trafficcapture.FieldUseTimeMs, trafficcapture.FieldInboundBodyBytes, trafficcapture.FieldOutboundBodyBytes, trafficcapture.FieldResponseBodyBytes:
 			values[i] = new(sql.NullInt64)
-		case trafficcapture.FieldRequestID, trafficcapture.FieldUpstreamRequestID, trafficcapture.FieldPlatform, trafficcapture.FieldAccountType, trafficcapture.FieldModel, trafficcapture.FieldInboundBody, trafficcapture.FieldOutboundBody, trafficcapture.FieldResponseBody, trafficcapture.FieldErrorKind, trafficcapture.FieldErrorMsg:
+		case trafficcapture.FieldRequestID, trafficcapture.FieldUpstreamRequestID, trafficcapture.FieldPlatform, trafficcapture.FieldAccountType, trafficcapture.FieldModel, trafficcapture.FieldInboundBody, trafficcapture.FieldOutboundBody, trafficcapture.FieldResponseBody, trafficcapture.FieldErrorKind, trafficcapture.FieldErrorMsg, trafficcapture.FieldClientIP, trafficcapture.FieldUserAgent:
 			values[i] = new(sql.NullString)
 		case trafficcapture.FieldTs, trafficcapture.FieldExpiresAt:
 			values[i] = new(sql.NullTime)
@@ -263,6 +267,18 @@ func (_m *TrafficCapture) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.ErrorMsg = value.String
 			}
+		case trafficcapture.FieldClientIP:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field client_ip", values[i])
+			} else if value.Valid {
+				_m.ClientIP = value.String
+			}
+		case trafficcapture.FieldUserAgent:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field user_agent", values[i])
+			} else if value.Valid {
+				_m.UserAgent = value.String
+			}
 		case trafficcapture.FieldExpiresAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
 				return fmt.Errorf("unexpected type %T for field expires_at", values[i])
@@ -379,6 +395,12 @@ func (_m *TrafficCapture) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("error_msg=")
 	builder.WriteString(_m.ErrorMsg)
+	builder.WriteString(", ")
+	builder.WriteString("client_ip=")
+	builder.WriteString(_m.ClientIP)
+	builder.WriteString(", ")
+	builder.WriteString("user_agent=")
+	builder.WriteString(_m.UserAgent)
 	builder.WriteString(", ")
 	builder.WriteString("expires_at=")
 	builder.WriteString(_m.ExpiresAt.Format(time.ANSIC))

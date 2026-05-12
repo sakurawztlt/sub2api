@@ -494,6 +494,46 @@ func (_u *TrafficCaptureUpdate) ClearErrorMsg() *TrafficCaptureUpdate {
 	return _u
 }
 
+// SetClientIP sets the "client_ip" field.
+func (_u *TrafficCaptureUpdate) SetClientIP(v string) *TrafficCaptureUpdate {
+	_u.mutation.SetClientIP(v)
+	return _u
+}
+
+// SetNillableClientIP sets the "client_ip" field if the given value is not nil.
+func (_u *TrafficCaptureUpdate) SetNillableClientIP(v *string) *TrafficCaptureUpdate {
+	if v != nil {
+		_u.SetClientIP(*v)
+	}
+	return _u
+}
+
+// ClearClientIP clears the value of the "client_ip" field.
+func (_u *TrafficCaptureUpdate) ClearClientIP() *TrafficCaptureUpdate {
+	_u.mutation.ClearClientIP()
+	return _u
+}
+
+// SetUserAgent sets the "user_agent" field.
+func (_u *TrafficCaptureUpdate) SetUserAgent(v string) *TrafficCaptureUpdate {
+	_u.mutation.SetUserAgent(v)
+	return _u
+}
+
+// SetNillableUserAgent sets the "user_agent" field if the given value is not nil.
+func (_u *TrafficCaptureUpdate) SetNillableUserAgent(v *string) *TrafficCaptureUpdate {
+	if v != nil {
+		_u.SetUserAgent(*v)
+	}
+	return _u
+}
+
+// ClearUserAgent clears the value of the "user_agent" field.
+func (_u *TrafficCaptureUpdate) ClearUserAgent() *TrafficCaptureUpdate {
+	_u.mutation.ClearUserAgent()
+	return _u
+}
+
 // SetExpiresAt sets the "expires_at" field.
 func (_u *TrafficCaptureUpdate) SetExpiresAt(v time.Time) *TrafficCaptureUpdate {
 	_u.mutation.SetExpiresAt(v)
@@ -581,6 +621,16 @@ func (_u *TrafficCaptureUpdate) check() error {
 	if v, ok := _u.mutation.ErrorMsg(); ok {
 		if err := trafficcapture.ErrorMsgValidator(v); err != nil {
 			return &ValidationError{Name: "error_msg", err: fmt.Errorf(`ent: validator failed for field "TrafficCapture.error_msg": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.ClientIP(); ok {
+		if err := trafficcapture.ClientIPValidator(v); err != nil {
+			return &ValidationError{Name: "client_ip", err: fmt.Errorf(`ent: validator failed for field "TrafficCapture.client_ip": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.UserAgent(); ok {
+		if err := trafficcapture.UserAgentValidator(v); err != nil {
+			return &ValidationError{Name: "user_agent", err: fmt.Errorf(`ent: validator failed for field "TrafficCapture.user_agent": %w`, err)}
 		}
 	}
 	return nil
@@ -738,6 +788,18 @@ func (_u *TrafficCaptureUpdate) sqlSave(ctx context.Context) (_node int, err err
 	}
 	if _u.mutation.ErrorMsgCleared() {
 		_spec.ClearField(trafficcapture.FieldErrorMsg, field.TypeString)
+	}
+	if value, ok := _u.mutation.ClientIP(); ok {
+		_spec.SetField(trafficcapture.FieldClientIP, field.TypeString, value)
+	}
+	if _u.mutation.ClientIPCleared() {
+		_spec.ClearField(trafficcapture.FieldClientIP, field.TypeString)
+	}
+	if value, ok := _u.mutation.UserAgent(); ok {
+		_spec.SetField(trafficcapture.FieldUserAgent, field.TypeString, value)
+	}
+	if _u.mutation.UserAgentCleared() {
+		_spec.ClearField(trafficcapture.FieldUserAgent, field.TypeString)
 	}
 	if value, ok := _u.mutation.ExpiresAt(); ok {
 		_spec.SetField(trafficcapture.FieldExpiresAt, field.TypeTime, value)
@@ -1231,6 +1293,46 @@ func (_u *TrafficCaptureUpdateOne) ClearErrorMsg() *TrafficCaptureUpdateOne {
 	return _u
 }
 
+// SetClientIP sets the "client_ip" field.
+func (_u *TrafficCaptureUpdateOne) SetClientIP(v string) *TrafficCaptureUpdateOne {
+	_u.mutation.SetClientIP(v)
+	return _u
+}
+
+// SetNillableClientIP sets the "client_ip" field if the given value is not nil.
+func (_u *TrafficCaptureUpdateOne) SetNillableClientIP(v *string) *TrafficCaptureUpdateOne {
+	if v != nil {
+		_u.SetClientIP(*v)
+	}
+	return _u
+}
+
+// ClearClientIP clears the value of the "client_ip" field.
+func (_u *TrafficCaptureUpdateOne) ClearClientIP() *TrafficCaptureUpdateOne {
+	_u.mutation.ClearClientIP()
+	return _u
+}
+
+// SetUserAgent sets the "user_agent" field.
+func (_u *TrafficCaptureUpdateOne) SetUserAgent(v string) *TrafficCaptureUpdateOne {
+	_u.mutation.SetUserAgent(v)
+	return _u
+}
+
+// SetNillableUserAgent sets the "user_agent" field if the given value is not nil.
+func (_u *TrafficCaptureUpdateOne) SetNillableUserAgent(v *string) *TrafficCaptureUpdateOne {
+	if v != nil {
+		_u.SetUserAgent(*v)
+	}
+	return _u
+}
+
+// ClearUserAgent clears the value of the "user_agent" field.
+func (_u *TrafficCaptureUpdateOne) ClearUserAgent() *TrafficCaptureUpdateOne {
+	_u.mutation.ClearUserAgent()
+	return _u
+}
+
 // SetExpiresAt sets the "expires_at" field.
 func (_u *TrafficCaptureUpdateOne) SetExpiresAt(v time.Time) *TrafficCaptureUpdateOne {
 	_u.mutation.SetExpiresAt(v)
@@ -1331,6 +1433,16 @@ func (_u *TrafficCaptureUpdateOne) check() error {
 	if v, ok := _u.mutation.ErrorMsg(); ok {
 		if err := trafficcapture.ErrorMsgValidator(v); err != nil {
 			return &ValidationError{Name: "error_msg", err: fmt.Errorf(`ent: validator failed for field "TrafficCapture.error_msg": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.ClientIP(); ok {
+		if err := trafficcapture.ClientIPValidator(v); err != nil {
+			return &ValidationError{Name: "client_ip", err: fmt.Errorf(`ent: validator failed for field "TrafficCapture.client_ip": %w`, err)}
+		}
+	}
+	if v, ok := _u.mutation.UserAgent(); ok {
+		if err := trafficcapture.UserAgentValidator(v); err != nil {
+			return &ValidationError{Name: "user_agent", err: fmt.Errorf(`ent: validator failed for field "TrafficCapture.user_agent": %w`, err)}
 		}
 	}
 	return nil
@@ -1505,6 +1617,18 @@ func (_u *TrafficCaptureUpdateOne) sqlSave(ctx context.Context) (_node *TrafficC
 	}
 	if _u.mutation.ErrorMsgCleared() {
 		_spec.ClearField(trafficcapture.FieldErrorMsg, field.TypeString)
+	}
+	if value, ok := _u.mutation.ClientIP(); ok {
+		_spec.SetField(trafficcapture.FieldClientIP, field.TypeString, value)
+	}
+	if _u.mutation.ClientIPCleared() {
+		_spec.ClearField(trafficcapture.FieldClientIP, field.TypeString)
+	}
+	if value, ok := _u.mutation.UserAgent(); ok {
+		_spec.SetField(trafficcapture.FieldUserAgent, field.TypeString, value)
+	}
+	if _u.mutation.UserAgentCleared() {
+		_spec.ClearField(trafficcapture.FieldUserAgent, field.TypeString)
 	}
 	if value, ok := _u.mutation.ExpiresAt(); ok {
 		_spec.SetField(trafficcapture.FieldExpiresAt, field.TypeTime, value)

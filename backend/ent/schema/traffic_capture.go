@@ -109,6 +109,13 @@ func (TrafficCapture) Fields() []ent.Field {
 		field.String("error_msg").
 			MaxLen(400).
 			Optional(),
+		// 2026-05-12 R29 P-B 加强: capture 客户端识别 (cctest 是哪个 IP/agent 打的)
+		field.String("client_ip").
+			MaxLen(64).
+			Optional(),
+		field.String("user_agent").
+			MaxLen(400).
+			Optional(),
 		// 默认 TTL — 写入时 set, janitor 周期清理 (24h backup-only)
 		field.Time("expires_at").
 			Optional().

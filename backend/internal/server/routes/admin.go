@@ -94,6 +94,18 @@ func RegisterAdminRoutes(
 
 		// 邀请返利（专属用户管理）
 		registerAffiliateRoutes(admin, h)
+
+		// 2026-05-12 R29 P6: traffic capture backup-only 查询
+		registerTrafficCaptureRoutes(admin, h)
+	}
+}
+
+func registerTrafficCaptureRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	tc := admin.Group("/traffic-captures")
+	{
+		tc.GET("/recent", h.Admin.TrafficCapture.ListRecent)
+		tc.GET("/ui", h.Admin.TrafficCapture.UI)
+		tc.GET("", h.Admin.TrafficCapture.SearchByRequestID)
 	}
 }
 

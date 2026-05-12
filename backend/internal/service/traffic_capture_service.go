@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -89,26 +90,32 @@ func parseInt64CSVSet(s string) map[int64]bool {
 }
 
 // TrafficCaptureEntry — capture 一份请求 + 响应的完整快照.
+//
+// 2026-05-12 P5 fix: ResponseTotalBytes 记录响应原始总大小, 让 service.persist
+// 准确判断 truncated (ResponseBody 已被 middleware writer cap-clamp 过).
 type TrafficCaptureEntry struct {
-	Ts                time.Time
-	RequestID         string
-	UpstreamRequestID string
-	APIKeyID          int64
-	AccountID         int64
-	GroupID           int64
-	Platform          string
-	AccountType       string
-	Model             string
-	UpstreamStatus    int
-	Stream            bool
-	UseTimeMS         int64
-	InboundBody       []byte
-	OutboundBody      []byte
-	ResponseBody      []byte
-	OutboundHeaders   map[string]string
-	ResponseHeaders   map[string]string
-	ErrorKind         string
-	ErrorMsg          string
+	Ts                 time.Time
+	RequestID          string
+	UpstreamRequestID  string
+	APIKeyID           int64
+	AccountID          int64
+	GroupID            int64
+	Platform           string
+	AccountType        string
+	Model              string
+	UpstreamStatus     int
+	Stream             bool
+	UseTimeMS          int64
+	InboundBody        []byte
+	OutboundBody       []byte
+	ResponseBody       []byte
+	ResponseTotalBytes int64 // P5: middleware writer 累积的真实总字节 (ResponseBody 可能被 cap 截了, 这个永远准)
+	OutboundHeaders    map[string]string
+	ResponseHeaders    map[string]string
+	ErrorKind          string
+	ErrorMsg           string
+	ClientIP           string
+	UserAgent          string
 }
 
 // TrafficCaptureService — 异步队列 + 截断 + 脱敏 + TTL 清理.
@@ -119,7 +126,9 @@ type TrafficCaptureService struct {
 	dropped int64 // 队列满 drop 计数 (atomic)
 	written int64
 	failed  int64
-	stopped int32 // atomic
+	stopped int32         // atomic
+	done    chan struct{} // P-A: signal consumeLoop/cleanupLoop exit
+	doneAck sync.WaitGroup
 }
 
 // NewTrafficCaptureService — 跟 ent.Client + env config 一起初始化.
@@ -131,14 +140,40 @@ func NewTrafficCaptureService(client *dbent.Client, cfg TrafficCaptureConfig) *T
 		client: client,
 		cfg:    cfg,
 		queue:  make(chan TrafficCaptureEntry, queueSize),
+		done:   make(chan struct{}),
 	}
 	if cfg.Enabled {
+		s.doneAck.Add(2)
 		go s.consumeLoop()
 		go s.cleanupLoop()
 		log.Printf("[traffic-capture] enabled, max_bytes=%d ttl=%s sampling=%.2f api_key_filter=%v account_filter=%v",
 			cfg.MaxBytes, cfg.TTL, cfg.Sampling, len(cfg.APIKeyFilter), len(cfg.AccountFilter))
 	}
 	return s
+}
+
+// Close — P-A: graceful shutdown. drain queue 已收到的 entry, 关 goroutine.
+// sub2api shutdown 时调一次. 多调 idempotent. ctx 控制最长 drain 等待.
+func (s *TrafficCaptureService) Close(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	if !atomic.CompareAndSwapInt32(&s.stopped, 0, 1) {
+		return nil // 已 close
+	}
+	close(s.queue)
+	close(s.done)
+	wait := make(chan struct{})
+	go func() { s.doneAck.Wait(); close(wait) }()
+	select {
+	case <-wait:
+		log.Printf("[traffic-capture] closed cleanly (written=%d dropped=%d failed=%d)",
+			atomic.LoadInt64(&s.written), atomic.LoadInt64(&s.dropped), atomic.LoadInt64(&s.failed))
+	case <-ctx.Done():
+		log.Printf("[traffic-capture] close timed out, %d entries may be lost", len(s.queue))
+		return ctx.Err()
+	}
+	return nil
 }
 
 func (s *TrafficCaptureService) Enabled() bool {
@@ -204,7 +239,8 @@ func (s *TrafficCaptureService) Stats() (written, dropped, failed int64) {
 }
 
 func (s *TrafficCaptureService) consumeLoop() {
-	for entry := range s.queue {
+	defer s.doneAck.Done()
+	for entry := range s.queue { // P-A: queue close 后 range 退出 graceful
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := s.persist(ctx, entry); err != nil {
 			atomic.AddInt64(&s.failed, 1)
@@ -217,9 +253,27 @@ func (s *TrafficCaptureService) consumeLoop() {
 }
 
 func (s *TrafficCaptureService) persist(ctx context.Context, e TrafficCaptureEntry) error {
+	// nil-safe — test 场景可能 client=nil + Enabled=true (跑 middleware 路径
+	// 不真 persist DB). 不会丢用户数据, 因为生产场景 client 永远非 nil.
+	if s.client == nil {
+		return nil
+	}
 	inb, inbBytes, inbTrunc := truncateForCapture(e.InboundBody, s.cfg.MaxBytes)
 	outb, outbBytes, outbTrunc := truncateForCapture(e.OutboundBody, s.cfg.MaxBytes)
 	resp, respBytes, respTrunc := truncateForCapture(e.ResponseBody, s.cfg.MaxBytes)
+	// P5 fix: ResponseTotalBytes (middleware writer 累积的真实总大小) override
+	// truncateForCapture 拿 e.ResponseBody (已被 cap 截) 的本地判断. 真实 totalBytes
+	// 是 middleware writer 的 totalBytes, body 部分已是 cap-clamped.
+	if e.ResponseTotalBytes > 0 {
+		respBytes = int(e.ResponseTotalBytes)
+		if respBytes > s.cfg.MaxBytes {
+			respTrunc = true
+			if resp != "" && !strings.HasSuffix(resp, "...(truncated)") {
+				// 加 truncate 标记跟 truncateForCapture 行为一致
+				resp = resp + "...(truncated)"
+			}
+		}
+	}
 	// 脱敏 outbound headers (Authorization / x-api-key)
 	outHdr := redactSensitiveHeaders(e.OutboundHeaders)
 	respHdr := redactSensitiveHeaders(e.ResponseHeaders)
@@ -254,6 +308,8 @@ func (s *TrafficCaptureService) persist(ctx context.Context, e TrafficCaptureEnt
 		SetResponseHeaders(respHdr).
 		SetErrorKind(e.ErrorKind).
 		SetErrorMsg(e.ErrorMsg).
+		SetClientIP(e.ClientIP).
+		SetUserAgent(e.UserAgent).
 		SetExpiresAt(exp).
 		Save(ctx)
 	return err
@@ -306,22 +362,26 @@ func redactValue(v string) string {
 }
 
 // cleanupLoop — 周期删 expires_at < now 的旧 capture (默认 1h tick).
+// P-A: 监听 done channel graceful exit.
 func (s *TrafficCaptureService) cleanupLoop() {
+	defer s.doneAck.Done()
 	ticker := time.NewTicker(1 * time.Hour)
 	defer ticker.Stop()
-	for range ticker.C {
-		if atomic.LoadInt32(&s.stopped) != 0 {
+	for {
+		select {
+		case <-s.done:
 			return
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		n, err := s.client.TrafficCapture.Delete().
-			Where(trafficcapture.ExpiresAtLT(time.Now())).
-			Exec(ctx)
-		cancel()
-		if err != nil {
-			log.Printf("[traffic-capture] cleanup failed: %v", err)
-		} else if n > 0 {
-			log.Printf("[traffic-capture] cleanup deleted %d expired", n)
+		case <-ticker.C:
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			n, err := s.client.TrafficCapture.Delete().
+				Where(trafficcapture.ExpiresAtLT(time.Now())).
+				Exec(ctx)
+			cancel()
+			if err != nil {
+				log.Printf("[traffic-capture] cleanup failed: %v", err)
+			} else if n > 0 {
+				log.Printf("[traffic-capture] cleanup deleted %d expired", n)
+			}
 		}
 	}
 }
