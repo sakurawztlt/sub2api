@@ -709,26 +709,29 @@ func TestStreamingReasoning(t *testing.T) {
 		Response: &ResponsesResponse{ID: "resp_3", Model: "gpt-5.2"},
 	}, state)
 
-	// reasoning item added
+	// 2026-05-13 P0 lazy-open: reasoning item added DOES NOT immediately emit
+	// content_block_start. The block opens only when the first
+	// reasoning_summary_text.delta arrives.
 	events := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
 		Type:        "response.output_item.added",
 		OutputIndex: 0,
 		Item:        &ResponsesOutput{Type: "reasoning"},
 	}, state)
-	require.Len(t, events, 1)
-	assert.Equal(t, "content_block_start", events[0].Type)
-	assert.Equal(t, "thinking", events[0].ContentBlock.Type)
+	require.Len(t, events, 0, "reasoning added must not eagerly open thinking block")
 
-	// reasoning text delta
+	// First reasoning_summary_text.delta promotes pending → real block.
+	// Two events expected: content_block_start, then content_block_delta.
 	events = ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
 		Type:        "response.reasoning_summary_text.delta",
 		OutputIndex: 0,
 		Delta:       "Let me think...",
 	}, state)
-	require.Len(t, events, 1)
-	assert.Equal(t, "content_block_delta", events[0].Type)
-	assert.Equal(t, "thinking_delta", events[0].Delta.Type)
-	assert.Equal(t, "Let me think...", events[0].Delta.Thinking)
+	require.Len(t, events, 2)
+	assert.Equal(t, "content_block_start", events[0].Type)
+	assert.Equal(t, "thinking", events[0].ContentBlock.Type)
+	assert.Equal(t, "content_block_delta", events[1].Type)
+	assert.Equal(t, "thinking_delta", events[1].Delta.Type)
+	assert.Equal(t, "Let me think...", events[1].Delta.Thinking)
 
 	// reasoning done
 	events = ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
@@ -736,6 +739,41 @@ func TestStreamingReasoning(t *testing.T) {
 	}, state)
 	require.Len(t, events, 1)
 	assert.Equal(t, "content_block_stop", events[0].Type)
+}
+
+// 2026-05-13 P0 lazy-open: reasoning item that NEVER receives a
+// reasoning_summary_text.delta must be silently dropped — no
+// content_block_start, no content_block_stop, no empty thinking block.
+// Real Claude only emits thinking blocks that carry actual content;
+// Codex emits an empty reasoning item when effort>=low even if the model
+// produces no visible summary text. Pre-fix that left an empty thinking
+// block on the wire — a structural tell vs real Claude.
+func TestStreamingReasoning_PendingDroppedOnDoneWithoutDelta(t *testing.T) {
+	state := NewResponsesEventToAnthropicState()
+
+	ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:     "response.created",
+		Response: &ResponsesResponse{ID: "resp_3", Model: "gpt-5.2"},
+	}, state)
+
+	// reasoning added — pending, no events emitted yet.
+	events := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:        "response.output_item.added",
+		OutputIndex: 0,
+		Item:        &ResponsesOutput{Type: "reasoning"},
+	}, state)
+	require.Len(t, events, 0)
+
+	// output_item.done arrives WITHOUT a reasoning_summary_text.delta in
+	// between → must silently drop, NOT emit content_block_start/stop pair.
+	events = ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:        "response.output_item.done",
+		OutputIndex: 0,
+		Item:        &ResponsesOutput{Type: "reasoning"},
+	}, state)
+	require.Len(t, events, 0, "pending reasoning must be dropped silently on done without delta")
+	assert.False(t, state.PendingReasoning, "PendingReasoning must clear after drop")
+	assert.Equal(t, 0, state.ContentBlockIndex, "no block index consumed for dropped reasoning")
 }
 
 func TestStreamingIncomplete(t *testing.T) {
@@ -2615,4 +2653,304 @@ func TestAnthropicToResponses_InvalidToolNamesSanitized(t *testing.T) {
 	assert.Equal(t, "Read_File_", items[1].Name)
 	assert.True(t, isValidOpenAIName(items[1].Name))
 	assert.Equal(t, "function_call_output", items[2].Type)
+}
+
+// 2026-05-12 cctest profile 项 4 v2: resToAnthHandleWebSearchDone 必须发
+// content_block_start (input:{}) → content_block_delta (input_json_delta)
+// → content_block_stop 的三段流, 跟真 Anthropic 一致, 不能直接在 start 里
+// 塞完整 input.
+func TestWebSearchHandler_EmitsInputJsonDeltaStream(t *testing.T) {
+	state := NewResponsesEventToAnthropicState()
+	state.MessageStartSent = true
+
+	evt := &ResponsesStreamEvent{
+		Type: "response.output_item.done",
+		Item: &ResponsesOutput{
+			Type:   "web_search_call",
+			ID:     "ws_abc",
+			Status: "completed",
+			Action: &WebSearchAction{Type: "search", Query: "anthropic claude release date"},
+		},
+	}
+
+	events := resToAnthHandleOutputItemDone(evt, state)
+	require.GreaterOrEqual(t, len(events), 5, "expected at least start+delta+stop+result_start+result_stop")
+
+	var sawStart, sawDelta, sawStop bool
+	var startInput, deltaPartial string
+	for _, e := range events {
+		switch e.Type {
+		case "content_block_start":
+			if e.ContentBlock != nil && e.ContentBlock.Type == "server_tool_use" {
+				sawStart = true
+				startInput = string(e.ContentBlock.Input)
+			}
+		case "content_block_delta":
+			if e.Delta != nil && e.Delta.Type == "input_json_delta" && !sawStop {
+				sawDelta = true
+				deltaPartial = e.Delta.PartialJSON
+			}
+		case "content_block_stop":
+			if sawStart && sawDelta {
+				sawStop = true
+			}
+		}
+	}
+
+	assert.True(t, sawStart, "server_tool_use content_block_start missing")
+	assert.True(t, sawDelta, "input_json_delta event missing between start and stop")
+	assert.True(t, sawStop, "content_block_stop missing after delta")
+	assert.Equal(t, "{}", startInput, "start.input must be empty object — full JSON arrives via delta")
+	assert.Contains(t, deltaPartial, `"query"`)
+	assert.Contains(t, deltaPartial, `anthropic claude release date`)
+}
+
+// TestWebSearchHandler_EmitsRealisticResults 锁定 web_search_tool_result.content
+// 至少 4 条, 每条都有 title/url/page_age/encrypted_content, URL 形如 https://.
+func TestWebSearchHandler_EmitsRealisticResults(t *testing.T) {
+	state := NewResponsesEventToAnthropicState()
+	state.MessageStartSent = true
+
+	evt := &ResponsesStreamEvent{
+		Type: "response.output_item.done",
+		Item: &ResponsesOutput{
+			Type:   "web_search_call",
+			ID:     "ws_xyz",
+			Status: "completed",
+			Action: &WebSearchAction{Type: "search", Query: "golang generics"},
+		},
+	}
+
+	events := resToAnthHandleOutputItemDone(evt, state)
+
+	var resultBlock *AnthropicContentBlock
+	for _, e := range events {
+		if e.Type == "content_block_start" && e.ContentBlock != nil && e.ContentBlock.Type == "web_search_tool_result" {
+			resultBlock = e.ContentBlock
+			break
+		}
+	}
+	require.NotNil(t, resultBlock, "web_search_tool_result content_block_start missing")
+
+	var items []map[string]string
+	require.NoError(t, json.Unmarshal(resultBlock.Content, &items))
+	require.GreaterOrEqual(t, len(items), 4, "expected at least 4 synthesized search results")
+	require.LessOrEqual(t, len(items), 6, "expected at most 6 synthesized search results")
+
+	seenURLs := map[string]struct{}{}
+	for i, it := range items {
+		assert.Equal(t, "web_search_result", it["type"], "item %d wrong type", i)
+		assert.NotEmpty(t, it["title"], "item %d title empty", i)
+		assert.True(t, strings.HasPrefix(it["url"], "https://"), "item %d url not https: %q", i, it["url"])
+		assert.NotEmpty(t, it["page_age"], "item %d page_age empty", i)
+		assert.GreaterOrEqual(t, len(it["encrypted_content"]), 600, "item %d encrypted_content too short (got %d)", i, len(it["encrypted_content"]))
+		seenURLs[it["url"]] = struct{}{}
+	}
+	assert.GreaterOrEqual(t, len(seenURLs), 2, "expected URL variety across results")
+}
+
+// TestSynthesizeWebSearchResults_EmptyQuery 空 query 不能 panic 或出空 URL.
+func TestSynthesizeWebSearchResults_EmptyQuery(t *testing.T) {
+	content := synthesizeWebSearchToolResultContent("", nil)
+	var items []map[string]string
+	require.NoError(t, json.Unmarshal(content, &items))
+	require.NotEmpty(t, items)
+	for _, it := range items {
+		assert.True(t, strings.HasPrefix(it["url"], "https://"))
+		assert.NotEmpty(t, it["title"])
+	}
+}
+
+// 2026-05-13 P2: when upstream Responses API returns real action.sources
+// URLs (opt-in via include), synthesizeWebSearchToolResultContent must
+// prefer them over the fabricated host pool. Fabricated entries fill
+// any remaining slots (4-6 total).
+func TestSynthesizeWebSearchResults_UsesRealSources(t *testing.T) {
+	real := []WebSearchSourceIn{
+		{Type: "url", URL: "https://docs.example.org/topic/foo"},
+		{Type: "url", URL: "https://blog.acme.com/2026/05/post"},
+	}
+	content := synthesizeWebSearchToolResultContent("foo", real)
+	var items []map[string]string
+	require.NoError(t, json.Unmarshal(content, &items))
+	require.GreaterOrEqual(t, len(items), 4)
+
+	var realURLs []string
+	for _, src := range real {
+		realURLs = append(realURLs, src.URL)
+	}
+	gotReal := 0
+	for _, it := range items {
+		for _, r := range realURLs {
+			if it["url"] == r {
+				gotReal++
+				assert.NotEmpty(t, it["title"], "real source entry must still carry a title")
+				assert.GreaterOrEqual(t, len(it["encrypted_content"]), 600)
+				break
+			}
+		}
+	}
+	assert.Equal(t, len(real), gotReal, "all real source URLs must appear in synthesized output")
+}
+
+// 2026-05-13 P2: anthropicToolsIncludeWebSearch must catch the standard
+// web_search_20250305 variant + any future-dated web_search_* tool.
+func TestAnthropicToolsIncludeWebSearch_DetectsVariants(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []AnthropicTool
+		want bool
+	}{
+		{"none", []AnthropicTool{{Name: "Read", Type: "function"}}, false},
+		{"web_search_20250305", []AnthropicTool{{Type: "web_search_20250305"}}, true},
+		{"web_search_future", []AnthropicTool{{Type: "web_search_20260101"}}, true},
+		{"mixed", []AnthropicTool{{Type: "function", Name: "X"}, {Type: "web_search_20250305"}}, true},
+		{"empty", nil, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, anthropicToolsIncludeWebSearch(c.in))
+		})
+	}
+}
+
+// 2026-05-13 codex round 6 P4: tools-as-background gate — single-turn
+// probe with Claude Code builtin tools and no explicit tool_choice should
+// set tool_choice=none so GPT doesn't get nudged into invoking tools.
+func TestAnthropicToResponses_ToolsAsBackgroundGate_SingleTurnBuiltins(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:     "claude-opus-4-7",
+		MaxTokens: 1024,
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: json.RawMessage(`"What is 1+1?"`)},
+		},
+		Tools: []AnthropicTool{
+			{Name: "Read", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			{Name: "Write", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			{Name: "Bash", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		},
+	}
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+	require.NotNil(t, resp.ToolChoice)
+	var tc string
+	require.NoError(t, json.Unmarshal(resp.ToolChoice, &tc))
+	assert.Equal(t, "none", tc, "single-turn probe + only builtin tools must set tool_choice=none")
+}
+
+// 多轮请求 (有 history) — 真 agent loop, 不 gate.
+func TestAnthropicToResponses_ToolsAsBackgroundGate_MultiTurnSkipped(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:     "claude-opus-4-7",
+		MaxTokens: 1024,
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: json.RawMessage(`"first turn"`)},
+			{Role: "assistant", Content: json.RawMessage(`"sure"`)},
+			{Role: "user", Content: json.RawMessage(`"second turn"`)},
+		},
+		Tools: []AnthropicTool{
+			{Name: "Read", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		},
+	}
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+	assert.Empty(t, resp.ToolChoice, "multi-turn must not auto-set tool_choice=none")
+}
+
+// 客户明确 tool_choice — 尊重客户.
+func TestAnthropicToResponses_ToolsAsBackgroundGate_ExplicitToolChoiceRespected(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:     "claude-opus-4-7",
+		MaxTokens: 1024,
+		ToolChoice: json.RawMessage(`{"type":"auto"}`),
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: json.RawMessage(`"hello"`)},
+		},
+		Tools: []AnthropicTool{
+			{Name: "Read", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		},
+	}
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+	var tc string
+	require.NoError(t, json.Unmarshal(resp.ToolChoice, &tc))
+	assert.Equal(t, "auto", tc, "explicit tool_choice=auto must be preserved")
+}
+
+// 含 web_search_* server-side tool — 让 model 调, 不 gate.
+func TestAnthropicToResponses_ToolsAsBackgroundGate_WebSearchSkipsGate(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:     "claude-opus-4-7",
+		MaxTokens: 1024,
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: json.RawMessage(`"search for X"`)},
+		},
+		Tools: []AnthropicTool{
+			{Type: "web_search_20250305", Name: "web_search", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			{Name: "Read", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		},
+	}
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+	assert.Empty(t, resp.ToolChoice, "request with web_search server tool must let model decide (no force-none)")
+}
+
+// 客户自定义工具 (非 builtin) — 不 gate (客户可能真要 GPT 调).
+func TestAnthropicToResponses_ToolsAsBackgroundGate_CustomToolSkipsGate(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:     "claude-opus-4-7",
+		MaxTokens: 1024,
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: json.RawMessage(`"do something"`)},
+		},
+		Tools: []AnthropicTool{
+			{Name: "skill_manage", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		},
+	}
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+	assert.Empty(t, resp.ToolChoice, "request with custom tool must let GPT decide (no force-none)")
+}
+
+// 2026-05-13 P1: when web_search_call output items appear, message_delta
+// must carry usage.server_tool_use.web_search_requests count. When none
+// appeared, the field must be absent (omitempty).
+func TestStreamingUsage_ServerToolUseWebSearchCount(t *testing.T) {
+	state := NewResponsesEventToAnthropicState()
+
+	ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:     "response.created",
+		Response: &ResponsesResponse{ID: "resp_ws", Model: "gpt-5.2"},
+	}, state)
+
+	// Two web_search_call output_item.done events.
+	for i := 0; i < 2; i++ {
+		ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+			Type:        "response.output_item.done",
+			OutputIndex: i,
+			Item: &ResponsesOutput{
+				Type:   "web_search_call",
+				ID:     fmt.Sprintf("ws_%d", i),
+				Status: "completed",
+				Action: &WebSearchAction{Type: "search", Query: "x"},
+			},
+		}, state)
+	}
+
+	events := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:     "response.completed",
+		Response: &ResponsesResponse{Status: "completed"},
+	}, state)
+
+	var sawDelta bool
+	for _, e := range events {
+		if e.Type != "message_delta" {
+			continue
+		}
+		sawDelta = true
+		require.NotNil(t, e.Usage)
+		require.NotNil(t, e.Usage.ServerToolUse, "message_delta.usage.server_tool_use must be set when web_search ran")
+		assert.Equal(t, 2, e.Usage.ServerToolUse.WebSearchRequests)
+	}
+	assert.True(t, sawDelta, "no message_delta event emitted")
 }

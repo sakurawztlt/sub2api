@@ -41,13 +41,24 @@ func AnthropicToResponses(req *AnthropicRequest) (*ResponsesRequest, error) {
 		return nil, err
 	}
 
+	include := []string{"reasoning.encrypted_content"}
+	// 2026-05-13 P2 (codex 5/12 doc lookup): when the Anthropic request carries
+	// a web_search_* tool, opt the upstream Responses call into exposing the
+	// real consulted URLs via `action.sources` so we can put genuine URLs in
+	// our synthesized web_search_tool_result blocks instead of fabricating all
+	// 4-6 URLs. Without this include, upstream returns only query + status —
+	// no sources — and we have to fabricate the entire entry.
+	if anthropicToolsIncludeWebSearch(req.Tools) {
+		include = append(include, "web_search_call.action.sources")
+	}
+
 	out := &ResponsesRequest{
 		Model:       req.Model,
 		Input:       inputJSON,
 		Temperature: req.Temperature,
 		TopP:        req.TopP,
 		Stream:      req.Stream,
-		Include:     []string{"reasoning.encrypted_content"},
+		Include:     include,
 	}
 
 	storeFalse := false
@@ -103,7 +114,87 @@ func AnthropicToResponses(req *AnthropicRequest) (*ResponsesRequest, error) {
 		out.ToolChoice = tc
 	}
 
+	// 2026-05-13 codex round 6 P4 — tools-as-background gate.
+	//
+	// 真 Claude Code 单轮探针 (cctest) 经常带 28 builtin tools 但实际**不**
+	// 调用 (model 直接答). 老转换路径把 28 工具全转 OpenAI function tools 后
+	// GPT 倾向调用 (尤其有 thinking 时 chain-of-thought 让它觉得"该用工具"),
+	// 输出形态变成 tool_use + result + text, 跟真 Claude 单轮探针只 text 不
+	// 一致. 修法: 客户没设 tool_choice 且单轮探针形态命中时, 默认 tool_choice=none
+	// 让 GPT 不被诱导. 客户明确设 tool_choice (auto/required/specific tool)
+	// 时尊重客户. 客户开 web_search 这种 Anthropic server-side tool 时也不
+	// 设 none (web_search 需要 GPT 主动调). env GCR_TOOLS_BACKGROUND_GATE
+	// 默认 on, =0 一键回老行为.
+	if len(req.ToolChoice) == 0 && os.Getenv("SUB2API_TOOLS_BACKGROUND_GATE") != "0" {
+		if shouldUseToolsAsBackground(req) {
+			noneChoice := json.RawMessage(`"none"`)
+			out.ToolChoice = noneChoice
+		}
+	}
+
 	return out, nil
+}
+
+// shouldUseToolsAsBackground reports whether a request should be treated as
+// "tools as environment, not call invitation". Fires when:
+//
+//   - 客户没明示 tool_choice
+//   - 单轮请求 (messages 长度 1) — cctest 探针形态
+//   - 所有 tools 都是 Claude Code builtin (Read/Write/Edit/Bash/Task*/...)
+//     — 真 Claude Code 单轮探针带这些但不调用
+//   - 至少有 1 个工具 (无工具就没必要 gate)
+//
+// 不 fire (放过让 GPT 决定):
+//   - 多轮请求 (有 history) — 用户真在 agent loop
+//   - 任何一个 tool 是 Anthropic server-side (web_search_*) — 那些就是要让
+//     model 调的
+//   - 任何一个 tool 是非 builtin 客户 custom tool — 客户可能真要 GPT 调
+func shouldUseToolsAsBackground(req *AnthropicRequest) bool {
+	if req == nil {
+		return false
+	}
+	if len(req.Tools) == 0 {
+		return false
+	}
+	// Single-turn only (cctest probes are single-turn; multi-turn = real agent loop)
+	if len(req.Messages) != 1 {
+		return false
+	}
+	for _, t := range req.Tools {
+		// Anthropic server-side tools (web_search_*) — must let model call.
+		if strings.HasPrefix(t.Type, "web_search") ||
+			strings.HasPrefix(t.Type, "code_execution") ||
+			strings.HasPrefix(t.Type, "computer_") ||
+			strings.HasPrefix(t.Type, "bash_") ||
+			strings.HasPrefix(t.Type, "text_editor_") ||
+			strings.HasPrefix(t.Type, "str_replace_editor_") {
+			return false
+		}
+		// Non-builtin custom tool — customer may really need GPT to call it.
+		if !isClaudeCodeBuiltinToolName(t.Name) {
+			return false
+		}
+	}
+	return true
+}
+
+// claudeCodeBuiltinToolNamesAtoR — mirrors cc-api's claudeCodeBuiltinToolNames
+// (round 5). Sub2api can't import cc-api so we duplicate the 28-name list
+// here. KEEP IN SYNC with cc-api/anthropic_direct.go::claudeCodeBuiltinToolNames.
+var claudeCodeBuiltinToolNamesAtoR = map[string]struct{}{
+	"Agent": {}, "AskUserQuestion": {}, "Bash": {}, "CronCreate": {},
+	"CronDelete": {}, "CronList": {}, "Edit": {}, "EnterPlanMode": {},
+	"EnterWorktree": {}, "ExitPlanMode": {}, "ExitWorktree": {},
+	"Glob": {}, "Grep": {}, "ListMcpResourcesTool": {}, "NotebookEdit": {},
+	"Read": {}, "ReadMcpResourceTool": {}, "RemoteTrigger": {}, "Skill": {},
+	"TaskCreate": {}, "TaskGet": {}, "TaskList": {}, "TaskOutput": {},
+	"TaskStop": {}, "TaskUpdate": {}, "WebFetch": {}, "WebSearch": {},
+	"Write": {},
+}
+
+func isClaudeCodeBuiltinToolName(name string) bool {
+	_, ok := claudeCodeBuiltinToolNamesAtoR[name]
+	return ok
 }
 
 // convertAnthropicToolChoiceToResponses maps Anthropic tool_choice to Responses format.
@@ -839,6 +930,18 @@ func mapAnthropicEffortToResponses(effort string) string {
 //  3. Other Anthropic server-side tools (`computer_*`, `text_editor_*`,
 //     `bash_*`) are still DROPPED because sub2api's Codex path has no
 //     matching hosted tool in the Responses output side.
+// anthropicToolsIncludeWebSearch reports whether the request carries any
+// `web_search_*` Anthropic tool. Used to decide whether to opt the outgoing
+// Responses request into action.sources exposure.
+func anthropicToolsIncludeWebSearch(tools []AnthropicTool) bool {
+	for _, t := range tools {
+		if strings.HasPrefix(t.Type, "web_search") {
+			return true
+		}
+	}
+	return false
+}
+
 func convertAnthropicToolsToResponses(tools []AnthropicTool) []ResponsesTool {
 	var out []ResponsesTool
 	for _, t := range tools {

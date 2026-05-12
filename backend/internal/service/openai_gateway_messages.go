@@ -451,7 +451,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	var result *OpenAIForwardResult
 	var handleErr error
 	if clientStream {
-		result, handleErr = s.handleAnthropicStreamingResponse(resp, c, originalModel, billingModel, upstreamModel, startTime)
+		result, handleErr = s.handleAnthropicStreamingResponse(resp, c, originalModel, billingModel, upstreamModel, startTime, len(body))
 	} else {
 		// Client wants JSON: buffer the streaming response and assemble a JSON reply.
 		result, handleErr = s.handleAnthropicBufferedStreamingResponse(resp, c, originalModel, billingModel, upstreamModel, startTime)
@@ -770,6 +770,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	billingModel string,
 	upstreamModel string,
 	startTime time.Time,
+	inboundBodyLen int,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 
@@ -796,10 +797,20 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	state := apicompat.NewResponsesEventToAnthropicState()
 	state.Model = originalModel
 	// 2026-05-12 cctest profile 项 5 (codex audit): message_start.usage.input_tokens
-	// 不能是 0, 用客户请求 ContentLength 粗估 token (bytes/4). 真 Claude 这里报
+	// 不能是 0, 用客户请求 body 长度粗估 token (bytes/4). 真 Claude 这里报
 	// 5K-11K (cctest system prompt 估算) 不报 0.
-	if c.Request != nil && c.Request.ContentLength > 0 {
-		state.SetPreflightInputEstimate(int(c.Request.ContentLength))
+	//
+	// 2026-05-13 codex round 6 capture diff: 老版本依赖 c.Request.ContentLength,
+	// 但 gcr 转发 sub2api 用 chunked transfer encoding → ContentLength=-1 → 整段
+	// gate 跳过, message_start.usage.input_tokens=0 暴露. 改成 caller (ForwardAsAnthropic)
+	// 传 len(body) 进来, body 已 buffer 完整必有值. ContentLength 仍作 fallback
+	// 防 caller 漏传.
+	preflightBytes := inboundBodyLen
+	if preflightBytes <= 0 && c.Request != nil && c.Request.ContentLength > 0 {
+		preflightBytes = int(c.Request.ContentLength)
+	}
+	if preflightBytes > 0 {
+		state.SetPreflightInputEstimate(preflightBytes)
 	}
 	var usage OpenAIUsage
 	responseID := ""

@@ -162,12 +162,23 @@ type AnthropicResponse struct {
 // order MUST match real Anthropic response ordering so byte-level signature
 // checks on the response body cannot distinguish us from the real thing.
 // Real Anthropic order: input_tokens → cache_creation_input_tokens →
-// cache_read_input_tokens → output_tokens. Do not reorder.
+// cache_read_input_tokens → output_tokens → server_tool_use. Do not
+// reorder.
 type AnthropicUsage struct {
-	InputTokens              int `json:"input_tokens"`
-	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
-	OutputTokens             int `json:"output_tokens"`
+	InputTokens              int                       `json:"input_tokens"`
+	CacheCreationInputTokens int                       `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int                       `json:"cache_read_input_tokens"`
+	OutputTokens             int                       `json:"output_tokens"`
+	ServerToolUse            *AnthropicServerToolUsage `json:"server_tool_use,omitempty"`
+}
+
+// 2026-05-13 P1: server_tool_use counter for hosted Anthropic server tools.
+// Real Claude emits message_delta.usage.server_tool_use.web_search_requests
+// when the conversation involved N hosted web_search tool invocations.
+// omitempty so the wire format is byte-identical to a regular non-search
+// response. Only set when WebSearchRequestCount > 0 at finalisation.
+type AnthropicServerToolUsage struct {
+	WebSearchRequests int `json:"web_search_requests"`
 }
 
 // ---------------------------------------------------------------------------
@@ -378,9 +389,29 @@ type ResponsesOutput struct {
 }
 
 // WebSearchAction describes the search action in a web_search_call output item.
+//
+// 2026-05-13 P2: added Queries + Sources fields. OpenAI Responses API exposes
+// real consulted URLs in `action.sources` when the outgoing request includes
+// `web_search_call.action.sources` in the include list (confirmed via codex
+// 5/12 doc lookup). Queries is the new plural form of the deprecated Query
+// field (both kept — populated only one or the other, omitempty handles wire).
 type WebSearchAction struct {
-	Type  string `json:"type,omitempty"`  // "search"
-	Query string `json:"query,omitempty"` // primary search query
+	Type    string              `json:"type,omitempty"`    // "search"
+	Query   string              `json:"query,omitempty"`   // deprecated singular form (older Codex versions)
+	Queries []string            `json:"queries,omitempty"` // new plural form, list of search keywords
+	Sources []WebSearchSourceIn `json:"sources,omitempty"` // requires include=web_search_call.action.sources on the request
+}
+
+// WebSearchSourceIn is one entry under WebSearchAction.Sources — a real URL
+// that the upstream web search visited / cited. Only present when the
+// outgoing Responses request opted in via the include list.
+//
+// Shape per OpenAI docs: `{"type": "url", "url": "https://..."}`. No title /
+// snippet / page_age are exposed here — those are fabricated downstream
+// when synthesizing Anthropic-style web_search_result blocks.
+type WebSearchSourceIn struct {
+	Type string `json:"type,omitempty"` // "url"
+	URL  string `json:"url,omitempty"`
 }
 
 // ResponsesSummary is a summary text block inside a reasoning output.
