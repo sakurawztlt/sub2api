@@ -272,7 +272,22 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
-		// codex 2026-05-16: 404 on OAuth account → account-scoped failover
+		// codex 2026-05-16 round10 #2424: APIKey + Responses support unknown
+		// (untested) + upstream returns 4xx that signals /responses isn't
+		// supported → fall back to raw Chat Completions transport instead of
+		// failing the request. Preserves third-party upstream compatibility
+		// when the probe state hasn't decided yet.
+		if account.Type == AccountTypeAPIKey &&
+			openai_compat.ResolveResponsesSupport(account.Extra) == openai_compat.ResponsesSupportUnknown &&
+			!isResponsesEndpointSupportedByStatus(resp.StatusCode) {
+			logger.L().Info("openai chat_completions: /responses unsupported, falling back to raw chat completions",
+				zap.Int64("account_id", account.ID),
+				zap.Int("upstream_status", resp.StatusCode),
+				zap.String("upstream_message", upstreamMsg),
+			)
+			return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+		}
+		// codex 2026-05-16: 404 on OAuth account → account-scoped failover (fu13).
 		if s.shouldFailoverOpenAIUpstreamResponseForAccount(resp.StatusCode, upstreamMsg, respBody, account) {
 			upstreamDetail := ""
 			if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
