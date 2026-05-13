@@ -680,6 +680,31 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 	resetTimeout()
 	defer stopTimeout()
 
+	// 2026-05-13 codex round 11i: buffered 非流总超时 + 首个 meaningful event
+	// 超时. 防 stream_data_interval_timeout 心跳能拖到 9 分钟的情况.
+	//
+	// total: 整请求硬上限. 启用后无论上游发什么 (terminal / 心跳 / 数据), 到
+	//        时立刻 close + return error 让 caller failover or 504.
+	// first_meaningful: 首个**非心跳事件** (terminal 或业务事件) 未达到时
+	//                   超时. 心跳事件不算 (会被 ProcessEvent 忽略).
+	var (
+		totalTimeoutCh    <-chan time.Time
+		totalTimeoutTimer *time.Timer
+		firstMeaningTimer *time.Timer
+		firstMeaningCh    <-chan time.Time
+		firstMeaningSeen  bool
+	)
+	if s.cfg != nil && s.cfg.Gateway.BufferedTotalTimeout > 0 {
+		totalTimeoutTimer = time.NewTimer(time.Duration(s.cfg.Gateway.BufferedTotalTimeout) * time.Second)
+		totalTimeoutCh = totalTimeoutTimer.C
+		defer totalTimeoutTimer.Stop()
+	}
+	if s.cfg != nil && s.cfg.Gateway.BufferedFirstMeaningfulTimeout > 0 {
+		firstMeaningTimer = time.NewTimer(time.Duration(s.cfg.Gateway.BufferedFirstMeaningfulTimeout) * time.Second)
+		firstMeaningCh = firstMeaningTimer.C
+		defer firstMeaningTimer.Stop()
+	}
+
 	type scanEvent struct {
 		line string
 		err  error
@@ -740,6 +765,23 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 
 			acc.ProcessEvent(&event)
 
+			// 2026-05-13 codex round 11i: any business event (not just terminal)
+			// counts as "first meaningful" — stop the first-meaningful timer.
+			// Heartbeat events parse as ResponsesStreamEvent but have no
+			// terminal Type; an arbitrary processed event still satisfies
+			// "upstream is doing real work". Conservative interpretation:
+			// the timer is for catching "upstream silent / heartbeat-only"
+			// scenarios, so we trip it OFF on any successfully-parsed event.
+			if !firstMeaningSeen && firstMeaningTimer != nil {
+				firstMeaningSeen = true
+				if !firstMeaningTimer.Stop() {
+					select {
+					case <-firstMeaningTimer.C:
+					default:
+					}
+				}
+			}
+
 			if isOpenAICompatResponsesTerminalEvent(event.Type) && event.Response != nil {
 				if event.Response.Usage != nil {
 					usage = copyOpenAIUsageFromResponsesUsage(event.Response.Usage)
@@ -754,6 +796,25 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 				zap.Duration("interval", streamInterval),
 			)
 			return nil, usage, acc, fmt.Errorf("stream data interval timeout")
+
+		case <-totalTimeoutCh:
+			_ = resp.Body.Close()
+			logger.L().Warn(logPrefix+": buffered total timeout (codex round 11i)",
+				zap.String("request_id", requestID),
+				zap.Int("seconds", s.cfg.Gateway.BufferedTotalTimeout),
+			)
+			return nil, usage, acc, fmt.Errorf("buffered total timeout")
+
+		case <-firstMeaningCh:
+			if firstMeaningSeen {
+				continue
+			}
+			_ = resp.Body.Close()
+			logger.L().Warn(logPrefix+": buffered first meaningful event timeout (codex round 11i)",
+				zap.String("request_id", requestID),
+				zap.Int("seconds", s.cfg.Gateway.BufferedFirstMeaningfulTimeout),
+			)
+			return nil, usage, acc, fmt.Errorf("buffered first meaningful timeout")
 		}
 	}
 }

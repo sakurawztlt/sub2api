@@ -647,6 +647,18 @@ type GatewayConfig struct {
 	StreamDataIntervalTimeout int `mapstructure:"stream_data_interval_timeout"`
 	// StreamKeepaliveInterval: 流式 keepalive 间隔（秒），0表示禁用
 	StreamKeepaliveInterval int `mapstructure:"stream_keepalive_interval"`
+
+	// BufferedTotalTimeout: 2026-05-13 codex round 11i — buffered 非流路径
+	// 整请求总超时(秒). 当客户传 stream=false 但上游仍跑 streaming 时, 现行
+	// StreamDataIntervalTimeout 只看数据间隔, 如果上游持续发心跳事件不发
+	// terminal event, 可拖到几分钟级别 (生产 557s 样本). 总超时硬上限保证
+	// 单个 buffered 请求不超过此值. 0=禁用 (老行为).
+	//
+	// BufferedFirstMeaningfulTimeout: 首个 meaningful event (terminal /
+	// non-heartbeat) 超时(秒). 上游迟迟不发任何业务事件时快速 fail-fast 让
+	// 客户走 failover 或拿 504, 不傻等. 0=禁用.
+	BufferedTotalTimeout            int `mapstructure:"buffered_total_timeout"`
+	BufferedFirstMeaningfulTimeout  int `mapstructure:"buffered_first_meaningful_timeout"`
 	// MaxLineSize: 上游 SSE 单行最大字节数（0使用默认值）
 	MaxLineSize int `mapstructure:"max_line_size"`
 
