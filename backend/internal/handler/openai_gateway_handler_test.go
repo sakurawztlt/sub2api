@@ -151,8 +151,10 @@ func TestOpenAIEnsureForwardErrorResponse_WritesFallbackWhenNotWritten(t *testin
 	require.NoError(t, err)
 	errorObj, ok := parsed["error"].(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, "upstream_error", errorObj["type"])
-	assert.Equal(t, "Upstream request failed", errorObj["message"])
+	// codex round 11am: customer-facing 中性化, "upstream_error" → "api_error",
+	// "Upstream request failed" → "Internal server error"
+	assert.Equal(t, "api_error", errorObj["type"])
+	assert.Equal(t, "Internal server error", errorObj["message"])
 }
 
 func TestOpenAIEnsureForwardErrorResponse_DoesNotOverrideWrittenResponse(t *testing.T) {
@@ -224,8 +226,10 @@ func TestOpenAIRecoverResponsesPanic_WritesFallbackResponse(t *testing.T) {
 
 	errorObj, ok := parsed["error"].(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, "upstream_error", errorObj["type"])
-	assert.Equal(t, "Upstream request failed", errorObj["message"])
+	// codex round 11am: customer-facing 中性化, "upstream_error" → "api_error",
+	// "Upstream request failed" → "Internal server error"
+	assert.Equal(t, "api_error", errorObj["type"])
+	assert.Equal(t, "Internal server error", errorObj["message"])
 }
 
 func TestOpenAIRecoverResponsesPanic_NoPanicNoWrite(t *testing.T) {

@@ -1426,10 +1426,44 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				zap.Bool("has_turn_state", meta.HasTurnState),
 				zap.Int("time_to_headers_ms", meta.TimeToHeadersMs),
 			)
-			// 11al codex #3: 写入 ops_error_logs.upstream_errors 让管理后台
-			// 能 list 同窗口的 timeout 而非只看到泛化 502. Detail 含分类 +
-			// 关键观测值, 不需要 grep journal.
+			// 11al codex #3 + 11am: 写入 ops_error_logs.upstream_errors. Detail
+			// 是 JSON-marshaled 内部排查结构 (codex 建议 schema), 8 字段含
+			// kind/attempt/account_id/model/timeout_ms/header_written/body_bytes/
+			// messages_count/has_previous_response_id/has_turn_state +
+			// timeout_state 扩展. 内部脱敏: 无 prompt/Authorization/真实 URL.
+			// **不进 customer response** (那条走 mapUpstreamError 中性文案).
 			if meta.Account != nil {
+				detailJSON, _ := json.Marshal(struct {
+					Kind                  string `json:"kind"`
+					Attempt               int    `json:"attempt"`
+					AccountID             int64  `json:"account_id"`
+					Model                 string `json:"model"`
+					TimeoutMs             int    `json:"timeout_ms"`
+					HeaderWritten         bool   `json:"header_written"`
+					BodyBytes             int    `json:"body_bytes"`
+					MessagesCount         int    `json:"messages_count"`
+					HasPreviousResponseID bool   `json:"has_previous_response_id"`
+					HasTurnState          bool   `json:"has_turn_state"`
+					TimeoutState          string `json:"timeout_state"`
+					TimeToHeadersMs       int    `json:"time_to_headers_ms"`
+					FirstTokenMs          int    `json:"first_token_ms"`
+					LargeContext          bool   `json:"large_context"`
+				}{
+					Kind:                  "first_meaningful_timeout",
+					Attempt:               1, // sub2api 这层不知道 handler 端 perReasonSwitchCount, 简化 1
+					AccountID:             meta.Account.ID,
+					Model:                 originalModel,
+					TimeoutMs:             int(firstMeaningfulTimeout.Milliseconds()),
+					HeaderWritten:         headerWritten,
+					BodyBytes:             inboundBodyLen,
+					MessagesCount:         meta.MessagesCount,
+					HasPreviousResponseID: meta.HasPreviousResponseID,
+					HasTurnState:          meta.HasTurnState,
+					TimeoutState:          timeoutState,
+					TimeToHeadersMs:       meta.TimeToHeadersMs,
+					FirstTokenMs:          ftMs,
+					LargeContext:          IsLargeContextCtx(ctx),
+				})
 				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 					Platform:           meta.Account.Platform,
 					AccountID:          meta.Account.ID,
@@ -1437,9 +1471,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 					UpstreamStatusCode: 0,
 					Kind:               "first_meaningful_timeout",
 					Message:            fmt.Sprintf("first meaningful event timeout after %s (state=%s)", firstMeaningfulTimeout, timeoutState),
-					Detail: fmt.Sprintf("model=%s msgs=%d body_bytes=%d t_headers_ms=%d t_first_token_ms=%d large_ctx=%t depth=%s",
-						originalModel, meta.MessagesCount, inboundBodyLen, meta.TimeToHeadersMs, ftMs,
-						IsLargeContextCtx(ctx), c.Request.Header.Get("X-GCR-Depth-Bucket")),
+					Detail:             string(detailJSON),
 				})
 			}
 			// 5/10 codex audit: !headerWritten 时返 BreakSticky failover, 让

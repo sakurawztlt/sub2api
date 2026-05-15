@@ -1430,7 +1430,9 @@ func (h *GatewayHandler) handleFailoverExhausted(c *gin.Context, failoverErr *se
 				c.Set(service.OpsSkipPassthroughKey, true)
 			}
 
-			h.handleStreamingAwareError(c, respCode, "upstream_error", msg, streamStarted)
+			// codex round 11am: errType 中性化 (passthrough rule 仍用 upstream
+			// 上游返的 msg, 客户看 type=api_error 不知道是 fork)
+			h.handleStreamingAwareError(c, respCode, "api_error", msg, streamStarted)
 			return
 		}
 	}
@@ -1451,20 +1453,22 @@ func (h *GatewayHandler) handleFailoverExhaustedSimple(c *gin.Context, statusCod
 	h.handleStreamingAwareError(c, status, errType, errMsg, streamStarted)
 }
 
+// mapUpstreamError — codex round 11am (2026-05-15): 客户响应中性化.
+// errType "upstream_error" 非 Anthropic 合法 + "Upstream..." 暴露 fork.
 func (h *GatewayHandler) mapUpstreamError(statusCode int) (int, string, string) {
 	switch statusCode {
 	case 401:
-		return http.StatusBadGateway, "upstream_error", "Upstream authentication failed, please contact administrator"
+		return http.StatusBadGateway, "api_error", "Authentication failed. Please try again later."
 	case 403:
-		return http.StatusBadGateway, "upstream_error", "Upstream access forbidden, please contact administrator"
+		return http.StatusBadGateway, "api_error", "Access denied. Please try again later."
 	case 429:
-		return http.StatusTooManyRequests, "rate_limit_error", "Upstream rate limit exceeded, please retry later"
+		return http.StatusTooManyRequests, "rate_limit_error", "Rate limit exceeded. Please retry later."
 	case 529:
-		return http.StatusServiceUnavailable, "overloaded_error", "Upstream service overloaded, please retry later"
+		return http.StatusServiceUnavailable, "overloaded_error", "Service overloaded. Please retry later."
 	case 500, 502, 503, 504:
-		return http.StatusBadGateway, "upstream_error", "Upstream service temporarily unavailable"
+		return http.StatusBadGateway, "api_error", "The service is temporarily unavailable. Please retry."
 	default:
-		return http.StatusBadGateway, "upstream_error", "Upstream request failed"
+		return http.StatusBadGateway, "api_error", "Internal server error"
 	}
 }
 
@@ -1493,7 +1497,7 @@ func (h *GatewayHandler) ensureForwardErrorResponse(c *gin.Context, streamStarte
 	if c == nil || c.Writer == nil || c.Writer.Written() {
 		return false
 	}
-	h.handleStreamingAwareError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed", streamStarted)
+	h.handleStreamingAwareError(c, http.StatusBadGateway, "api_error", "Internal server error", streamStarted)
 	return true
 }
 
