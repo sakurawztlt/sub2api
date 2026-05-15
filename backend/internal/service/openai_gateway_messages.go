@@ -530,7 +530,7 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 
-	finalResponse, usage, acc, err := s.readOpenAICompatBufferedTerminal(resp, "openai messages buffered", requestID)
+	finalResponse, usage, acc, err := s.readOpenAICompatBufferedTerminal(c.Request.Context(), resp, "openai messages buffered", requestID)
 	if err != nil {
 		// 5/10 codex audit: buffered path 网络层 stream 读取错误 (EOF/reset/
 		// TLS handshake/timeout) 在 !c.Writer.Written() 时 (buffered 路径
@@ -625,7 +625,15 @@ func isOpenAICompatDoneSentinelLine(line string) bool {
 	return ok && strings.TrimSpace(payload) == "[DONE]"
 }
 
+// readOpenAICompatBufferedTerminal reads the upstream SSE stream into
+// memory, builds a buffered terminal response, and returns when the
+// upstream closes the connection or one of the buffered timeouts fires.
+//
+// 2026-05-15 codex round 11ai: ctx parameter added so the buffered
+// first-meaningful timeout can be tightened for large-context requests
+// (msgs>100 or body>800KB) per IsLargeContextCtx.
 func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
+	ctx context.Context,
 	resp *http.Response,
 	logPrefix string,
 	requestID string,
@@ -699,8 +707,18 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 		totalTimeoutCh = totalTimeoutTimer.C
 		defer totalTimeoutTimer.Stop()
 	}
-	if s.cfg != nil && s.cfg.Gateway.BufferedFirstMeaningfulTimeout > 0 {
-		firstMeaningTimer = time.NewTimer(time.Duration(s.cfg.Gateway.BufferedFirstMeaningfulTimeout) * time.Second)
+	// 2026-05-15 codex round 11ai: large-context requests use the
+	// tighter LargeRequestFirstMeaningfulTimeout to fail fast instead
+	// of waiting full 60s. Default 0 = use normal BufferedFirstMeaningfulTimeout.
+	firstMeaningfulTimeoutSec := 0
+	if s.cfg != nil {
+		firstMeaningfulTimeoutSec = s.cfg.Gateway.BufferedFirstMeaningfulTimeout
+		if IsLargeContextCtx(ctx) && s.cfg.Gateway.LargeRequestFirstMeaningfulTimeout > 0 {
+			firstMeaningfulTimeoutSec = s.cfg.Gateway.LargeRequestFirstMeaningfulTimeout
+		}
+	}
+	if firstMeaningfulTimeoutSec > 0 {
+		firstMeaningTimer = time.NewTimer(time.Duration(firstMeaningfulTimeoutSec) * time.Second)
 		firstMeaningCh = firstMeaningTimer.C
 		defer firstMeaningTimer.Stop()
 	}

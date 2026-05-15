@@ -28,6 +28,13 @@ var upstreamRequestIDHeaders = []string{
 	// 紧跟 X-Newapi 一组优先级 (NewAPI 系列 fork 都用这两种 header 之一).
 	"X-Oneapi-Request-Id",
 	"X-Oneapi-Request-ID",
+	// 2026-05-15 codex round 11ai: gcr 内部 X-GCR-Request-Id (gcr-local-XXX).
+	// NewAPI 不发 req_id 时 gcr 自生 gcr-local-* 通过这个 header 透给 sub2api,
+	// 让日志关联到 gcr log. 优先级在 X-Request-Id (nginx 自生) 之上 — 因为
+	// gcr 端比 nginx 端更接近原始请求边界, gcr 的 req id 关联 NewAPI ↔ sub2api
+	// 跨 hop forensics 更有价值.
+	"X-GCR-Request-Id",
+	"X-GCR-Request-ID",
 	"X-Request-Id",
 	"X-Request-ID",
 	"X-Correlation-Id",

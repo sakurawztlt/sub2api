@@ -659,6 +659,17 @@ type GatewayConfig struct {
 	// 客户走 failover 或拿 504, 不傻等. 0=禁用.
 	BufferedTotalTimeout            int `mapstructure:"buffered_total_timeout"`
 	BufferedFirstMeaningfulTimeout  int `mapstructure:"buffered_first_meaningful_timeout"`
+	// LargeRequest* — codex round 11ai (2026-05-15):
+	// 大上下文请求 (msgs > LargeRequestMsgThreshold 或 body bytes >
+	// LargeRequestBodyBytesThreshold) 切到 LargeRequestFirstMeaningfulTimeout
+	// + handler perReasonSwitchCap[first_meaningful]=0 不让 retry. 防止
+	// 单条大请求 2 轮 (2×120s) 累计 240s 才失败 — NewAPI 已按 message_start.usage
+	// 全额扣 cache_creation+cache_read 费, 客户体验差.
+	// 全 0 = disable (回退默认 buffered_* 行为). 推荐: msg=100 / body=800000
+	// (~200k 输入 tokens at 4 bytes/token) / timeout=45.
+	LargeRequestMsgThreshold           int `mapstructure:"large_request_msg_threshold"`
+	LargeRequestBodyBytesThreshold     int `mapstructure:"large_request_body_bytes_threshold"`
+	LargeRequestFirstMeaningfulTimeout int `mapstructure:"large_request_first_meaningful_timeout"`
 	// MaxLineSize: 上游 SSE 单行最大字节数（0使用默认值）
 	MaxLineSize int `mapstructure:"max_line_size"`
 

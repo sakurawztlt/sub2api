@@ -626,6 +626,22 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		"first_meaningful_timeout":     1,
 		"stream_data_interval_timeout": 1, // 5/10 R38: data interval 同样限 1 次防烧账号
 	}
+	// 2026-05-15 codex round 11ai: large-context fail-fast. 大请求
+	// (msgs>100 或 body>800KB) 不让 first_meaningful_timeout retry,
+	// 服务也用更窄 timeout (45s vs 60s) — 配合 service.WithLargeContextCtx
+	// + LargeRequestFirstMeaningfulTimeout configmap 字段. 防止单条
+	// 大上下文请求等 2×120s=240s 才失败的问题 (forensics 来自 backup 108
+	// req_id 202605150325...d9d6TQDlPL9o use_time=239s end_reason=client_gone).
+	if h != nil && h.cfg != nil {
+		msgT := h.cfg.Gateway.LargeRequestMsgThreshold
+		byteT := h.cfg.Gateway.LargeRequestBodyBytesThreshold
+		if service.IsLargeContextRequest(body, msgT, byteT) {
+			c.Request = c.Request.WithContext(service.WithLargeContextCtx(c.Request.Context()))
+			perReasonSwitchCap["first_meaningful_timeout"] = 0
+			perReasonSwitchCap["stream_data_interval_timeout"] = 0
+			reqLog = reqLog.With(zap.Bool("large_context_request", true))
+		}
+	}
 	var lastFailoverErr *service.UpstreamFailoverError
 	effectiveMappedModel := preferredMappedModel
 
