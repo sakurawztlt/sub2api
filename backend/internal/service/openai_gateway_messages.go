@@ -16,6 +16,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
@@ -894,6 +895,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	var usage OpenAIUsage
 	responseID := ""
 	var firstTokenMs *int
+	var firstMeaningfulMs *int // codex round 11ak: time-to-first meaningful event
 	firstChunk := true
 	firstMeaningfulSeen := false // codex 5/8 #1: WriteHeader 直到见到 meaningful event
 	clientDisconnected := false
@@ -953,12 +955,13 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			RequestID:     requestID,
 			ResponseID:    responseID,
 			Usage:         usage,
-			Model:         originalModel,
-			BillingModel:  billingModel,
-			UpstreamModel: upstreamModel,
-			Stream:        true,
-			Duration:      time.Since(startTime),
-			FirstTokenMs:  firstTokenMs,
+			Model:             originalModel,
+			BillingModel:      billingModel,
+			UpstreamModel:     upstreamModel,
+			Stream:            true,
+			Duration:          time.Since(startTime),
+			FirstTokenMs:      firstTokenMs,
+			FirstMeaningfulMs: firstMeaningfulMs,
 		}
 	}
 
@@ -1031,6 +1034,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 
 			// 触发! WriteHeader + 一次性 flush 所有累积的 events 给客户.
 			firstMeaningfulSeen = true
+			// codex round 11ak: record time-to-first meaningful for forensics.
+			fmMs := int(time.Since(startTime).Milliseconds())
+			firstMeaningfulMs = &fmMs
 			writeStreamHeader()
 			if firstMeaningfulTimer != nil {
 				firstMeaningfulTimer.Stop()
@@ -1109,6 +1115,39 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			if !clientDisconnected {
 				c.Writer.Flush()
 			}
+		}
+		// codex round 11ak (2026-05-15): large-context cache realism summary.
+		// 上游 (OpenAI Responses) usage.cached_input_tokens 是真 cache hit;
+		// gcr X-GCR-Estimated-Tokens 是 gcr 这边估出来传给 NewAPI 合成 cache_read
+		// 的依据. 如果两者差距大 (e.g. gcr_estimate=200000 但 upstream_cached=5000)
+		// 说明上游实际没复用上下文 — codex 警告"296k 读缓存只是账面数字". 配合
+		// firstMeaningfulMs 一起诊断深上下文的真实性能.
+		ctxFinal := c.Request.Context()
+		if IsLargeContextCtx(ctxFinal) {
+			cliReqIDFinal, _ := ctxFinal.Value(ctxkey.ClientRequestID).(string)
+			ftMsFinal := 0
+			if firstTokenMs != nil {
+				ftMsFinal = *firstTokenMs
+			}
+			fmMsFinal := 0
+			if firstMeaningfulMs != nil {
+				fmMsFinal = *firstMeaningfulMs
+			}
+			logger.L().Info("openai messages stream: large_context_request summary",
+				zap.String("request_id", requestID),
+				zap.String("client_request_id", cliReqIDFinal),
+				zap.String("gcr_request_id", c.Request.Header.Get("X-GCR-Request-Id")),
+				zap.String("newapi_request_id", c.Request.Header.Get("X-Newapi-Request-Id")),
+				zap.String("model", originalModel),
+				zap.Int("inbound_body_len", inboundBodyLen),
+				zap.String("gcr_depth_bucket", c.Request.Header.Get("X-GCR-Depth-Bucket")),
+				zap.String("gcr_estimated_tokens", c.Request.Header.Get("X-GCR-Estimated-Tokens")),
+				zap.Int("first_token_ms", ftMsFinal),
+				zap.Int("first_meaningful_ms", fmMsFinal),
+				zap.Int("upstream_cached_input_tokens", state.RawCachedInputTokens),
+				zap.Int("upstream_total_input_tokens", state.RawTotalInputTokens),
+				zap.Duration("total_duration", time.Since(startTime)),
+			)
 		}
 		return resultWithUsage(), nil
 	}
@@ -1277,6 +1316,15 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				zap.String("model", originalModel),
 				zap.Duration("interval", streamInterval),
 				zap.Bool("header_written", headerWritten),
+				// codex round 11ak forensics 字段
+				zap.String("client_request_id", func() string { v, _ := c.Request.Context().Value(ctxkey.ClientRequestID).(string); return v }()),
+				zap.String("gcr_request_id", c.Request.Header.Get("X-GCR-Request-Id")),
+				zap.String("newapi_request_id", c.Request.Header.Get("X-Newapi-Request-Id")),
+				zap.Int("inbound_body_len", inboundBodyLen),
+				zap.Bool("large_context_request", IsLargeContextCtx(c.Request.Context())),
+				zap.String("gcr_depth_bucket", c.Request.Header.Get("X-GCR-Depth-Bucket")),
+				zap.String("gcr_estimated_tokens", c.Request.Header.Get("X-GCR-Estimated-Tokens")),
+				zap.Bool("first_meaningful_seen", firstMeaningfulSeen),
 			)
 			// 5/10 codex audit (R38): !headerWritten 时返 BreakSticky failover.
 			// data interval timeout 跟 first_meaningful_timeout 是不同失败模式
@@ -1300,11 +1348,28 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				// 已经见过 meaningful, 此 timer 残留 (理论上 Stop 了不会到这).
 				continue
 			}
+			// codex round 11ak (2026-05-15): enrich timeout 日志, 让 forensics
+			// 能跨 NewAPI / gcr / sub2api 三边串.
+			ctx := c.Request.Context()
+			clientReqID, _ := ctx.Value(ctxkey.ClientRequestID).(string)
+			ftMs := 0
+			if firstTokenMs != nil {
+				ftMs = *firstTokenMs
+			}
 			logger.L().Warn("openai messages stream: first meaningful event timeout",
 				zap.String("request_id", requestID),
+				zap.String("client_request_id", clientReqID),
+				zap.String("gcr_request_id", c.Request.Header.Get("X-GCR-Request-Id")),
+				zap.String("newapi_request_id", c.Request.Header.Get("X-Newapi-Request-Id")),
 				zap.String("model", originalModel),
 				zap.Duration("timeout", firstMeaningfulTimeout),
 				zap.Bool("header_written", headerWritten),
+				zap.Int("inbound_body_len", inboundBodyLen),
+				zap.Bool("large_context_request", IsLargeContextCtx(ctx)),
+				zap.String("gcr_depth_bucket", c.Request.Header.Get("X-GCR-Depth-Bucket")),
+				zap.String("gcr_estimated_tokens", c.Request.Header.Get("X-GCR-Estimated-Tokens")),
+				zap.Int("first_token_ms", ftMs),
+				zap.Int("pending_events", len(pendingEvents)),
 			)
 			// 5/10 codex audit: !headerWritten 时返 BreakSticky failover, 让
 			// handler 切账号试一次. Reason 让 handler per-reason cap=1 避免

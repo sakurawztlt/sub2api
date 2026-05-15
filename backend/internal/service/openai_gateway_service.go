@@ -239,6 +239,13 @@ type OpenAIForwardResult struct {
 	ResponseHeaders http.Header
 	Duration        time.Duration
 	FirstTokenMs    *int
+	// FirstMeaningfulMs — codex round 11ak (2026-05-15): time-to-first
+	// meaningful event (content_block_delta / tool_use / message_delta with
+	// usage / message_stop / error). 跟 FirstTokenMs 区分: FirstTokenMs
+	// 是首个上游 SSE 字节, FirstMeaningfulMs 是首个 *有效* 业务事件. 大
+	// 上下文请求 ratio FirstMeaningfulMs/FirstTokenMs 大说明上游空转累计
+	// metadata 久. nil = 没见到 meaningful (timeout 路径).
+	FirstMeaningfulMs *int
 	ImageCount      int
 	ImageSize       string
 	HasToolCall     bool
