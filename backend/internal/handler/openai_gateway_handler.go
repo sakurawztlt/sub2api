@@ -1530,7 +1530,13 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 				c.Set(service.OpsSkipPassthroughKey, true)
 			}
 
-			h.handleStreamingAwareError(c, respCode, "upstream_error", msg, streamStarted)
+			// codex round 11am follow-up (2026-05-15): align with
+			// GatewayHandler.handlePassthroughError (gateway_handler.go:1435) —
+			// errType "upstream_error" was a fork tell (not an Anthropic
+			// legal error type). Customers passthrough-rule path now also
+			// sees neutral "api_error". upstream msg still passes through
+			// when rule.PassthroughBody=true.
+			h.handleStreamingAwareError(c, respCode, "api_error", msg, streamStarted)
 			return
 		}
 	}
