@@ -212,6 +212,21 @@ type OpenAIUsage struct {
 }
 
 // OpenAIForwardResult represents the result of forwarding
+// streamReqMeta — codex round 11al (2026-05-15): forensics 字段集中传给
+// handleAnthropicStreamingResponse / handleAnthropicBufferedStreamingResponse,
+// 让 timeout / 大上下文 summary log 写出 (account_id/type / 上游 HTTP headers
+// 耗时 / messages 数 / prompt cache key / continuation 状态). 客户慢请求
+// 排查的核心字段一次到位.
+type streamReqMeta struct {
+	Account               *Account
+	TimeToHeadersMs       int    // 从 httpUpstream.Do() 到 resp.Header 返回
+	MessagesCount         int    // gjson 数 body.messages 长度
+	PromptCacheKeySha256  string // sha256(promptCacheKey) hex 前 16 位
+	HasPreviousResponseID bool
+	HasTurnState          bool
+	ProxyHash             string // proxy URL sha256 前 12 位 (无 proxy=空)
+}
+
 type OpenAIForwardResult struct {
 	RequestID string
 	// ResponseID is the upstream Responses API response id (resp_xxx).

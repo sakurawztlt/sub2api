@@ -349,7 +349,12 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	if account.Proxy != nil {
 		proxyURL = account.Proxy.ActiveURL()
 	}
+	// codex round 11al: 记 time-to-headers (从 Do() 到 resp 返回的耗时).
+	// 大上下文请求排查时跟 first_token_ms / first_meaningful_ms 一起看,
+	// 区分"上游 HTTP 慢" vs "上游处理慢".
+	upstreamReqStart := time.Now()
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	timeToHeadersMs := int(time.Since(upstreamReqStart).Milliseconds())
 	if err != nil {
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
 		setOpsUpstreamError(c, 0, safeErr, "")
@@ -451,8 +456,13 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// Upstream is always streaming; choose response format based on client preference.
 	var result *OpenAIForwardResult
 	var handleErr error
+	// codex round 11al: 装入 forensics meta 一次性传给 streaming/buffered
+	// 处理函数, 让 first_meaningful_timeout 跟 large_context summary log
+	// 能写出 account_id/type / proxy_hash / messages_count / cache key
+	// hash / continuation 状态 / time_to_headers_ms.
+	streamMeta := computeStreamReqMeta(account, body, promptCacheKey, previousResponseID, compatTurnState, proxyURL, timeToHeadersMs)
 	if clientStream {
-		result, handleErr = s.handleAnthropicStreamingResponse(resp, c, originalModel, billingModel, upstreamModel, startTime, len(body))
+		result, handleErr = s.handleAnthropicStreamingResponse(resp, c, originalModel, billingModel, upstreamModel, startTime, len(body), streamMeta)
 	} else {
 		// Client wants JSON: buffer the streaming response and assemble a JSON reply.
 		result, handleErr = s.handleAnthropicBufferedStreamingResponse(resp, c, originalModel, billingModel, upstreamModel, startTime)
@@ -851,6 +861,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	upstreamModel string,
 	startTime time.Time,
 	inboundBodyLen int,
+	meta streamReqMeta,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 
@@ -1133,6 +1144,16 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			if firstMeaningfulMs != nil {
 				fmMsFinal = *firstMeaningfulMs
 			}
+			accIDFinal := int64(0)
+			accNameFinal := ""
+			accPlatFinal := ""
+			accTypeFinal := ""
+			if meta.Account != nil {
+				accIDFinal = meta.Account.ID
+				accNameFinal = meta.Account.Name
+				accPlatFinal = meta.Account.Platform
+				accTypeFinal = string(meta.Account.Type)
+			}
 			logger.L().Info("openai messages stream: large_context_request summary",
 				zap.String("request_id", requestID),
 				zap.String("client_request_id", cliReqIDFinal),
@@ -1147,6 +1168,17 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				zap.Int("upstream_cached_input_tokens", state.RawCachedInputTokens),
 				zap.Int("upstream_total_input_tokens", state.RawTotalInputTokens),
 				zap.Duration("total_duration", time.Since(startTime)),
+				// 11al: account / proxy / continuation state
+				zap.Int64("account_id", accIDFinal),
+				zap.String("account_name", accNameFinal),
+				zap.String("account_platform", accPlatFinal),
+				zap.String("account_type", accTypeFinal),
+				zap.String("proxy_hash", meta.ProxyHash),
+				zap.Int("messages_count", meta.MessagesCount),
+				zap.String("prompt_cache_key_sha", meta.PromptCacheKeySha256),
+				zap.Bool("has_previous_response_id", meta.HasPreviousResponseID),
+				zap.Bool("has_turn_state", meta.HasTurnState),
+				zap.Int("time_to_headers_ms", meta.TimeToHeadersMs),
 			)
 		}
 		return resultWithUsage(), nil
@@ -1348,13 +1380,24 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				// 已经见过 meaningful, 此 timer 残留 (理论上 Stop 了不会到这).
 				continue
 			}
-			// codex round 11ak (2026-05-15): enrich timeout 日志, 让 forensics
-			// 能跨 NewAPI / gcr / sub2api 三边串.
+			// codex round 11ak/11al (2026-05-15): enrich timeout 日志 + ops_error_logs.
+			// 三边 req_id + 账号/上游/继续状态 + 三类失败模式分类一次到位.
 			ctx := c.Request.Context()
 			clientReqID, _ := ctx.Value(ctxkey.ClientRequestID).(string)
 			ftMs := 0
 			if firstTokenMs != nil {
 				ftMs = *firstTokenMs
+			}
+			timeoutState := classifyTimeoutState(firstChunk, firstMeaningfulSeen)
+			accID := int64(0)
+			accName := ""
+			accPlat := ""
+			accType := ""
+			if meta.Account != nil {
+				accID = meta.Account.ID
+				accName = meta.Account.Name
+				accPlat = meta.Account.Platform
+				accType = string(meta.Account.Type)
 			}
 			logger.L().Warn("openai messages stream: first meaningful event timeout",
 				zap.String("request_id", requestID),
@@ -1364,13 +1407,41 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				zap.String("model", originalModel),
 				zap.Duration("timeout", firstMeaningfulTimeout),
 				zap.Bool("header_written", headerWritten),
+				zap.String("timeout_state", timeoutState),
 				zap.Int("inbound_body_len", inboundBodyLen),
 				zap.Bool("large_context_request", IsLargeContextCtx(ctx)),
 				zap.String("gcr_depth_bucket", c.Request.Header.Get("X-GCR-Depth-Bucket")),
 				zap.String("gcr_estimated_tokens", c.Request.Header.Get("X-GCR-Estimated-Tokens")),
 				zap.Int("first_token_ms", ftMs),
 				zap.Int("pending_events", len(pendingEvents)),
+				// 11al: account / proxy / continuation state
+				zap.Int64("account_id", accID),
+				zap.String("account_name", accName),
+				zap.String("account_platform", accPlat),
+				zap.String("account_type", accType),
+				zap.String("proxy_hash", meta.ProxyHash),
+				zap.Int("messages_count", meta.MessagesCount),
+				zap.String("prompt_cache_key_sha", meta.PromptCacheKeySha256),
+				zap.Bool("has_previous_response_id", meta.HasPreviousResponseID),
+				zap.Bool("has_turn_state", meta.HasTurnState),
+				zap.Int("time_to_headers_ms", meta.TimeToHeadersMs),
 			)
+			// 11al codex #3: 写入 ops_error_logs.upstream_errors 让管理后台
+			// 能 list 同窗口的 timeout 而非只看到泛化 502. Detail 含分类 +
+			// 关键观测值, 不需要 grep journal.
+			if meta.Account != nil {
+				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					Platform:           meta.Account.Platform,
+					AccountID:          meta.Account.ID,
+					AccountName:        meta.Account.Name,
+					UpstreamStatusCode: 0,
+					Kind:               "first_meaningful_timeout",
+					Message:            fmt.Sprintf("first meaningful event timeout after %s (state=%s)", firstMeaningfulTimeout, timeoutState),
+					Detail: fmt.Sprintf("model=%s msgs=%d body_bytes=%d t_headers_ms=%d t_first_token_ms=%d large_ctx=%t depth=%s",
+						originalModel, meta.MessagesCount, inboundBodyLen, meta.TimeToHeadersMs, ftMs,
+						IsLargeContextCtx(ctx), c.Request.Header.Get("X-GCR-Depth-Bucket")),
+				})
+			}
 			// 5/10 codex audit: !headerWritten 时返 BreakSticky failover, 让
 			// handler 切账号试一次. Reason 让 handler per-reason cap=1 避免
 			// 一个请求烧 10 账号 (timeout=120s × 10 = 20min, 客户体验差).
