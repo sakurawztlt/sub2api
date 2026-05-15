@@ -1320,6 +1320,43 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			return resultWithUsage(), fmt.Errorf("first meaningful event timeout after %s", firstMeaningfulTimeout)
 
 		case <-keepaliveCh:
+			// 2026-05-15 codex round 11aj: 大上下文 pre-firstMeaningful 保活.
+			// 上游 HTTP 已接通 (有 metadata events 累在 pendingEvents) 但还
+			// 没出首个 meaningful event 时, 在 keepalive 周期 flush pending
+			// (含 message_start) + 发 ping. 让客户端看到合法 SSE 流头, 不
+			// 因 30s+ 无字节而断开. 一旦 WriteHeader 提交 200, 该请求无法
+			// 再 retry (per codex "已写 header 不再隐藏重试" 原则).
+			//
+			// 触发条件:
+			//   - 11ai 的 IsLargeContextCtx 标记本请求为大上下文
+			//   - !firstMeaningfulSeen (尚未触发 main flush)
+			//   - len(pendingEvents) > 0 (上游至少发了 message_start, 流形态合法)
+			//   - !clientDisconnected
+			if !firstMeaningfulSeen && IsLargeContextCtx(c.Request.Context()) && len(pendingEvents) > 0 && !clientDisconnected {
+				writeStreamHeader()
+				for _, evt := range pendingEvents {
+					sse, err := apicompat.ResponsesAnthropicEventToSSE(evt)
+					if err != nil {
+						continue
+					}
+					if _, werr := fmt.Fprint(c.Writer, sse); werr != nil {
+						clientDisconnected = true
+						disconnectedAt = time.Now()
+						break
+					}
+				}
+				pendingEvents = nil
+				if !clientDisconnected {
+					if _, err := fmt.Fprint(c.Writer, "event: ping\ndata: {\"type\":\"ping\"}\n\n"); err != nil {
+						clientDisconnected = true
+						disconnectedAt = time.Now()
+					} else {
+						c.Writer.Flush()
+					}
+				}
+				continue
+			}
+
 			if !shouldEmitKeepalivePing(clientDisconnected, firstMeaningfulSeen, time.Since(lastDataAt), keepaliveInterval) {
 				continue
 			}
