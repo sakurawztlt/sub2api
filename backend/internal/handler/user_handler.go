@@ -98,6 +98,7 @@ type userProfileResponse struct {
 	LinuxDoBound      bool                                   `json:"linuxdo_bound"`
 	OIDCBound         bool                                   `json:"oidc_bound"`
 	WeChatBound       bool                                   `json:"wechat_bound"`
+	DingTalkBound     bool                                   `json:"dingtalk_bound"`
 }
 
 type userProfileSourceContext struct {
@@ -559,15 +560,17 @@ func userProfileResponseFromService(user *service.User, identities service.UserI
 		LinuxDoBound:      identities.LinuxDo.Bound,
 		OIDCBound:         identities.OIDC.Bound,
 		WeChatBound:       identities.WeChat.Bound,
+		DingTalkBound:     identities.DingTalk.Bound,
 	}
 }
 
 func userProfileBindingMap(identities service.UserIdentitySummarySet) map[string]service.UserIdentitySummary {
 	return map[string]service.UserIdentitySummary{
-		"email":   identities.Email,
-		"linuxdo": identities.LinuxDo,
-		"oidc":    identities.OIDC,
-		"wechat":  identities.WeChat,
+		"email":    identities.Email,
+		"linuxdo":  identities.LinuxDo,
+		"oidc":     identities.OIDC,
+		"wechat":   identities.WeChat,
+		"dingtalk": identities.DingTalk,
 	}
 }
 
@@ -616,7 +619,7 @@ func inferUserProfileSources(user *service.User, identities service.UserIdentity
 
 func thirdPartyIdentityProviders(identities service.UserIdentitySummarySet) []service.UserIdentitySummary {
 	out := make([]service.UserIdentitySummary, 0, 3)
-	for _, summary := range []service.UserIdentitySummary{identities.LinuxDo, identities.OIDC, identities.WeChat} {
+	for _, summary := range []service.UserIdentitySummary{identities.LinuxDo, identities.OIDC, identities.WeChat, identities.DingTalk} {
 		if summary.Bound {
 			out = append(out, summary)
 		}
