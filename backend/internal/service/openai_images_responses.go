@@ -752,7 +752,13 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		)
 	}
 
-	token, _, err := s.GetAccessToken(ctx, account)
+	// codex upstream PR#2461 adapt — same as forwardOpenAIImagesAPIKey:
+	// detach upstream ctx for the 30-80s image gen so a client disconnect
+	// doesn't 502 an already-running upstream.
+	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
+	defer releaseUpstreamCtx()
+
+	token, _, err := s.GetAccessToken(upstreamCtx, account)
 	if err != nil {
 		return nil, err
 	}
@@ -763,7 +769,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	}
 	setOpsUpstreamRequestBody(c, responsesBody)
 
-	upstreamReq, err := s.buildUpstreamRequest(ctx, c, account, responsesBody, token, true, parsed.StickySessionSeed(), false)
+	upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, true, parsed.StickySessionSeed(), false)
 	if err != nil {
 		return nil, err
 	}
