@@ -368,3 +368,150 @@ func TestApplyOpenAIFastPolicyToWSResponseCreate_DefaultFiltersFlex(t *testing.T
 			"tier %q must be stripped by default WS policy", tier)
 	}
 }
+
+// TestNativeResponsesForwardReqBodyMap_ServiceTierStrip pins the contract
+// for the native /v1/responses Forward path block at
+// openai_gateway_service.go:2755. That block operates on a parsed
+// map[string]any (not a raw byte body), so it sits on a separate code path
+// from applyOpenAIFastPolicyToBody (raw-bytes / passthrough) and
+// applyOpenAIFastPolicyToWSResponseCreate (WS frame).
+//
+// codex 2026-05-16 round8 spotted a gap: the block previously only ran the
+// policy switch when normalizedOpenAIServiceTierValue returned non-empty.
+// Unknown string tiers (e.g. user-supplied "fixel" / "preemium") were left
+// in reqBody and leaked upstream. Round8 added an else-branch that strips
+// unknown string tiers, with non-string types still passing through
+// unchanged (the outer `.(string)` type assertion handles that).
+//
+// This test inline-mirrors the block (with the line number called out in
+// the comment) so future refactors must keep the contract identical. It
+// exercises the SAME production helpers — normalizedOpenAIServiceTierValue
+// and svc.evaluateOpenAIFastPolicy — so a change in those helpers also
+// surfaces here.
+func TestNativeResponsesForwardReqBodyMap_ServiceTierStrip(t *testing.T) {
+	svc := newOpenAIGatewayServiceWithSettings(t, DefaultOpenAIFastPolicySettings())
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+	const upstreamModel = "gpt-5.5"
+
+	// Mirror of openai_gateway_service.go:2755 — keep in sync with the
+	// production block. If you change the block, mirror the change here.
+	runBlock := func(reqBody map[string]any) (blocked *OpenAIFastBlockedError, modified bool) {
+		if rawTier, ok := reqBody["service_tier"].(string); ok {
+			if normTier := normalizedOpenAIServiceTierValue(rawTier); normTier != "" {
+				action, errMsg := svc.evaluateOpenAIFastPolicy(context.Background(), account, upstreamModel, normTier)
+				switch action {
+				case BetaPolicyActionBlock:
+					msg := errMsg
+					if msg == "" {
+						msg = "openai service_tier=" + normTier + " is not allowed for model " + upstreamModel
+					}
+					return &OpenAIFastBlockedError{Message: msg}, false
+				case BetaPolicyActionFilter:
+					delete(reqBody, "service_tier")
+					return nil, true
+				default:
+					if normTier != rawTier {
+						reqBody["service_tier"] = normTier
+						return nil, true
+					}
+					return nil, false
+				}
+			}
+			// Round8 unknown-string-tier strip.
+			delete(reqBody, "service_tier")
+			return nil, true
+		}
+		return nil, false
+	}
+
+	cases := []struct {
+		name       string
+		input      map[string]any
+		expectKey  bool   // true → service_tier should still be in map
+		expectVal  string // expected service_tier value when expectKey=true
+		expectMod  bool
+		expectBlk  bool
+	}{
+		// Round8 hardening: unknown string tiers all get stripped.
+		{name: "unknown_string_fixel", input: map[string]any{"service_tier": "fixel"}, expectKey: false, expectMod: true},
+		{name: "unknown_string_preemium", input: map[string]any{"service_tier": "preemium"}, expectKey: false, expectMod: true},
+		{name: "unknown_string_speedy", input: map[string]any{"service_tier": "speedy"}, expectKey: false, expectMod: true},
+		// Recognized tiers + default Any+filter policy: all stripped.
+		{name: "priority_default_filter", input: map[string]any{"service_tier": "priority"}, expectKey: false, expectMod: true},
+		{name: "fast_default_filter", input: map[string]any{"service_tier": "fast"}, expectKey: false, expectMod: true},
+		{name: "flex_default_filter", input: map[string]any{"service_tier": "flex"}, expectKey: false, expectMod: true},
+		{name: "auto_default_filter", input: map[string]any{"service_tier": "auto"}, expectKey: false, expectMod: true},
+		// Non-string types pass through — the .(string) type assertion
+		// keeps us out of the block entirely.
+		{name: "number_untouched", input: map[string]any{"service_tier": 1.0}, expectKey: true, expectVal: "non-string", expectMod: false},
+		{name: "nested_object_untouched", input: map[string]any{"service_tier": map[string]any{"k": "v"}}, expectKey: true, expectVal: "non-string", expectMod: false},
+		{name: "nil_untouched", input: map[string]any{"service_tier": nil}, expectKey: true, expectVal: "non-string", expectMod: false},
+		// No service_tier → no-op.
+		{name: "absent_field_noop", input: map[string]any{"model": "x"}, expectKey: false, expectMod: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := tc.input
+			blocked, modified := runBlock(body)
+			require.Equal(t, tc.expectBlk, blocked != nil, "blocked flag")
+			require.Equal(t, tc.expectMod, modified, "modified flag")
+			_, present := body["service_tier"]
+			require.Equal(t, tc.expectKey, present, "service_tier presence in reqBody after block")
+		})
+	}
+}
+
+// TestNativeResponsesForwardReqBodyMap_RecognizedTierPassNormalize covers
+// the alias-normalize pass-through case via a custom policy that lets the
+// tier through (so the default Any+filter doesn't short-circuit the test).
+// This pins the contract that on pass, "fast" gets rewritten to its
+// canonical "priority" form (and recognized tiers like "priority" stay).
+func TestNativeResponsesForwardReqBodyMap_RecognizedTierPassNormalize(t *testing.T) {
+	// Use a policy that filters flex only — so priority + fast hit
+	// the fall-through pass branch where the alias-normalize happens.
+	settings := &OpenAIFastPolicySettings{
+		Rules: []OpenAIFastPolicyRule{{
+			ServiceTier:    OpenAIFastTierFlex,
+			Action:         BetaPolicyActionFilter,
+			Scope:          BetaPolicyScopeAll,
+			FallbackAction: BetaPolicyActionPass,
+		}},
+	}
+	svc := newOpenAIGatewayServiceWithSettings(t, settings)
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+	const upstreamModel = "gpt-5.5"
+
+	runBlock := func(reqBody map[string]any) {
+		if rawTier, ok := reqBody["service_tier"].(string); ok {
+			if normTier := normalizedOpenAIServiceTierValue(rawTier); normTier != "" {
+				action, _ := svc.evaluateOpenAIFastPolicy(context.Background(), account, upstreamModel, normTier)
+				switch action {
+				case BetaPolicyActionFilter:
+					delete(reqBody, "service_tier")
+				case BetaPolicyActionPass:
+					if normTier != rawTier {
+						reqBody["service_tier"] = normTier
+					}
+				}
+			} else {
+				delete(reqBody, "service_tier")
+			}
+		}
+	}
+
+	// fast alias on pass → rewritten to canonical priority.
+	body := map[string]any{"service_tier": "fast"}
+	runBlock(body)
+	require.Equal(t, "priority", body["service_tier"], "fast alias should normalize to priority on pass")
+
+	// Canonical priority on pass → stays untouched.
+	body = map[string]any{"service_tier": "priority"}
+	runBlock(body)
+	require.Equal(t, "priority", body["service_tier"], "canonical priority must not be rewritten")
+
+	// flex hits the explicit filter rule → stripped.
+	body = map[string]any{"service_tier": "flex"}
+	runBlock(body)
+	_, present := body["service_tier"]
+	require.False(t, present, "flex must be stripped by custom flex-filter policy")
+}

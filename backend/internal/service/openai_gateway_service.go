@@ -2777,6 +2777,22 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 					markPatchSet("service_tier", normTier)
 				}
 			}
+		} else {
+			// codex 2026-05-16 round8: unknown *string* service_tier
+			// values (e.g. "fixel", "preemium", "turbo") on the native
+			// /v1/responses Forward path used to silently leak upstream
+			// because the recognized-tier guard skipped the policy
+			// dispatch entirely. Mirrors the same hardening in
+			// applyOpenAIFastPolicyToBody (raw-bytes path) and
+			// applyOpenAIFastPolicyToWSResponseCreate. Non-string
+			// service_tier values (number / null / object / array /
+			// bool) still pass through unchanged — same contract: the
+			// `.(string)` type assertion above doesn't enter this
+			// branch for them, and upstream's JSON validator is the
+			// right place to surface that malformedness.
+			delete(reqBody, "service_tier")
+			bodyModified = true
+			disablePatch()
 		}
 	}
 
