@@ -154,7 +154,7 @@ func (s *OpenAIGatewayService) ParseOpenAIImagesRequest(c *gin.Context, body []b
 	if err := validateOpenAIImagesModel(req.Model); err != nil {
 		return nil, err
 	}
-	req.SizeTier = normalizeOpenAIImageSizeTier(req.Size)
+	req.SizeTier = normalizeOpenAIImageSizeTier(req.Size, req.Quality)
 	req.RequiredCapability = classifyOpenAIImagesCapability(req)
 	return req, nil
 }
@@ -467,7 +467,22 @@ func isOpenAINativeImageOption(name string) bool {
 	}
 }
 
-func normalizeOpenAIImageSizeTier(size string) string {
+// normalizeOpenAIImageSizeTier maps an image request to a billing tier
+// ("1K"/"2K"/"4K") consumed by BillingService.CalculateImageCost and the
+// Group.ImagePrice1K/2K/4K subscription pricing fields. codex upstream
+// PR#2269 (2026-05-16 adapt): gpt-image-2 image_tokens scale with `quality`
+// not pixel size (low ≈ 1k, medium ≈ 2k, high ≈ 4k), so an explicit
+// quality wins. Falls back to size-dimension classification for legacy
+// gpt-image-1 / dall-e callers where quality is empty / "auto" / unknown.
+func normalizeOpenAIImageSizeTier(size, quality string) string {
+	switch strings.ToLower(strings.TrimSpace(quality)) {
+	case "low":
+		return "1K"
+	case "medium":
+		return "2K"
+	case "high":
+		return "4K"
+	}
 	switch strings.ToLower(strings.TrimSpace(size)) {
 	case "1024x1024":
 		return "1K"
