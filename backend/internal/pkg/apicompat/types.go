@@ -322,10 +322,13 @@ type ResponsesContentPart struct {
 	// type=input_image
 	ImageURL string `json:"image_url,omitempty"` // data URI
 
-	// type=input_file — either FileID (pre-uploaded to OpenAI Files API)
-	// or Filename + FileData (data URI with base64 content).
+	// type=input_file — one of:
+	//   FileID    (pre-uploaded to OpenAI Files API)
+	//   Filename + FileData  (data URI with base64 content)
+	//   Filename + FileURL   (codex upstream PR#2497 — remote URL fetch)
 	Filename string `json:"filename,omitempty"`
 	FileData string `json:"file_data,omitempty"`
+	FileURL  string `json:"file_url,omitempty"`
 	FileID   string `json:"file_id,omitempty"`
 }
 
@@ -581,11 +584,14 @@ type ChatImageURL struct {
 }
 
 // ChatFile contains file data for a file content part (OpenAI Chat
-// Completions multimodal file input). Either FileID (pre-uploaded) or
-// Filename + FileData (base64 data URI in file_data).
+// Completions multimodal file input). One of:
+//   FileID    (pre-uploaded to OpenAI Files API)
+//   Filename + FileData (base64 data URI in file_data)
+//   Filename + FileURL  (codex upstream PR#2497 — remote URL fetch)
 type ChatFile struct {
 	Filename string `json:"filename,omitempty"`
 	FileData string `json:"file_data,omitempty"`
+	FileURL  string `json:"file_url,omitempty"`
 	FileID   string `json:"file_id,omitempty"`
 }
 

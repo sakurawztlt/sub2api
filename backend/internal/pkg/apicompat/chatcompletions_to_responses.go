@@ -427,6 +427,13 @@ func convertChatContentPartsToResponses(parts []ChatContentPart) []ResponsesCont
 					Filename: p.File.Filename,
 					FileData: p.File.FileData,
 				})
+			} else if p.File.FileURL != "" {
+				// codex upstream PR#2497 — remote URL variant.
+				responseParts = append(responseParts, ResponsesContentPart{
+					Type:     "input_file",
+					Filename: p.File.Filename,
+					FileURL:  p.File.FileURL,
+				})
 			} else if p.File.FileID != "" {
 				responseParts = append(responseParts, ResponsesContentPart{
 					Type:   "input_file",
