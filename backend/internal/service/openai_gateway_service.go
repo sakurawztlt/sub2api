@@ -28,11 +28,11 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 	"github.com/cespare/xxhash/v2"
 	"github.com/gin-gonic/gin"
-	"golang.org/x/sync/singleflight"
 	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 	"go.uber.org/zap"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -253,7 +253,7 @@ type OpenAIForwardResult struct {
 	// chain the next turn via previous_response_id (058 step 2 continuation).
 	ResponseID string
 	Usage      OpenAIUsage
-	Model     string // 原始模型（用于响应和日志显示）
+	Model      string // 原始模型（用于响应和日志显示）
 	// BillingModel is the model used for cost calculation.
 	// When non-empty, CalculateCost uses this instead of Model.
 	// This is set by the Anthropic Messages conversion path where
@@ -280,9 +280,9 @@ type OpenAIForwardResult struct {
 	// 上下文请求 ratio FirstMeaningfulMs/FirstTokenMs 大说明上游空转累计
 	// metadata 久. nil = 没见到 meaningful (timeout 路径).
 	FirstMeaningfulMs *int
-	ImageCount      int
-	ImageSize       string
-	HasToolCall     bool
+	ImageCount        int
+	ImageSize         string
+	HasToolCall       bool
 }
 
 type OpenAIWSRetryMetricsSnapshot struct {
@@ -391,12 +391,12 @@ type OpenAIGatewayService struct {
 	// codex 5/9 PR#2290 audit #2: 防并发清同一 rate-limited 账号撞 429.
 	// 多个请求同时到 recover 路径时 singleflight 让第一个真正 ClearRateLimit,
 	// 后续 caller 拿到第一个 result, 避免账号刚清完又被一波并发撞回限流.
-	rateLimitRecoveryFlight singleflight.Group
-	openaiWSPool                  *openAIWSConnPool
-	openaiWSStateStore            OpenAIWSStateStore
-	openaiScheduler               OpenAIAccountScheduler
-	openaiWSPassthroughDialer     openAIWSClientDialer
-	openaiAccountStats            *openAIAccountRuntimeStats
+	rateLimitRecoveryFlight   singleflight.Group
+	openaiWSPool              *openAIWSConnPool
+	openaiWSStateStore        OpenAIWSStateStore
+	openaiScheduler           OpenAIAccountScheduler
+	openaiWSPassthroughDialer openAIWSClientDialer
+	openaiAccountStats        *openAIAccountRuntimeStats
 
 	openaiWSFallbackUntil sync.Map // key: int64(accountID), value: time.Time
 	openaiWSRetryMetrics  openAIWSRetryMetrics
@@ -6098,10 +6098,10 @@ func extractOpenAIRequestMetaFromBody(body []byte) (model string, stream bool, p
 }
 
 // normalizeOpenAIPassthroughOAuthBody 将透传 OAuth 请求体收敛为旧链路关键行为：
-// 1) 删除 ChatGPT internal API 不支持的顶层 Responses 参数
-// 2) compact: 删除 store 与 stream
-// 3) 非 compact: stream=true; storeEnabled=false 时强制 store=false;
-//    storeEnabled=true 时保留客户端 store 值以支持 previous_response_id 续链
+//  1. 删除 ChatGPT internal API 不支持的顶层 Responses 参数
+//  2. compact: 删除 store 与 stream
+//  3. 非 compact: stream=true; storeEnabled=false 时强制 store=false;
+//     storeEnabled=true 时保留客户端 store 值以支持 previous_response_id 续链
 func normalizeOpenAIPassthroughOAuthBody(body []byte, compact bool, storeEnabled bool) ([]byte, bool, error) {
 	if len(body) == 0 {
 		return body, false, nil

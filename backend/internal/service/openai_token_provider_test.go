@@ -818,9 +818,17 @@ func TestOpenAITokenProvider_Real_LockRace_PollingHitsCache(t *testing.T) {
 		ID:       207,
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
+		// codex 2026-05-17 round11 fixture fix: fu27 #2514 added a
+		// "no refresh_token AND access expired/expiring" → permanent
+		// disable / skip-refresh shortcut. This test wants to exercise
+		// the original refreshable-account lock-wait path, so the
+		// account must have a refresh_token. Without it, GetAccessToken
+		// short-circuits to returning the cached fallback-token and
+		// the race winner never gets observed.
 		Credentials: map[string]any{
-			"access_token": "fallback-token",
-			"expires_at":   expiresAt,
+			"access_token":  "fallback-token",
+			"refresh_token": "test-refresh-token",
+			"expires_at":    expiresAt,
 		},
 	}
 
@@ -847,9 +855,11 @@ func TestOpenAITokenProvider_Real_LockRace_ContextCanceled(t *testing.T) {
 		ID:       208,
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
+		// codex round11 fixture fix — see _PollingHitsCache for rationale.
 		Credentials: map[string]any{
-			"access_token": "fallback-token",
-			"expires_at":   expiresAt,
+			"access_token":  "fallback-token",
+			"refresh_token": "test-refresh-token",
+			"expires_at":    expiresAt,
 		},
 	}
 
@@ -874,9 +884,14 @@ func TestOpenAITokenProvider_RuntimeMetrics_LockWaitHitAndSnapshot(t *testing.T)
 		ID:       209,
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
+		// codex round11 fixture fix — see _PollingHitsCache for rationale.
+		// This test additionally asserts metrics.LockContention >= 1, which
+		// only increments when the refresh path actually runs and contends
+		// on the lock; needsRefresh must stay true for the assertion.
 		Credentials: map[string]any{
-			"access_token": "fallback-token",
-			"expires_at":   expiresAt,
+			"access_token":  "fallback-token",
+			"refresh_token": "test-refresh-token",
+			"expires_at":    expiresAt,
 		},
 	}
 	cacheKey := OpenAITokenCacheKey(account)
@@ -910,9 +925,13 @@ func TestOpenAITokenProvider_RuntimeMetrics_LockAcquireFailure(t *testing.T) {
 		ID:       210,
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
+		// codex round11 fixture fix — see _PollingHitsCache for rationale.
+		// This test asserts metrics.LockAcquireFailure increment which only
+		// fires when the refresh path runs and the lock acquire errors.
 		Credentials: map[string]any{
-			"access_token": "fallback-token",
-			"expires_at":   expiresAt,
+			"access_token":  "fallback-token",
+			"refresh_token": "test-refresh-token",
+			"expires_at":    expiresAt,
 		},
 	}
 
