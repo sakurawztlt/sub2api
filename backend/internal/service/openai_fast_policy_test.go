@@ -221,12 +221,35 @@ func TestApplyOpenAIFastPolicyToBody_UnknownTierStripped(t *testing.T) {
 	// normalize 阶段会将未知值剥离
 	require.Nil(t, normalizeOpenAIServiceTier("xxx"))
 
-	// applyOpenAIFastPolicyToBody 收到未识别 tier 时不报错，body 透传不变
-	// （不属于本函数职责——上层 normalizeResponsesBodyServiceTier 已剥离）
-	body := []byte(`{"model":"gpt-5.5","service_tier":"xxx"}`)
-	updated, err := svc.applyOpenAIFastPolicyToBody(context.Background(), account, "gpt-5.5", body)
-	require.NoError(t, err)
-	require.Equal(t, string(body), string(updated))
+	// codex 2026-05-16 round7: applyOpenAIFastPolicyToBody now also strips
+	// unknown service_tier values directly. Previously this returned the
+	// body unchanged, leaving e.g. service_tier="fixel" or other typo'd /
+	// experimental values to leak upstream and serve as a probe surface
+	// for callers hitting sub2api directly (bypassing the gcr scrub).
+	for _, tier := range []string{"xxx", "fixel", "preemium", "speedy"} {
+		body := []byte(`{"model":"gpt-5.5","service_tier":"` + tier + `"}`)
+		updated, err := svc.applyOpenAIFastPolicyToBody(context.Background(), account, "gpt-5.5", body)
+		require.NoError(t, err, "tier %q", tier)
+		require.NotContains(t, string(updated), `"service_tier"`,
+			"tier %q must be stripped (unknown-tier hardening)", tier)
+	}
+}
+
+// TestApplyOpenAIFastPolicyToWSResponseCreate_UnknownTierStripped mirrors
+// the HTTP-side unknown-tier hardening on the WS Realtime path so callers
+// can't probe via response.create either.
+func TestApplyOpenAIFastPolicyToWSResponseCreate_UnknownTierStripped(t *testing.T) {
+	svc := newOpenAIGatewayServiceWithSettings(t, DefaultOpenAIFastPolicySettings())
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+
+	for _, tier := range []string{"xxx", "fixel", "preemium", "speedy"} {
+		frame := []byte(`{"type":"response.create","model":"gpt-5.5","service_tier":"` + tier + `"}`)
+		out, blocked, err := svc.applyOpenAIFastPolicyToWSResponseCreate(context.Background(), account, "gpt-5.5", frame)
+		require.NoError(t, err, "tier %q", tier)
+		require.Nil(t, blocked, "tier %q", tier)
+		require.NotContains(t, string(out), `"service_tier"`,
+			"tier %q must be stripped from WS frame", tier)
+	}
 }
 
 func TestApplyOpenAIFastPolicyToBody_BlockReturnsTypedError(t *testing.T) {

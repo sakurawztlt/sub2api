@@ -802,11 +802,14 @@ func TestApplyOpenAIFastPolicyToBody_PassNormalizesFastAlias(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "priority", gjson.GetBytes(updated, "service_tier").String())
 
-	// Unrecognized tier → still no-op (not normalized, since normTier == "").
+	// codex 2026-05-16 round7: unrecognized *string* tier → stripped
+	// (previously: no-op). Closes the probe surface for callers hitting
+	// sub2api directly with arbitrary tier strings like "turbo" / "fixel".
 	body = []byte(`{"model":"gpt-4","service_tier":"turbo"}`)
 	updated, err = svc.applyOpenAIFastPolicyToBody(context.Background(), account, "gpt-4", body)
 	require.NoError(t, err)
-	require.Equal(t, string(body), string(updated))
+	require.NotContains(t, string(updated), `"service_tier"`,
+		"unknown string tier must be stripped from body (round7 hardening)")
 }
 
 // --- Fix3: passthrough billing must reflect post-filter service_tier ---

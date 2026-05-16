@@ -6396,13 +6396,35 @@ func (s *OpenAIGatewayService) applyOpenAIFastPolicyToBody(ctx context.Context, 
 	if len(body) == 0 {
 		return body, nil
 	}
-	rawTier := gjson.GetBytes(body, "service_tier").String()
+	tierResult := gjson.GetBytes(body, "service_tier")
+	// Non-string / null / array / object types pass through unchanged —
+	// our contract (see TestApplyOpenAIFastPolicyToBody_NonStringServiceTier)
+	// is that this helper does not police malformed types. Upstream will
+	// 400 those, which is what we want — surfacing the parse error to the
+	// caller rather than silently mutating their body.
+	if !tierResult.Exists() || tierResult.Type != gjson.String {
+		return body, nil
+	}
+	rawTier := tierResult.String()
 	if rawTier == "" {
 		return body, nil
 	}
 	normTier := normalizedOpenAIServiceTierValue(rawTier)
 	if normTier == "" {
-		return body, nil
+		// codex 2026-05-16 round7: unknown *string* tier values (e.g.
+		// user-supplied "fixel", typo'd "preemium") used to be a silent
+		// no-op — leaving the literal field in the body for the upstream
+		// to decide on. That gave callers hitting sub2api directly an
+		// exploration probe for arbitrary service_tier values. Strip
+		// unknown string tiers too so every recognized / unrecognized
+		// non-empty *string* service_tier is guaranteed not to reach
+		// the upstream. Non-string types still pass through (see guard
+		// above) — they're handled by upstream's own JSON validation.
+		trimmed, err := sjson.DeleteBytes(body, "service_tier")
+		if err != nil {
+			return body, fmt.Errorf("strip unknown service_tier from body: %w", err)
+		}
+		return trimmed, nil
 	}
 	action, errMsg := s.evaluateOpenAIFastPolicy(ctx, account, model, normTier)
 	switch action {
@@ -6492,13 +6514,27 @@ func (s *OpenAIGatewayService) applyOpenAIFastPolicyToWSResponseCreate(
 	if frameType != "response.create" {
 		return frame, nil, nil
 	}
-	rawTier := gjson.GetBytes(frame, "service_tier").String()
+	tierResult := gjson.GetBytes(frame, "service_tier")
+	// Non-string types pass through unchanged — same contract as the HTTP
+	// body path (see TestApplyOpenAIFastPolicyToBody_NonStringServiceTier).
+	if !tierResult.Exists() || tierResult.Type != gjson.String {
+		return frame, nil, nil
+	}
+	rawTier := tierResult.String()
 	if rawTier == "" {
 		return frame, nil, nil
 	}
 	normTier := normalizedOpenAIServiceTierValue(rawTier)
 	if normTier == "" {
-		return frame, nil, nil
+		// codex 2026-05-16 round7: same unknown-tier hardening as the HTTP
+		// body path — strip unknown *string* service_tier values instead
+		// of leaving them to leak upstream. Closes a probing surface for
+		// callers hitting sub2api directly via the WS Realtime path.
+		trimmed, err := sjson.DeleteBytes(frame, "service_tier")
+		if err != nil {
+			return frame, nil, fmt.Errorf("strip unknown service_tier from ws frame: %w", err)
+		}
+		return trimmed, nil, nil
 	}
 	action, errMsg := s.evaluateOpenAIFastPolicy(ctx, account, model, normTier)
 	switch action {
