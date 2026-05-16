@@ -600,11 +600,13 @@ func (s *APIKeyService) Update(ctx context.Context, id int64, userID int64, req 
 
 	// Step 2: Handle explicit status updates
 	// Skip explicit status update if we just auto-reactivated from quota_exhausted/expired to active
-	// and the request is trying to set it to inactive (which is the frontend's default behavior)
+	// and the request is trying to set it back to disabled (frontend's stale default on edit).
+	// codex upstream PR#1222 backport: upstream uses StatusInactive; local equivalent for
+	// API keys is StatusAPIKeyDisabled.
 	if req.Status != nil {
-		if autoReactivated && *req.Status == StatusInactive &&
+		if autoReactivated && *req.Status == StatusAPIKeyDisabled &&
 			(originalStatus == StatusAPIKeyQuotaExhausted || originalStatus == StatusAPIKeyExpired) {
-			// Skip the inactive status update since we just reactivated the key
+			// Skip the disabled status update since we just reactivated the key
 			// Clear Redis cache for the status change
 			if s.cache != nil {
 				_ = s.cache.DeleteCreateAttemptCount(ctx, apiKey.UserID)
