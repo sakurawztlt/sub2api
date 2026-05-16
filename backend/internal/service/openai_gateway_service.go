@@ -2298,11 +2298,47 @@ func (s *OpenAIGatewayService) shouldFailoverUpstreamError(statusCode int) bool 
 	}
 }
 
+// shouldFailoverUpstreamErrorForAccount — codex 2026-05-16 post-account-124
+// incident: 同上游账号 (e.g. OpenAI OAuth/Codex) 对多个客户 model 同时
+// 返 404 ≠ 客户传错, 是该账号 Codex backend 突然不可用 (feature flag /
+// 组织绑定失效 / etc). 老 shouldFailoverUpstreamError 没把 404 当 failover
+// → cc-api/sub2api 直接把 "Upstream error: 404" 透给客户.
+//
+// 修法: 404 在 OpenAI OAuth 账号路径 → account-scoped failover. 切下一个
+// 账号 retry, 全失败时 handleAnthropicFailoverExhausted 中性化 502 给客户.
+//
+// 限定 OAuth account: 404 在 API-key 路径仍可能是真客户传错 model,
+// 不要 retry 一遍 (避免误烧 quota + 客户期望同一错误).
+func (s *OpenAIGatewayService) shouldFailoverUpstreamErrorForAccount(statusCode int, account *Account) bool {
+	if s.shouldFailoverUpstreamError(statusCode) {
+		return true
+	}
+	if statusCode == 404 && account != nil && account.Type == AccountTypeOAuth {
+		return true
+	}
+	return false
+}
+
 func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(statusCode int, upstreamMsg string, upstreamBody []byte) bool {
 	if s.shouldFailoverUpstreamError(statusCode) {
 		return true
 	}
 	return isOpenAITransientProcessingError(statusCode, upstreamMsg, upstreamBody)
+}
+
+// shouldFailoverOpenAIUpstreamResponseForAccount — account-aware variant
+// (codex 2026-05-16): adds the 404-on-OAuth-account failover rule on top
+// of the existing logic. Callers that have the account in scope pass it
+// here so a worker-scoped 404 (Codex backend unavailable for that
+// account) triggers cross-account retry instead of leaking to client.
+func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponseForAccount(statusCode int, upstreamMsg string, upstreamBody []byte, account *Account) bool {
+	if s.shouldFailoverOpenAIUpstreamResponse(statusCode, upstreamMsg, upstreamBody) {
+		return true
+	}
+	if statusCode == 404 && account != nil && account.Type == AccountTypeOAuth {
+		return true
+	}
+	return false
 }
 
 func (s *OpenAIGatewayService) handleFailoverSideEffects(ctx context.Context, resp *http.Response, account *Account) {
