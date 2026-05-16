@@ -394,45 +394,52 @@ func TestNativeResponsesForwardReqBodyMap_ServiceTierStrip(t *testing.T) {
 	const upstreamModel = "gpt-5.5"
 
 	// Mirror of openai_gateway_service.go:2755 — keep in sync with the
-	// production block. If you change the block, mirror the change here.
+	// production block. codex round9: presence-based strip, including
+	// non-string types. If you change the block, mirror the change here.
 	runBlock := func(reqBody map[string]any) (blocked *OpenAIFastBlockedError, modified bool) {
-		if rawTier, ok := reqBody["service_tier"].(string); ok {
-			if normTier := normalizedOpenAIServiceTierValue(rawTier); normTier != "" {
-				action, errMsg := svc.evaluateOpenAIFastPolicy(context.Background(), account, upstreamModel, normTier)
-				switch action {
-				case BetaPolicyActionBlock:
-					msg := errMsg
-					if msg == "" {
-						msg = "openai service_tier=" + normTier + " is not allowed for model " + upstreamModel
-					}
-					return &OpenAIFastBlockedError{Message: msg}, false
-				case BetaPolicyActionFilter:
-					delete(reqBody, "service_tier")
-					return nil, true
-				default:
-					if normTier != rawTier {
-						reqBody["service_tier"] = normTier
-						return nil, true
-					}
-					return nil, false
-				}
-			}
-			// Round8 unknown-string-tier strip.
+		if _, exists := reqBody["service_tier"]; !exists {
+			return nil, false
+		}
+		rawTier, isString := reqBody["service_tier"].(string)
+		if !isString {
+			// Non-string → strip (round9).
 			delete(reqBody, "service_tier")
 			return nil, true
 		}
-		return nil, false
+		normTier := normalizedOpenAIServiceTierValue(rawTier)
+		if normTier == "" {
+			// Unknown / empty string → strip (round7+round8).
+			delete(reqBody, "service_tier")
+			return nil, true
+		}
+		action, errMsg := svc.evaluateOpenAIFastPolicy(context.Background(), account, upstreamModel, normTier)
+		switch action {
+		case BetaPolicyActionBlock:
+			msg := errMsg
+			if msg == "" {
+				msg = "openai service_tier=" + normTier + " is not allowed for model " + upstreamModel
+			}
+			return &OpenAIFastBlockedError{Message: msg}, false
+		case BetaPolicyActionFilter:
+			delete(reqBody, "service_tier")
+			return nil, true
+		default:
+			if normTier != rawTier {
+				reqBody["service_tier"] = normTier
+				return nil, true
+			}
+			return nil, false
+		}
 	}
 
 	cases := []struct {
-		name       string
-		input      map[string]any
-		expectKey  bool   // true → service_tier should still be in map
-		expectVal  string // expected service_tier value when expectKey=true
-		expectMod  bool
-		expectBlk  bool
+		name      string
+		input     map[string]any
+		expectKey bool // true → service_tier should still be in map
+		expectMod bool
+		expectBlk bool
 	}{
-		// Round8 hardening: unknown string tiers all get stripped.
+		// Round8: unknown string tiers all get stripped.
 		{name: "unknown_string_fixel", input: map[string]any{"service_tier": "fixel"}, expectKey: false, expectMod: true},
 		{name: "unknown_string_preemium", input: map[string]any{"service_tier": "preemium"}, expectKey: false, expectMod: true},
 		{name: "unknown_string_speedy", input: map[string]any{"service_tier": "speedy"}, expectKey: false, expectMod: true},
@@ -441,11 +448,12 @@ func TestNativeResponsesForwardReqBodyMap_ServiceTierStrip(t *testing.T) {
 		{name: "fast_default_filter", input: map[string]any{"service_tier": "fast"}, expectKey: false, expectMod: true},
 		{name: "flex_default_filter", input: map[string]any{"service_tier": "flex"}, expectKey: false, expectMod: true},
 		{name: "auto_default_filter", input: map[string]any{"service_tier": "auto"}, expectKey: false, expectMod: true},
-		// Non-string types pass through — the .(string) type assertion
-		// keeps us out of the block entirely.
-		{name: "number_untouched", input: map[string]any{"service_tier": 1.0}, expectKey: true, expectVal: "non-string", expectMod: false},
-		{name: "nested_object_untouched", input: map[string]any{"service_tier": map[string]any{"k": "v"}}, expectKey: true, expectVal: "non-string", expectMod: false},
-		{name: "nil_untouched", input: map[string]any{"service_tier": nil}, expectKey: true, expectVal: "non-string", expectMod: false},
+		// codex round9: non-string types now also stripped (was: passthrough).
+		{name: "number_stripped", input: map[string]any{"service_tier": 1.0}, expectKey: false, expectMod: true},
+		{name: "nested_object_stripped", input: map[string]any{"service_tier": map[string]any{"k": "v"}}, expectKey: false, expectMod: true},
+		{name: "nil_stripped", input: map[string]any{"service_tier": nil}, expectKey: false, expectMod: true},
+		{name: "array_stripped", input: map[string]any{"service_tier": []any{"priority"}}, expectKey: false, expectMod: true},
+		{name: "bool_stripped", input: map[string]any{"service_tier": true}, expectKey: false, expectMod: true},
 		// No service_tier → no-op.
 		{name: "absent_field_noop", input: map[string]any{"model": "x"}, expectKey: false, expectMod: false},
 	}

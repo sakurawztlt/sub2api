@@ -2752,44 +2752,52 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	//      否则 native /responses 入口透传 "fast" 给上游会被拒。chat-
 	//      completions 入口由 normalizeResponsesBodyServiceTier 完成同一
 	//      行为，这里手工实现等效逻辑。
-	if rawTier, ok := reqBody["service_tier"].(string); ok {
-		if normTier := normalizedOpenAIServiceTierValue(rawTier); normTier != "" {
-			action, errMsg := s.evaluateOpenAIFastPolicy(ctx, account, upstreamModel, normTier)
-			switch action {
-			case BetaPolicyActionBlock:
-				msg := errMsg
-				if msg == "" {
-					msg = fmt.Sprintf("openai service_tier=%s is not allowed for model %s", normTier, upstreamModel)
+	// codex 2026-05-16 round9: presence-based strip — any top-level
+	// service_tier value (string, number, null, array, object, bool)
+	// triggers the policy block. Only a recognized-string-tier with a
+	// pass action survives; everything else gets stripped silently.
+	// This closes the residual probe surface that previously let callers
+	// hitting sub2api directly check whether the upstream validates
+	// service_tier types ("is there an OpenAI backend behind us?").
+	// Real Anthropic /v1/responses doesn't exist as a public spec; for
+	// our native OpenAI surface, Anthropic-shaped clients never send
+	// service_tier so this is invisible to legitimate traffic.
+	if _, exists := reqBody["service_tier"]; exists {
+		rawTier, isString := reqBody["service_tier"].(string)
+		if isString {
+			if normTier := normalizedOpenAIServiceTierValue(rawTier); normTier != "" {
+				action, errMsg := s.evaluateOpenAIFastPolicy(ctx, account, upstreamModel, normTier)
+				switch action {
+				case BetaPolicyActionBlock:
+					msg := errMsg
+					if msg == "" {
+						msg = fmt.Sprintf("openai service_tier=%s is not allowed for model %s", normTier, upstreamModel)
+					}
+					blocked := &OpenAIFastBlockedError{Message: msg}
+					writeOpenAIFastPolicyBlockedResponse(c, blocked)
+					return nil, blocked
+				case BetaPolicyActionFilter:
+					delete(reqBody, "service_tier")
+					bodyModified = true
+					disablePatch()
+				default:
+					// pass：若客户端传的是别名 "fast"，归一化为 "priority"
+					// 后写回 body，确保上游收到的是其能识别的规范值。
+					if normTier != rawTier {
+						reqBody["service_tier"] = normTier
+						bodyModified = true
+						markPatchSet("service_tier", normTier)
+					}
 				}
-				blocked := &OpenAIFastBlockedError{Message: msg}
-				writeOpenAIFastPolicyBlockedResponse(c, blocked)
-				return nil, blocked
-			case BetaPolicyActionFilter:
+			} else {
+				// Unknown / empty string tier.
 				delete(reqBody, "service_tier")
 				bodyModified = true
 				disablePatch()
-			default:
-				// pass：若客户端传的是别名 "fast"，归一化为 "priority"
-				// 后写回 body，确保上游收到的是其能识别的规范值。
-				if normTier != rawTier {
-					reqBody["service_tier"] = normTier
-					bodyModified = true
-					markPatchSet("service_tier", normTier)
-				}
 			}
 		} else {
-			// codex 2026-05-16 round8: unknown *string* service_tier
-			// values (e.g. "fixel", "preemium", "turbo") on the native
-			// /v1/responses Forward path used to silently leak upstream
-			// because the recognized-tier guard skipped the policy
-			// dispatch entirely. Mirrors the same hardening in
-			// applyOpenAIFastPolicyToBody (raw-bytes path) and
-			// applyOpenAIFastPolicyToWSResponseCreate. Non-string
-			// service_tier values (number / null / object / array /
-			// bool) still pass through unchanged — same contract: the
-			// `.(string)` type assertion above doesn't enter this
-			// branch for them, and upstream's JSON validator is the
-			// right place to surface that malformedness.
+			// Non-string value (number / null / array / object / bool).
+			// Round9 hardening: strip silently — see comment above.
 			delete(reqBody, "service_tier")
 			bodyModified = true
 			disablePatch()
@@ -6413,29 +6421,43 @@ func (s *OpenAIGatewayService) applyOpenAIFastPolicyToBody(ctx context.Context, 
 		return body, nil
 	}
 	tierResult := gjson.GetBytes(body, "service_tier")
-	// Non-string / null / array / object types pass through unchanged —
-	// our contract (see TestApplyOpenAIFastPolicyToBody_NonStringServiceTier)
-	// is that this helper does not police malformed types. Upstream will
-	// 400 those, which is what we want — surfacing the parse error to the
-	// caller rather than silently mutating their body.
-	if !tierResult.Exists() || tierResult.Type != gjson.String {
+	if !tierResult.Exists() {
 		return body, nil
+	}
+	// codex 2026-05-16 round9: any top-level service_tier on a non-string
+	// type — number / null / array / object / bool — is stripped. The
+	// earlier round7 contract that let non-string values pass through to
+	// surface upstream JSON errors gave callers hitting sub2api's native
+	// OpenAI surface a free residual probe ("does the upstream
+	// validate service_tier?") to confirm there's an OpenAI backend
+	// behind us. Strip silently — Anthropic spec has no service_tier and
+	// real Claude clients never send one, so this is invisible to
+	// legitimate traffic; for OpenAI-shaped probers it just makes the
+	// field disappear.
+	if tierResult.Type != gjson.String {
+		trimmed, err := sjson.DeleteBytes(body, "service_tier")
+		if err != nil {
+			return body, fmt.Errorf("strip non-string service_tier from body: %w", err)
+		}
+		return trimmed, nil
 	}
 	rawTier := tierResult.String()
 	if rawTier == "" {
-		return body, nil
+		// Empty string — treat as "field present but no value to police".
+		// Strip for consistency with the round9 universal-presence rule:
+		// the upstream shouldn't see service_tier="" any more than it
+		// should see service_tier=1.
+		trimmed, err := sjson.DeleteBytes(body, "service_tier")
+		if err != nil {
+			return body, fmt.Errorf("strip empty service_tier from body: %w", err)
+		}
+		return trimmed, nil
 	}
 	normTier := normalizedOpenAIServiceTierValue(rawTier)
 	if normTier == "" {
 		// codex 2026-05-16 round7: unknown *string* tier values (e.g.
-		// user-supplied "fixel", typo'd "preemium") used to be a silent
-		// no-op — leaving the literal field in the body for the upstream
-		// to decide on. That gave callers hitting sub2api directly an
-		// exploration probe for arbitrary service_tier values. Strip
-		// unknown string tiers too so every recognized / unrecognized
-		// non-empty *string* service_tier is guaranteed not to reach
-		// the upstream. Non-string types still pass through (see guard
-		// above) — they're handled by upstream's own JSON validation.
+		// user-supplied "fixel", typo'd "preemium"). Strip — see same
+		// rationale as the non-string branch above.
 		trimmed, err := sjson.DeleteBytes(body, "service_tier")
 		if err != nil {
 			return body, fmt.Errorf("strip unknown service_tier from body: %w", err)
@@ -6531,21 +6553,31 @@ func (s *OpenAIGatewayService) applyOpenAIFastPolicyToWSResponseCreate(
 		return frame, nil, nil
 	}
 	tierResult := gjson.GetBytes(frame, "service_tier")
-	// Non-string types pass through unchanged — same contract as the HTTP
-	// body path (see TestApplyOpenAIFastPolicyToBody_NonStringServiceTier).
-	if !tierResult.Exists() || tierResult.Type != gjson.String {
+	if !tierResult.Exists() {
 		return frame, nil, nil
+	}
+	// codex 2026-05-16 round9: any non-string service_tier on a WS
+	// response.create frame also gets stripped, same as the HTTP body
+	// path. Removes the residual probing surface for callers hitting
+	// the Realtime WS endpoint directly.
+	if tierResult.Type != gjson.String {
+		trimmed, err := sjson.DeleteBytes(frame, "service_tier")
+		if err != nil {
+			return frame, nil, fmt.Errorf("strip non-string service_tier from ws frame: %w", err)
+		}
+		return trimmed, nil, nil
 	}
 	rawTier := tierResult.String()
 	if rawTier == "" {
-		return frame, nil, nil
+		trimmed, err := sjson.DeleteBytes(frame, "service_tier")
+		if err != nil {
+			return frame, nil, fmt.Errorf("strip empty service_tier from ws frame: %w", err)
+		}
+		return trimmed, nil, nil
 	}
 	normTier := normalizedOpenAIServiceTierValue(rawTier)
 	if normTier == "" {
-		// codex 2026-05-16 round7: same unknown-tier hardening as the HTTP
-		// body path — strip unknown *string* service_tier values instead
-		// of leaving them to leak upstream. Closes a probing surface for
-		// callers hitting sub2api directly via the WS Realtime path.
+		// codex 2026-05-16 round7: unknown *string* tier — strip.
 		trimmed, err := sjson.DeleteBytes(frame, "service_tier")
 		if err != nil {
 			return frame, nil, fmt.Errorf("strip unknown service_tier from ws frame: %w", err)

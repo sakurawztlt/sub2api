@@ -856,18 +856,26 @@ func TestPassthroughBilling_PostFilterServiceTier(t *testing.T) {
 		"policy is idempotent: filtering an already-filtered frame leaves bytes unchanged")
 }
 
-// TestApplyOpenAIFastPolicyToBody_NonStringServiceTier covers the test gap
-// flagged in the review: when a client sends service_tier as a non-string
-// (number, null, object, etc.) the policy must NOT panic and must NOT
-// pretend the field was filtered. Behavior: skip policy entirely (treat as
-// "no usable tier"), forward body unchanged. This mirrors the HTTP entry's
-// type-assertion `reqBody["service_tier"].(string); ok` guard.
-func TestApplyOpenAIFastPolicyToBody_NonStringServiceTier(t *testing.T) {
+// TestApplyOpenAIFastPolicyToBody_NonStringServiceTierStripped covers the
+// codex 2026-05-16 round9 hardening: non-string service_tier values
+// (number, null, object, array, bool) are now silently stripped instead
+// of passing through. Round7 originally kept them so upstream JSON
+// validation could surface the malformedness, but that left a residual
+// probe surface for callers hitting sub2api's native OpenAI endpoint
+// directly — "does the upstream type-check service_tier?" answered
+// whether there's an OpenAI backend behind us. Strip silently — real
+// Anthropic clients don't send service_tier and the field has no
+// meaning on our Claude-mimic surface either way.
+//
+// Test name renamed from the original "...NonStringServiceTier" to
+// "...NonStringServiceTierStripped" so the contract change is visible
+// at the test-list level.
+func TestApplyOpenAIFastPolicyToBody_NonStringServiceTierStripped(t *testing.T) {
 	svc := newOpenAIGatewayServiceWithSettings(t, DefaultOpenAIFastPolicySettings())
 	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
 
-	// Number — gjson .String() coerces to "1" which is not a recognized
-	// tier alias; normalize returns "" → policy no-ops.
+	// Each case asserts: (1) no error, (2) no block, (3) service_tier
+	// removed from the output body / frame.
 	cases := [][]byte{
 		[]byte(`{"model":"gpt-5.5","service_tier":1}`),
 		[]byte(`{"model":"gpt-5.5","service_tier":null}`),
@@ -878,18 +886,35 @@ func TestApplyOpenAIFastPolicyToBody_NonStringServiceTier(t *testing.T) {
 	for _, body := range cases {
 		updated, err := svc.applyOpenAIFastPolicyToBody(context.Background(), account, "gpt-5.5", body)
 		require.NoError(t, err, "non-string service_tier must not error: %s", string(body))
-		require.Equal(t, string(body), string(updated),
-			"non-string service_tier must pass through unchanged: %s", string(body))
+		require.NotContains(t, string(updated), `"service_tier"`,
+			"non-string service_tier must be stripped from body: input=%s output=%s", string(body), string(updated))
+		// The rest of the body must still parse — strip should leave a
+		// valid JSON object behind, not corrupt the structure.
+		require.True(t, gjson.ValidBytes(updated),
+			"output body must remain valid JSON: %s", string(updated))
+		require.Equal(t, "gpt-5.5", gjson.GetBytes(updated, "model").String(),
+			"model field must survive strip: %s", string(updated))
 	}
 
-	// Same guard for the WS response.create entry.
-	for _, body := range cases {
-		frame := body
+	// Same contract on the WS response.create entry. The frames need a
+	// proper Realtime envelope (type=response.create) for the policy to
+	// engage; otherwise the function passes everything through as a
+	// non-response.create frame.
+	wsFrames := [][]byte{
+		[]byte(`{"type":"response.create","model":"gpt-5.5","service_tier":1}`),
+		[]byte(`{"type":"response.create","model":"gpt-5.5","service_tier":null}`),
+		[]byte(`{"type":"response.create","model":"gpt-5.5","service_tier":{"nested":"priority"}}`),
+		[]byte(`{"type":"response.create","model":"gpt-5.5","service_tier":["priority"]}`),
+		[]byte(`{"type":"response.create","model":"gpt-5.5","service_tier":true}`),
+	}
+	for _, frame := range wsFrames {
 		updated, blocked, err := svc.applyOpenAIFastPolicyToWSResponseCreate(context.Background(), account, "gpt-5.5", frame)
 		require.NoError(t, err, "non-string service_tier ws frame must not error: %s", string(frame))
 		require.Nil(t, blocked, "non-string service_tier must not trigger block: %s", string(frame))
-		require.Equal(t, string(frame), string(updated),
-			"non-string service_tier ws frame must pass through unchanged: %s", string(frame))
+		require.NotContains(t, string(updated), `"service_tier"`,
+			"non-string service_tier must be stripped from ws frame: input=%s output=%s", string(frame), string(updated))
+		require.True(t, gjson.ValidBytes(updated),
+			"output ws frame must remain valid JSON: %s", string(updated))
 	}
 }
 
