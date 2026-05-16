@@ -74,9 +74,10 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	}
 	clientStream := gjson.GetBytes(body, "stream").Bool()
 
-	// 1b. Extract reasoning effort and service tier from the raw body before any transformation.
+	// 1b. Extract reasoning effort from the raw body before any transformation.
+	// codex 2026-05-16 round5 #2457: ServiceTier is intentionally extracted
+	// AFTER applyOpenAIFastPolicyToBody below (step 4) — see comment there.
 	reasoningEffort := extractOpenAIReasoningEffortFromBody(body, originalModel)
-	serviceTier := extractOpenAIServiceTierFromBody(body)
 
 	// 2. Resolve model mapping (same as ForwardAsChatCompletions)
 	billingModel := resolveOpenAIForwardModel(account, originalModel, defaultMappedModel)
@@ -98,6 +99,10 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 		return nil, policyErr
 	}
 	upstreamBody = updatedBody
+	// codex 2026-05-16 round5 #2457: extract serviceTier AFTER policy has
+	// run — if policy stripped service_tier (e.g. default rule filters
+	// priority), billing must not still record the user-requested value.
+	serviceTier := extractOpenAIServiceTierFromBody(upstreamBody)
 	if clientStream {
 		var usageErr error
 		upstreamBody, usageErr = ensureOpenAIChatStreamUsage(upstreamBody)

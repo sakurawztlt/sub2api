@@ -56,16 +56,26 @@ func TestWSResponseCreate_FastNormalizedToPriorityThenFiltered(t *testing.T) {
 	require.NotContains(t, string(updated), `"service_tier"`)
 }
 
-func TestWSResponseCreate_FlexPassThrough(t *testing.T) {
-	svc := newOpenAIGatewayServiceWithSettings(t, DefaultOpenAIFastPolicySettings())
+func TestWSResponseCreate_FlexPassThroughUnderCustomPolicy(t *testing.T) {
+	// codex 2026-05-16 round5 #2457: default policy now strips ALL recognized
+	// tiers; flex is only "pass" under an explicit custom rule that targets
+	// priority only. This test pins the per-frame pass semantic itself —
+	// when policy says pass, the frame must reach upstream untouched.
+	svc := newOpenAIGatewayServiceWithSettings(t, &OpenAIFastPolicySettings{
+		Rules: []OpenAIFastPolicyRule{{
+			ServiceTier:    OpenAIFastTierPriority,
+			Action:         BetaPolicyActionFilter,
+			Scope:          BetaPolicyScopeAll,
+			FallbackAction: BetaPolicyActionPass,
+		}},
+	})
 	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
 
-	// Default policy targets priority only; flex is left untouched.
 	frame := []byte(`{"type":"response.create","model":"gpt-5.5","service_tier":"flex"}`)
 	updated, blocked, err := svc.applyOpenAIFastPolicyToWSResponseCreate(context.Background(), account, "gpt-5.5", frame)
 	require.NoError(t, err)
 	require.Nil(t, blocked)
-	require.Equal(t, "flex", gjson.GetBytes(updated, "service_tier").String(), "flex frames must reach upstream untouched under default policy")
+	require.Equal(t, "flex", gjson.GetBytes(updated, "service_tier").String(), "flex frame must reach upstream untouched under priority-only policy")
 }
 
 func TestWSResponseCreate_BlockReturnsTypedError(t *testing.T) {
@@ -889,10 +899,18 @@ func TestApplyOpenAIFastPolicyToBody_NonStringServiceTier(t *testing.T) {
 // turn 2/3 billing was wrong. After the fix the filter closure refreshes an
 // atomic.Pointer[string] on every successful response.create frame.
 //
+// codex 2026-05-16 round5 #2457: the default policy now strips ALL
+// recognized tiers (ServiceTier=Any+filter), which would collapse this
+// test into "every turn billing is nil" — losing the per-turn tracking
+// signal. Use a priority-only custom policy here so flex still passes,
+// keeping the test focused on multi-turn billing-update mechanics. The
+// new ALL-filter default is covered by
+// TestApplyOpenAIFastPolicyToBody_DefaultStripsAllRecognizedTiers above.
+//
 // This test pins the four legs of the semantic contract:
-//   - turn 1: service_tier=priority hits the default whitelist filter, so
+//   - turn 1: service_tier=priority hits the priority-only filter, so
 //     after filter the upstream sees no tier → billing is nil.
-//   - turn 2: service_tier=flex passes (default rule targets priority only),
+//   - turn 2: service_tier=flex passes (custom rule targets priority only),
 //     billing should now reflect "flex".
 //   - turn 3: response.create without any service_tier — the upstream will
 //     treat it as default; we choose to mirror that and overwrite billing
@@ -900,7 +918,14 @@ func TestApplyOpenAIFastPolicyToBody_NonStringServiceTier(t *testing.T) {
 //   - non-response.create frame (response.cancel here) carrying a stray
 //     service_tier-shaped field must NOT clobber the billing pointer.
 func TestPassthroughBilling_MultiTurnServiceTierFollowsFilteredFrames(t *testing.T) {
-	svc := newOpenAIGatewayServiceWithSettings(t, DefaultOpenAIFastPolicySettings())
+	svc := newOpenAIGatewayServiceWithSettings(t, &OpenAIFastPolicySettings{
+		Rules: []OpenAIFastPolicyRule{{
+			ServiceTier:    OpenAIFastTierPriority,
+			Action:         BetaPolicyActionFilter,
+			Scope:          BetaPolicyScopeAll,
+			FallbackAction: BetaPolicyActionPass,
+		}},
+	})
 	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
 
 	// Mirror the production filter closure (openai_ws_v2_passthrough_adapter.go

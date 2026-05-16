@@ -6515,7 +6515,20 @@ func (s *OpenAIGatewayService) applyOpenAIFastPolicyToWSResponseCreate(
 		}
 		return trimmed, nil, nil
 	default:
-		return frame, nil, nil
+		// pass: codex 2026-05-16 round5 #2457 narrow scope — align WS pass
+		// path with the HTTP body path so that the alias "fast" is rewritten
+		// to its canonical "priority" before going upstream. Previously the
+		// WS pass branch returned the frame unchanged, leaving "fast" leaking
+		// upstream and forcing whoever bills off the post-policy frame to
+		// special-case the alias.
+		if normTier == rawTier {
+			return frame, nil, nil
+		}
+		updated, err := sjson.SetBytes(frame, "service_tier", normTier)
+		if err != nil {
+			return frame, nil, fmt.Errorf("normalize service_tier in ws frame: %w", err)
+		}
+		return updated, nil, nil
 	}
 }
 

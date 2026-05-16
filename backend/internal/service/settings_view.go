@@ -459,8 +459,18 @@ type OpenAIFastPolicySettings struct {
 }
 
 // DefaultOpenAIFastPolicySettings 返回默认的 OpenAI fast 策略配置。
-// 默认对所有模型的 priority（fast）请求执行 filter，即剔除 service_tier 字段，
-// 让上游按 normal 优先级处理。
+//
+// codex 2026-05-16 round5 评估 #2457: 上游 PR 把默认改成 rules=[] 等于让
+// service_tier 默认透传，会让 priority/fast 走 2x 计费、flex 走慢路径——
+// 这与我们做公开服务的成本/延迟策略冲突，且生产 sub2api settings 表没有
+// openai_fast_policy_settings 落库覆盖，发版后用户传什么就走什么。
+// 反向保守化：默认对所有 service_tier（priority/fast/flex）都执行 filter，
+// 直接剥离 service_tier 字段，让上游按 normal 走。
+//
+// 为什么 ServiceTier=OpenAIFastTierAny：
+// "all" 在 evaluateOpenAIFastPolicyWithSettings 里匹配任意识别出的 tier
+// (priority/fast/flex)，可一条规则覆盖所有控制点。HTTP 与 WS 路径共用同一
+// policy 评估，所以 priority 和 flex 都会被同一条规则 filter 掉。
 //
 // 为什么 ModelWhitelist 为空（=对所有模型生效）：
 // codex 客户端的 service_tier=fast 是用户级开关，与 model 字段正交。即使
@@ -472,7 +482,7 @@ func DefaultOpenAIFastPolicySettings() *OpenAIFastPolicySettings {
 	return &OpenAIFastPolicySettings{
 		Rules: []OpenAIFastPolicyRule{
 			{
-				ServiceTier:    OpenAIFastTierPriority,
+				ServiceTier:    OpenAIFastTierAny,
 				Action:         BetaPolicyActionFilter,
 				Scope:          BetaPolicyScopeAll,
 				ModelWhitelist: []string{},

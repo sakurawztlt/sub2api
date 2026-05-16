@@ -313,10 +313,16 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		result, handleErr = s.handleChatBufferedStreamingResponse(resp, c, originalModel, billingModel, upstreamModel, startTime)
 	}
 
-	// Propagate ServiceTier and ReasoningEffort to result for billing
+	// Propagate ServiceTier and ReasoningEffort to result for billing.
+	// codex 2026-05-16 round5 #2457: read ServiceTier from the **post-policy**
+	// `responsesBody` (after applyOpenAIFastPolicyToBody at step 4b), not the
+	// pre-policy `responsesReq.ServiceTier`. Otherwise: policy filtered out
+	// service_tier → upstream got the cheaper normal tier → but billing still
+	// charged priority/flex against the old request value. The post-policy
+	// body is the only source of truth that matches what actually went upstream.
 	if handleErr == nil && result != nil {
-		if responsesReq.ServiceTier != "" {
-			st := responsesReq.ServiceTier
+		if billingTier := extractOpenAIServiceTierFromBody(responsesBody); billingTier != nil && *billingTier != "" {
+			st := *billingTier
 			result.ServiceTier = &st
 		}
 		if responsesReq.Reasoning != nil && responsesReq.Reasoning.Effort != "" {

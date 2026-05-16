@@ -481,8 +481,13 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		if promptCacheKey != "" && anthropicDigestChain != "" {
 			s.bindOpenAICompatAnthropicDigestPromptCacheKey(account, apiKeyID, anthropicDigestChain, promptCacheKey, anthropicMatchedDigestChain)
 		}
-		if responsesReq.ServiceTier != "" {
-			st := responsesReq.ServiceTier
+		// codex 2026-05-16 round5 #2457: bill from post-policy responsesBody,
+		// not the pre-policy responsesReq.ServiceTier — see same change in
+		// openai_gateway_chat_completions.go for the rationale (policy may
+		// have stripped service_tier before sending upstream, billing must
+		// not still charge the original priority/flex).
+		if billingTier := extractOpenAIServiceTierFromBody(responsesBody); billingTier != nil && *billingTier != "" {
+			st := *billingTier
 			result.ServiceTier = &st
 		}
 		if responsesReq.Reasoning != nil && responsesReq.Reasoning.Effort != "" {
