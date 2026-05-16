@@ -3582,6 +3582,30 @@ func (s *OpenAIGatewayService) handleErrorResponsePassthrough(
 	}
 	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
 	logOpenAIInstructionsRequiredDebug(ctx, c, account, resp.StatusCode, upstreamMsg, requestBody, body)
+
+	// codex round 2026-05-16 enhancement to PR#2498: if upstream complained
+	// "instructions are required" (or similar 400), the local codex-only
+	// gate (detectOpenAIPassthroughInstructionsRejectReason) missed it.
+	// Return a rollback error WITHOUT writing the 400 to the client; the
+	// outer Forward catches it via errors.As and retries via the non-
+	// passthrough (full transform) path. Covers future cases where OpenAI
+	// extends the instructions requirement to non-codex models.
+	if isOpenAIInstructionsRequiredError(resp.StatusCode, upstreamMsg, body) {
+		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			Platform:             account.Platform,
+			AccountID:            account.ID,
+			AccountName:          account.Name,
+			UpstreamStatusCode:   resp.StatusCode,
+			UpstreamRequestID:    resp.Header.Get("x-request-id"),
+			Passthrough:          true,
+			Kind:                 "rollback_to_transform",
+			Message:              upstreamMsg,
+			Detail:               upstreamDetail,
+			UpstreamResponseBody: upstreamDetail,
+		})
+		return &openAIPassthroughRollbackError{Reason: "upstream_instructions_required"}
+	}
+
 	if s.rateLimitService != nil {
 		// Passthrough mode preserves the raw upstream error response, but runtime
 		// account state still needs to be updated so sticky routing can stop

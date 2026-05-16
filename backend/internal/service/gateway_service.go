@@ -1167,7 +1167,14 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 	// context_management：thinking.type 为 enabled/adaptive 时，真实 CLI 会自动
 	// 附带 {"edits":[{"type":"clear_thinking_20251015","keep":"all"}]}。
 	// 客户端显式传了就透传；否则按 CLI 行为补齐。
-	if !gjson.GetBytes(out, "context_management").Exists() {
+	//
+	// codex upstream PR#2507 (2026-05-16): Haiku 例外. Anthropic /v1/messages
+	// API 对 claude-haiku-4-5-* 模型拒绝 context_management 字段 (HTTP 400
+	// "Extra inputs are not permitted"). 真实 CLI 实测对 Haiku 不发该字段,
+	// 跟 FullClaudeCodeMimicryBetas Haiku 豁免一致 (haiku 只用 {BetaOAuth,
+	// BetaInterleavedThinking}). 只跳过**自动注入**, 不剥离客户显式传入字段.
+	modelIsHaiku := strings.Contains(strings.ToLower(modelID), "haiku")
+	if !modelIsHaiku && !gjson.GetBytes(out, "context_management").Exists() {
 		thinkingType := gjson.GetBytes(out, "thinking.type").String()
 		if thinkingType == "enabled" || thinkingType == "adaptive" {
 			const cmDefault = `{"edits":[{"type":"clear_thinking_20251015","keep":"all"}]}`

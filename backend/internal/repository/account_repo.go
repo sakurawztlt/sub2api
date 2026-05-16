@@ -319,6 +319,15 @@ func (r *accountRepository) Update(ctx context.Context, account *service.Account
 	if account == nil {
 		return nil
 	}
+	// codex upstream PR#2374 (2026-05-16): error accounts must NOT remain
+	// schedulable. Some Update callers preserve account.Schedulable verbatim,
+	// leaving a Status=error account marked schedulable=true → scheduler
+	// keeps routing traffic to a known-broken account. Enforce
+	// schedulable=false on Status=error here so all Update paths converge.
+	schedulable := account.Schedulable
+	if account.Status == service.StatusError {
+		schedulable = false
+	}
 
 	builder := r.client.Account.UpdateOneID(account.ID).
 		SetName(account.Name).
@@ -331,7 +340,7 @@ func (r *accountRepository) Update(ctx context.Context, account *service.Account
 		SetPriority(account.Priority).
 		SetStatus(account.Status).
 		SetErrorMessage(account.ErrorMessage).
-		SetSchedulable(account.Schedulable).
+		SetSchedulable(schedulable).
 		SetAutoPauseOnExpired(account.AutoPauseOnExpired)
 
 	if account.RateMultiplier != nil {
@@ -452,6 +461,12 @@ func (r *accountRepository) Delete(ctx context.Context, id int64) error {
 			return err
 		}
 	}
+	// codex upstream PR#2375 (2026-05-16): clear the scheduler cache snapshot
+	// for the deleted account synchronously. Without this, the scheduler may
+	// still see (and dispatch to) a stale snapshot for a few seconds until
+	// the outbox event propagates → "deleted account still receiving traffic"
+	// race observed historically.
+	r.deleteSchedulerAccountSnapshot(ctx, id)
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, buildSchedulerGroupPayload(groupIDs)); err != nil {
 		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue account delete failed: account=%d err=%v", id, err)
 	}
@@ -714,10 +729,14 @@ func (r *accountRepository) BatchUpdateLastUsed(ctx context.Context, updates map
 }
 
 func (r *accountRepository) SetError(ctx context.Context, id int64, errorMsg string) error {
+	// codex upstream PR#2374 (2026-05-16): forcing schedulable=false alongside
+	// status=error is the whole point of this path — otherwise scheduler still
+	// considers the broken account eligible until next Update() refresh.
 	_, err := r.client.Account.Update().
 		Where(dbaccount.IDEQ(id)).
 		SetStatus(service.StatusError).
 		SetErrorMessage(errorMsg).
+		SetSchedulable(false).
 		Save(ctx)
 	if err != nil {
 		return err
@@ -785,6 +804,19 @@ func (r *accountRepository) syncSchedulerAccountSnapshots(ctx context.Context, a
 		if err := r.schedulerCache.SetAccount(ctx, account); err != nil {
 			logger.LegacyPrintf("repository.account", "[Scheduler] batch sync account snapshot write failed: id=%d err=%v", account.ID, err)
 		}
+	}
+}
+
+// deleteSchedulerAccountSnapshot drops the scheduler cache entry for a deleted
+// account so the scheduler immediately stops dispatching to it. Without this,
+// the snapshot persists until the outbox event propagates → "deleted account
+// still receiving traffic" race. codex upstream PR#2375 (2026-05-16).
+func (r *accountRepository) deleteSchedulerAccountSnapshot(ctx context.Context, accountID int64) {
+	if r == nil || r.schedulerCache == nil || accountID <= 0 {
+		return
+	}
+	if err := r.schedulerCache.DeleteAccount(ctx, accountID); err != nil {
+		logger.LegacyPrintf("repository.account", "[Scheduler] delete account snapshot failed: id=%d err=%v", accountID, err)
 	}
 }
 
