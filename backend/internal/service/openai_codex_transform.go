@@ -1158,7 +1158,10 @@ func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []an
 				return id
 			}
 			if strings.HasPrefix(id, "call_") {
-				return "fc" + strings.TrimPrefix(id, "call_")
+				// codex upstream PR#2499 (2026-05-16): preserve underscore.
+				// 老 "fc"+TrimPrefix("call_") 会把 call_xxx → fcxxx 缺下划线,
+				// tool_result.tool_use_id 对不上 → tool 接续断.
+				return "fc_" + strings.TrimPrefix(id, "call_")
 			}
 			return "fc_" + id
 		}

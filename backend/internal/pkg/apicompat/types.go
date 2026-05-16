@@ -431,6 +431,47 @@ type ResponsesUsage struct {
 	OutputTokensDetails *ResponsesOutputTokensDetails `json:"output_tokens_details,omitempty"`
 }
 
+// UnmarshalJSON — codex upstream PR#2505 (2026-05-16): accept both
+// Responses-shape (input_tokens/output_tokens/input_tokens_details) and
+// Chat-Completions-shape (prompt_tokens/completion_tokens/
+// prompt_tokens_details) usage payloads. Some upstream Codex backends
+// emit the chat-completions schema even on /v1/responses; without this
+// fallback our token counters silently zero out, breaking billing.
+//
+// Field priority: native Responses fields take precedence; chat-shape
+// only fills in when the canonical field is zero / nil. TotalTokens
+// computed lazily if absent.
+func (u *ResponsesUsage) UnmarshalJSON(data []byte) error {
+	type responsesUsageAlias ResponsesUsage
+	var aux struct {
+		responsesUsageAlias
+		PromptTokens            int                           `json:"prompt_tokens"`
+		CompletionTokens        int                           `json:"completion_tokens"`
+		PromptTokensDetails     *ResponsesInputTokensDetails  `json:"prompt_tokens_details,omitempty"`
+		CompletionTokensDetails *ResponsesOutputTokensDetails `json:"completion_tokens_details,omitempty"`
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	*u = ResponsesUsage(aux.responsesUsageAlias)
+	if u.InputTokens == 0 && aux.PromptTokens != 0 {
+		u.InputTokens = aux.PromptTokens
+	}
+	if u.OutputTokens == 0 && aux.CompletionTokens != 0 {
+		u.OutputTokens = aux.CompletionTokens
+	}
+	if u.InputTokensDetails == nil && aux.PromptTokensDetails != nil {
+		u.InputTokensDetails = aux.PromptTokensDetails
+	}
+	if u.OutputTokensDetails == nil && aux.CompletionTokensDetails != nil {
+		u.OutputTokensDetails = aux.CompletionTokensDetails
+	}
+	if u.TotalTokens == 0 && (u.InputTokens != 0 || u.OutputTokens != 0) {
+		u.TotalTokens = u.InputTokens + u.OutputTokens
+	}
+	return nil
+}
+
 // ResponsesInputTokensDetails breaks down input token usage.
 type ResponsesInputTokensDetails struct {
 	CachedTokens int `json:"cached_tokens,omitempty"`

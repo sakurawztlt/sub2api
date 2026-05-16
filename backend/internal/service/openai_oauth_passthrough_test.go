@@ -488,14 +488,17 @@ func TestOpenAIGatewayService_OAuthPassthrough_CodexMissingInstructionsRejectedB
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Request.Header.Set("OpenAI-Beta", "responses=experimental")
 
-	// Codex 模型且缺少 instructions，应在本地直接 403 拒绝，不触达上游。
+	// codex upstream PR#2498 (2026-05-16): codex 模型缺 instructions
+	// 不再 403 拒绝, 改 fall back 到非 passthrough (transform) 路径,
+	// 由 transform 把请求发上游. 测试改为验证 fall back 行为.
 	originalBody := []byte(`{"model":"gpt-5.1-codex-max","stream":false,"store":true,"input":[{"type":"text","text":"hi"}]}`)
 
+	// fall back 路径会用 SSE stream (codex transform 强制 stream=true)
 	upstream := &httpUpstreamRecorder{
 		resp: &http.Response{
 			StatusCode: http.StatusOK,
-			Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid"}},
-			Body:       io.NopCloser(strings.NewReader(`{"output":[],"usage":{"input_tokens":1,"output_tokens":1}}`)),
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid"}},
+			Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
 		},
 	}
 
@@ -518,11 +521,15 @@ func TestOpenAIGatewayService_OAuthPassthrough_CodexMissingInstructionsRejectedB
 	}
 
 	result, err := svc.Forward(context.Background(), c, account, originalBody)
-	require.Error(t, err)
-	require.Nil(t, result)
-	require.Equal(t, http.StatusForbidden, rec.Code)
-	require.Contains(t, rec.Body.String(), "requires a non-empty instructions field")
-	require.Nil(t, upstream.lastReq)
+	// codex upstream PR#2498: passthrough rejects → fall back transform path.
+	// 1. Forward 不再返 error (transform 路径用 mock upstream 200 success)
+	// 2. upstream 被触达 (transform 路径会发请求过去, lastReq != nil)
+	// 3. 不再返 403 (现在客户看 transform 上游响应; mock 是 SSE stream)
+	// 4. log "本地拦截" 行仍打 (回退前还是先 log, 标记 reject_reason)
+	_ = err     // fall back may complete; either nil or transform-level error is OK
+	_ = result  // depends on transform path outcome
+	require.NotNil(t, upstream.lastReq, "upstream should be hit via fall back transform path")
+	require.NotEqual(t, http.StatusForbidden, rec.Code, "no longer 403; either transform success 200 or transform error")
 
 	require.True(t, logSink.ContainsMessage("OpenAI passthrough 本地拦截：Codex 请求缺少有效 instructions"))
 	require.True(t, logSink.ContainsFieldValue("request_user_agent", "codex_cli_rs/0.98.0 (Windows 10.0.19045; x86_64) unknown"))

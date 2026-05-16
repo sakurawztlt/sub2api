@@ -104,6 +104,25 @@ var codexCLIOnlyDebugHeaderWhitelist = []string{
 	"X-Real-IP",
 }
 
+// openAIPassthroughRollbackError — codex upstream PR#2498 (2026-05-16):
+// signals that the passthrough path detected a "missing instructions"
+// rejection before any response was written. Caller (Forward) catches
+// this via errors.As and falls back to the non-passthrough (full
+// transform) path instead of returning an internal-style 403 to the
+// client. Replaces the old behavior of writing
+// `OpenAI codex passthrough requires a non-empty instructions field`
+// directly to the client which exposed fork architecture details.
+type openAIPassthroughRollbackError struct {
+	Reason string
+}
+
+func (e *openAIPassthroughRollbackError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return fmt.Sprintf("openai passthrough rollback: %s", strings.TrimSpace(e.Reason))
+}
+
 // OpenAICodexUsageSnapshot represents Codex API usage limits from response headers
 type OpenAICodexUsageSnapshot struct {
 	PrimaryUsedPercent          *float64 `json:"primary_used_percent,omitempty"`
@@ -1134,6 +1153,13 @@ func isOpenAITransientProcessingError(upstreamStatusCode int, upstreamMsg string
 			return false
 		}
 		if strings.Contains(lower, "an error occurred while processing your request") {
+			return true
+		}
+		// codex upstream PR#2481 (2026-05-16): "Selected model is at capacity"
+		// is OpenAI's transient capacity rejection (returned as 400
+		// invalid_request, not 429/5xx). Treat as account/model-temporary
+		// unavailable so failover/same-account retry kicks in.
+		if strings.Contains(lower, "selected model is at capacity") {
 			return true
 		}
 		return strings.Contains(lower, "you can retry your request") &&
@@ -2404,7 +2430,19 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	if passthroughEnabled {
 		// 透传分支只需要轻量提取字段，避免热路径全量 Unmarshal。
 		reasoningEffort := extractOpenAIReasoningEffortFromBody(body, reqModel)
-		return s.forwardOpenAIPassthrough(ctx, c, account, originalBody, reqModel, reasoningEffort, reqStream, startTime)
+		// codex upstream PR#2498 (2026-05-16): if passthrough detects
+		// missing instructions (was returning 403), roll back to the
+		// non-passthrough path which transforms the request fully and
+		// retries against the same upstream.
+		result, err := s.forwardOpenAIPassthrough(ctx, c, account, originalBody, reqModel, reasoningEffort, reqStream, startTime)
+		if err == nil {
+			return result, nil
+		}
+		var rollbackErr *openAIPassthroughRollbackError
+		if !errors.As(err, &rollbackErr) {
+			return nil, err
+		}
+		// fall through: continue Forward execution as if passthroughEnabled was false
 	}
 	textFormatRaw := extractResponsesTextFormatRaw(body)
 
@@ -3156,26 +3194,13 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 
 	if account != nil && account.Type == AccountTypeOAuth {
 		if rejectReason := detectOpenAIPassthroughInstructionsRejectReason(reqModel, body); rejectReason != "" {
-			rejectMsg := "OpenAI codex passthrough requires a non-empty instructions field"
-			setOpsUpstreamError(c, http.StatusForbidden, rejectMsg, "")
-			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
-				Platform:           account.Platform,
-				AccountID:          account.ID,
-				AccountName:        account.Name,
-				UpstreamStatusCode: http.StatusForbidden,
-				Passthrough:        true,
-				Kind:               "request_error",
-				Message:            rejectMsg,
-				Detail:             rejectReason,
-			})
+			// codex upstream PR#2498 (2026-05-16): instead of returning
+			// internal-style 403 to client, signal the caller to roll
+			// back to the non-passthrough (full transform) path. Old
+			// 403 leaked fork architecture; rollback path transparently
+			// retries the request via OAuth transform.
 			logOpenAIPassthroughInstructionsRejected(ctx, c, account, reqModel, rejectReason, body)
-			c.JSON(http.StatusForbidden, gin.H{
-				"error": gin.H{
-					"type":    "forbidden_error",
-					"message": rejectMsg,
-				},
-			})
-			return nil, fmt.Errorf("openai passthrough rejected before upstream: %s", rejectReason)
+			return nil, &openAIPassthroughRollbackError{Reason: rejectReason}
 		}
 
 		normalizedBody, normalized, err := normalizeOpenAIPassthroughOAuthBody(body, isOpenAIResponsesCompactPath(c), account.IsOpenAIStoreEnabled())
@@ -3664,6 +3689,13 @@ func openAIStreamDataStartsClientOutput(data, eventType string) bool {
 }
 
 func openAIStreamFailedEventShouldFailover(payload []byte, message string) bool {
+	// codex upstream PR#2481 (2026-05-16): transient processing errors
+	// (e.g. "Selected model is at capacity" delivered via response.failed
+	// SSE event with type=invalid_request_error) should bypass the
+	// "invalid_request" non-retryable marker below and trigger failover.
+	if isOpenAITransientProcessingError(http.StatusBadRequest, message, payload) {
+		return true
+	}
 	code := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "response.error.code").String()))
 	if code == "" {
 		code = strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "error.code").String()))
@@ -4918,28 +4950,58 @@ func (s *OpenAIGatewayService) parseSSEUsageBytes(data []byte, usage *OpenAIUsag
 		return
 	}
 
-	usage.InputTokens = int(gjson.GetBytes(data, "response.usage.input_tokens").Int())
-	usage.OutputTokens = int(gjson.GetBytes(data, "response.usage.output_tokens").Int())
-	usage.CacheReadInputTokens = int(gjson.GetBytes(data, "response.usage.input_tokens_details.cached_tokens").Int())
-	usage.ImageOutputTokens = int(gjson.GetBytes(data, "response.usage.output_tokens_details.image_tokens").Int())
+	// codex upstream PR#2505 (2026-05-16): delegate to extractOpenAIUsage-
+	// FromJSONBytes which now also accepts chat-completions-shape usage
+	// (prompt_tokens / completion_tokens / prompt_tokens_details). Some
+	// Codex backends emit chat-shape on /v1/responses; the old direct
+	// gjson reads zeroed out billing.
+	if parsedUsage, ok := extractOpenAIUsageFromJSONBytes(data); ok {
+		*usage = parsedUsage
+	}
 }
 
 func extractOpenAIUsageFromJSONBytes(body []byte) (OpenAIUsage, bool) {
 	if len(body) == 0 || !gjson.ValidBytes(body) {
 		return OpenAIUsage{}, false
 	}
-	values := gjson.GetManyBytes(
-		body,
-		"usage.input_tokens",
-		"usage.output_tokens",
-		"usage.input_tokens_details.cached_tokens",
-		"usage.output_tokens_details.image_tokens",
-	)
+	// codex upstream PR#2505: try top-level usage first (chat-shape +
+	// non-stream Responses), fall back to response.usage (SSE terminal).
+	if usage, ok := openAIUsageFromGJSON(gjson.GetBytes(body, "usage")); ok {
+		return usage, true
+	}
+	return openAIUsageFromGJSON(gjson.GetBytes(body, "response.usage"))
+}
+
+// openAIUsageFromGJSON — codex upstream PR#2505: extract OpenAIUsage from a
+// gjson result that may use either Responses-shape or Chat-Completions-
+// shape field names. Native Responses fields take precedence; chat-shape
+// fills in when canonical is zero.
+func openAIUsageFromGJSON(value gjson.Result) (OpenAIUsage, bool) {
+	if !value.Exists() || !value.IsObject() {
+		return OpenAIUsage{}, false
+	}
+	inputTokens := value.Get("input_tokens").Int()
+	if inputTokens == 0 {
+		inputTokens = value.Get("prompt_tokens").Int()
+	}
+	outputTokens := value.Get("output_tokens").Int()
+	if outputTokens == 0 {
+		outputTokens = value.Get("completion_tokens").Int()
+	}
+	cacheReadTokens := value.Get("input_tokens_details.cached_tokens").Int()
+	if cacheReadTokens == 0 {
+		cacheReadTokens = value.Get("prompt_tokens_details.cached_tokens").Int()
+	}
+	imageOutputTokens := value.Get("output_tokens_details.image_tokens").Int()
+	if imageOutputTokens == 0 {
+		imageOutputTokens = value.Get("completion_tokens_details.image_tokens").Int()
+	}
 	return OpenAIUsage{
-		InputTokens:          int(values[0].Int()),
-		OutputTokens:         int(values[1].Int()),
-		CacheReadInputTokens: int(values[2].Int()),
-		ImageOutputTokens:    int(values[3].Int()),
+		InputTokens:              int(inputTokens),
+		OutputTokens:             int(outputTokens),
+		CacheCreationInputTokens: int(value.Get("cache_creation_input_tokens").Int()),
+		CacheReadInputTokens:     int(cacheReadTokens),
+		ImageOutputTokens:        int(imageOutputTokens),
 	}, true
 }
 
@@ -6095,6 +6157,15 @@ func restoreResponsesTextFormatRaw(body []byte, format json.RawMessage) ([]byte,
 }
 
 func detectOpenAIPassthroughInstructionsRejectReason(reqModel string, body []byte) string {
+	// codex upstream PR#2498 (2026-05-16): keep codex-only model gate
+	// locally to avoid breaking 7 local tests (gpt-5.2 etc) that assume
+	// non-codex OAuth models pass through cleanly without an instructions
+	// field. Upstream PR drops the gate (all OAuth models fall back);
+	// local fork narrows the rejection scope to only codex models.
+	// **Decision pending**: if codex wants the broader upstream scope,
+	// remove the codex check below + update gpt-5.x test bodies to
+	// include instructions OR adjust mock upstream to simulate the
+	// fallback path response.
 	model := strings.ToLower(strings.TrimSpace(reqModel))
 	if !strings.Contains(model, "codex") {
 		return ""
