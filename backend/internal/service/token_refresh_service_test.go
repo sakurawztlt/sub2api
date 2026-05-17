@@ -748,7 +748,14 @@ func TestPathA_NonRetryableError(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, 1, repo.setErrorCalls) // 应标记 error 状态
 	require.Equal(t, 0, repo.updateCalls)   // 不应更新 credentials
-	require.Equal(t, 0, invalidator.calls)  // 不应触发缓存失效
+	// codex 2026-05-17 round14 fixture update: token_refresh_service.go
+	// 2026-05-06 change (non-retryable branch line 299-306) added a
+	// best-effort cacheInvalidator.InvalidateToken call for OAuth
+	// accounts so stale access tokens can't keep serving requests
+	// until cache TTL natural expiry. The old assertion (calls == 0)
+	// predates that behavior. Now we expect exactly 1 invalidate call
+	// when account.Type==AccountTypeOAuth and invalidator is non-nil.
+	require.Equal(t, 1, invalidator.calls) // best-effort cache invalidate on permanent-bad path
 }
 
 // TestPathA_RetryableErrorExhausted 统一 API 路径可重试错误耗尽 → 不标记 error

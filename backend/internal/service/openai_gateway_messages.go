@@ -970,9 +970,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	// resultWithUsage builds the final result snapshot.
 	resultWithUsage := func() *OpenAIForwardResult {
 		return &OpenAIForwardResult{
-			RequestID:     requestID,
-			ResponseID:    responseID,
-			Usage:         usage,
+			RequestID:         requestID,
+			ResponseID:        responseID,
+			Usage:             usage,
 			Model:             originalModel,
 			BillingModel:      billingModel,
 			UpstreamModel:     upstreamModel,
@@ -1602,11 +1602,12 @@ func copyOpenAIUsageFromResponsesUsage(usage *apicompat.ResponsesUsage) OpenAIUs
 }
 
 // isMeaningfulAnthropicEvent codex 5/8 audit #1: 区分真实数据 vs 元数据.
-//   真实 (返 true): content_block_delta (text/thinking/input_json/signature),
-//                  content_block_start tool_use/server_tool_use,
-//                  message_delta (含 usage), message_stop, error.
-//   元数据 (返 false): message_start, ping, content_block_start text/thinking
-//                    (空块, 还没 token), content_block_stop.
+//
+//	真实 (返 true): content_block_delta (text/thinking/input_json/signature),
+//	               content_block_start tool_use/server_tool_use,
+//	               message_delta (含 usage), message_stop, error.
+//	元数据 (返 false): message_start, ping, content_block_start text/thinking
+//	                 (空块, 还没 token), content_block_stop.
 //
 // 用 WriteHeader(200) gating: 没收到 meaningful 之前不写 200, 让上游空流
 // timeout 走 502 错误返回, 而不是空 200 等 180s.

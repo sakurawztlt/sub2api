@@ -1010,8 +1010,17 @@ func TestParseGatewayRequest_MaxTokensBoundary(t *testing.T) {
 			wantMaxTokens: -1,
 		},
 		{
-			name:          "超大值不 panic",
-			body:          `{"max_tokens":9999999999999999}`,
+			name: "超大值不 panic",
+			// codex 2026-05-17 round14 fixture fix: original literal
+			// 9999999999999999 (~1e16) is well under math.MaxInt
+			// (~9.22e18 on 64-bit), so the existing
+			// `f <= float64(math.MaxInt)` guard at gateway_request.go:185
+			// does NOT reject it — int(f) rounds to 10000000000000000
+			// and MaxTokens is set, not 0. The test's stated intent is
+			// "超出 math.MaxInt 时应被忽略" so use a value that actually
+			// exceeds math.MaxInt to exercise that guard. 1e19 is
+			// comfortably above 9.22e18 as float64 → guard rejects.
+			body:          `{"max_tokens":10000000000000000000}`,
 			wantMaxTokens: 0, // 超出 math.MaxInt 时应被忽略，但不能 panic
 		},
 		{
