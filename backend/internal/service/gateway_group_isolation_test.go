@@ -222,10 +222,23 @@ func TestGroupIsolation_GroupedKey_ShouldNotScheduleUngroupedAccounts(t *testing
 	repo := newGroupAwareMockRepo(accounts)
 	cache := &mockGatewayCacheForPlatform{}
 
+	// codex 2026-05-17 round12 fixture fix: when groupID != nil,
+	// selectAccountForModelWithPlatform reaches resolveGroupByID
+	// (gateway_service.go:2166) which dereferences s.groupRepo. The
+	// original fixture left groupRepo nil → nil pointer panic on every
+	// run (pre-existing, codex round11 flagged as -tags unit hard-gate
+	// blocker). Stub it with a known group so the routing logic can
+	// proceed to the "only ungrouped accounts in pool" verdict the test
+	// intends to exercise.
 	svc := &GatewayService{
 		accountRepo: repo,
 		cache:       cache,
 		cfg:         testConfig(),
+		groupRepo: &mockGroupRepoForGateway{
+			groups: map[int64]*Group{
+				100: {ID: 100, Name: "test-group-100"},
+			},
+		},
 	}
 
 	acc, err := svc.selectAccountForModelWithPlatform(ctx, &groupID, "", "", nil, PlatformOpenAI)
@@ -276,10 +289,19 @@ func TestGroupIsolation_GroupedKey_ShouldOnlyScheduleMatchingGroupAccounts(t *te
 	repo := newGroupAwareMockRepo(accounts)
 	cache := &mockGatewayCacheForPlatform{}
 
+	// codex round12 fixture fix — same as TestGroupIsolation_GroupedKey_
+	// ShouldNotScheduleUngroupedAccounts above: groupRepo stub needed
+	// so resolveGroupByID at gateway_service.go:2166 doesn't nil-panic
+	// when groupID != nil.
 	svc := &GatewayService{
 		accountRepo: repo,
 		cache:       cache,
 		cfg:         testConfig(),
+		groupRepo: &mockGroupRepoForGateway{
+			groups: map[int64]*Group{
+				100: {ID: 100, Name: "test-group-100"},
+			},
+		},
 	}
 
 	acc, err := svc.selectAccountForModelWithPlatform(ctx, &groupID, "", "", nil, PlatformOpenAI)

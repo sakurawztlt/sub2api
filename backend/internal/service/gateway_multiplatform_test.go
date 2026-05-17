@@ -977,10 +977,18 @@ func TestGatewayService_SelectAccountForModelWithPlatform_StickyInGroup(t *testi
 		sessionBindings: map[string]int64{"session-group": 1},
 	}
 
+	// codex round12 fixture fix: groupID != nil → resolveGroupByID
+	// dereferences s.groupRepo at gateway_service.go:2166. Stub it
+	// with the test group so the routing path proceeds.
 	svc := &GatewayService{
 		accountRepo: repo,
 		cache:       cache,
 		cfg:         testConfig(),
+		groupRepo: &mockGroupRepoForGateway{
+			groups: map[int64]*Group{
+				50: {ID: 50, Name: "test-group-50"},
+			},
+		},
 	}
 
 	acc, err := svc.selectAccountForModelWithPlatform(ctx, &groupID, "session-group", "", nil, PlatformAnthropic)
