@@ -5557,6 +5557,34 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 		intervalCh = intervalTicker.C
 	}
 
+	// codex round25 fu42 / upstream PR #2552 commit 164e2f610 (2026-05-18):
+	// keepalive for Anthropic API Key passthrough streaming. Long thinking
+	// turns can sit idle for tens of seconds; without an in-band keepalive
+	// some proxies / clients drop the connection. The other streaming
+	// paths (Anthropic mimic / Chat mimic) already emit pings via the
+	// same StreamKeepaliveInterval config; this path was the last hold-out.
+	//
+	// `event: ping\ndata: {"type": "ping"}` is a legitimate Anthropic SSE
+	// event documented in the streaming docs, so it doesn't introduce a
+	// new disguise surface. inPartialEvent guard prevents injecting the
+	// ping in the middle of an SSE frame (which would corrupt the frame
+	// boundary for the client's SSE parser).
+	keepaliveInterval := time.Duration(0)
+	if s.cfg != nil && s.cfg.Gateway.StreamKeepaliveInterval > 0 {
+		keepaliveInterval = time.Duration(s.cfg.Gateway.StreamKeepaliveInterval) * time.Second
+	}
+	var keepaliveTicker *time.Ticker
+	if keepaliveInterval > 0 {
+		keepaliveTicker = time.NewTicker(keepaliveInterval)
+		defer keepaliveTicker.Stop()
+	}
+	var keepaliveCh <-chan time.Time
+	if keepaliveTicker != nil {
+		keepaliveCh = keepaliveTicker.C
+	}
+	lastDataAt := time.Now()
+	inPartialEvent := false
+
 	for {
 		select {
 		case ev, ok := <-events:
@@ -5622,6 +5650,21 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 				} else if line == "" {
 					// 按 SSE 事件边界刷出，减少每行 flush 带来的 syscall 开销。
 					flusher.Flush()
+					// codex round25 fu42: blank line closes an SSE frame.
+					// Refresh the keepalive activity clock + clear the
+					// in-partial-event guard so the next keepalive tick
+					// is allowed to inject a ping if upstream goes idle.
+					lastDataAt = time.Now()
+					inPartialEvent = false
+				} else {
+					// codex round25 fu42: any non-blank forwarded line
+					// is the start (or middle) of a frame that hasn't
+					// terminated yet. Block keepalive ping until we see
+					// the blank-line frame boundary — otherwise the ping
+					// SSE event would land between the upstream event's
+					// data: line and its frame-closing blank line,
+					// corrupting the client's SSE parser state.
+					inPartialEvent = true
 				}
 			}
 
@@ -5638,6 +5681,32 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 				s.rateLimitService.HandleStreamTimeout(ctx, account, model)
 			}
 			return &streamingResult{usage: usage, firstTokenMs: firstTokenMs}, fmt.Errorf("stream data interval timeout")
+
+		case <-keepaliveCh:
+			// codex round25 fu42: skip when client is gone or upstream
+			// is mid-frame. continue (not return) so we keep draining
+			// upstream for usage even if the client already left.
+			if clientDisconnected || inPartialEvent {
+				continue
+			}
+			// Suppress redundant pings when upstream data was forwarded
+			// recently — saves syscalls and avoids hammering the
+			// connection with pings the client doesn't need.
+			if time.Since(lastDataAt) < keepaliveInterval {
+				continue
+			}
+			if _, err := fmt.Fprint(w, "event: ping\ndata: {\"type\": \"ping\"}\n\n"); err != nil {
+				// Client write failed — mark disconnected and continue
+				// the loop so upstream draining + usage parsing finish.
+				// Critical: do NOT return — that would short-circuit
+				// the billing-protection logic the rest of the function
+				// implements on disconnect.
+				clientDisconnected = true
+				logger.LegacyPrintf("service.gateway", "[Anthropic passthrough] Client disconnected during keepalive ping, continue draining upstream for usage: account=%d", account.ID)
+				continue
+			}
+			flusher.Flush()
+			lastDataAt = time.Now()
 		}
 	}
 }
