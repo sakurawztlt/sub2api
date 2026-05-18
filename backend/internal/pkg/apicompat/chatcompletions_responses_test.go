@@ -394,6 +394,43 @@ func TestChatCompletionsToResponses_WhitespaceOnlyBase64ImageURLSkipped(t *testi
 	assert.Equal(t, "Describe this", parts[0].Text)
 }
 
+// codex round26 / upstream PR #2528 commit df82a3bc (2026-05-17):
+// regression for #2515. Upstream Responses API 400s on `"content": null`.
+// Any chat-completions message whose Parts resolve to a nil/empty slice
+// (null literal, empty array, only-empty-text, only-empty-base64-image)
+// must serialize content as an empty string, not JSON null.
+func TestChatCompletionsToResponses_EmptyContentNeverNull(t *testing.T) {
+	cases := []struct {
+		name    string
+		content json.RawMessage
+	}{
+		{"null content", json.RawMessage(`null`)},
+		{"empty array content", json.RawMessage(`[]`)},
+		{"only empty text part", json.RawMessage(`[{"type":"text","text":""}]`)},
+		{"only empty base64 image part", json.RawMessage(`[{"type":"image_url","image_url":{"url":"data:image/png;base64,"}}]`)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &ChatCompletionsRequest{
+				Model: "gpt-5.5",
+				Messages: []ChatMessage{
+					{Role: "user", Content: tc.content},
+				},
+			}
+			resp, err := ChatCompletionsToResponses(req)
+			require.NoError(t, err)
+			assert.NotContains(t, string(resp.Input), `"content":null`,
+				"converted input must not contain a null content field")
+
+			var items []ResponsesInputItem
+			require.NoError(t, json.Unmarshal(resp.Input, &items))
+			require.Len(t, items, 1)
+			assert.Equal(t, `""`, string(items[0].Content),
+				"content must be an empty string, not null")
+		})
+	}
+}
+
 func TestChatCompletionsToResponses_SystemArrayContent(t *testing.T) {
 	req := &ChatCompletionsRequest{
 		Model: "gpt-4o",

@@ -392,7 +392,19 @@ func marshalChatInputContent(content chatMessageContent) (json.RawMessage, error
 	if content.Text != nil {
 		return json.Marshal(*content.Text)
 	}
-	return json.Marshal(convertChatContentPartsToResponses(content.Parts))
+	// codex round26 / upstream PR #2528 commit df82a3bc (2026-05-17):
+	// when the chat-completions message has no usable content parts
+	// (null content / empty array / only empty text / only filtered-out
+	// image), convertChatContentPartsToResponses returns a nil slice,
+	// which json.Marshal turns into JSON null. Upstream Responses API
+	// rejects "content": null with a 400 ("expected an array of objects
+	// or string, but got null"). Fall back to an empty string instead
+	// so the request goes through with empty content.
+	parts := convertChatContentPartsToResponses(content.Parts)
+	if len(parts) == 0 {
+		return json.Marshal("")
+	}
+	return json.Marshal(parts)
 }
 
 func convertChatContentPartsToResponses(parts []ChatContentPart) []ResponsesContentPart {
