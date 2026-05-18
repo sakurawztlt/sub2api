@@ -408,6 +408,14 @@ func TestChatCompletionsToResponses_EmptyContentNeverNull(t *testing.T) {
 		{"empty array content", json.RawMessage(`[]`)},
 		{"only empty text part", json.RawMessage(`[{"type":"text","text":""}]`)},
 		{"only empty base64 image part", json.RawMessage(`[{"type":"image_url","image_url":{"url":"data:image/png;base64,"}}]`)},
+		// codex round27 (2026-05-18) non-blocking follow-up: local fork
+		// also handles `{type:"file", file:{...}}` content parts (PR#2497
+		// shape — file_data / file_url / file_id). When file_data is an
+		// empty base64 data URI AND file_url AND file_id are absent, the
+		// file part is dropped by convertChatContentPartsToResponses just
+		// like an empty image — exercise the same "content must not be
+		// JSON null" contract for that branch.
+		{"only empty base64 file part", json.RawMessage(`[{"type":"file","file":{"filename":"empty.pdf","file_data":"data:application/pdf;base64,"}}]`)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
