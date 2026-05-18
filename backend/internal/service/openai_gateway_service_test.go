@@ -2454,11 +2454,19 @@ func TestParseSSEUsage_SelectiveParsing(t *testing.T) {
 }
 
 func TestExtractCodexFinalResponse_SampleReplay(t *testing.T) {
+	// codex round23 fu40: fixture updated to spec-compliant SSE
+	// (blank line between events). The old fixture had back-to-back
+	// `data:` lines with no boundary, which the previous helper tolerated
+	// but the parser-based rewrite correctly joins per SSE spec. Real
+	// OpenAI Responses SSE always has blank-line boundaries.
 	body := strings.Join([]string{
 		`event: message`,
 		`data: {"type":"response.in_progress","response":{"id":"resp_1"}}`,
+		``,
 		`data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-4o","usage":{"input_tokens":11,"output_tokens":22,"input_tokens_details":{"cached_tokens":3}}}}`,
+		``,
 		`data: [DONE]`,
+		``,
 	}, "\n")
 
 	finalResp, ok := extractCodexFinalResponse(body)
@@ -2478,10 +2486,15 @@ func TestHandleSSEToJSON_CompletedEventReturnsJSON(t *testing.T) {
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 	}
+	// codex round23 fu40: spec-compliant SSE framing (blank lines between
+	// events) so the parser-based body-level helpers see distinct frames.
 	body := []byte(strings.Join([]string{
 		`data: {"type":"response.in_progress","response":{"id":"resp_2"}}`,
+		``,
 		`data: {"type":"response.completed","response":{"id":"resp_2","model":"gpt-4o","usage":{"input_tokens":7,"output_tokens":9,"input_tokens_details":{"cached_tokens":1}}}}`,
+		``,
 		`data: [DONE]`,
+		``,
 	}, "\n"))
 
 	usage, err := svc.handleSSEToJSON(resp, c, body, "gpt-4o", "gpt-4o")
@@ -2507,10 +2520,14 @@ func TestHandleSSEToJSON_ReconstructsImageGenerationOutputItemDone(t *testing.T)
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 	}
+	// codex round23 fu40: spec-compliant SSE framing.
 	body := []byte(strings.Join([]string{
 		`data: {"type":"response.output_item.done","item":{"id":"ig_123","type":"image_generation_call","result":"aGVsbG8=","revised_prompt":"draw a cat","output_format":"png"}}`,
+		``,
 		`data: {"type":"response.completed","response":{"id":"resp_img","model":"gpt-5.4","output":[],"usage":{"input_tokens":7,"output_tokens":9,"output_tokens_details":{"image_tokens":4}}}}`,
+		``,
 		`data: [DONE]`,
+		``,
 	}, "\n"))
 
 	usage, err := svc.handleSSEToJSON(resp, c, body, "gpt-5.4", "gpt-5.4")

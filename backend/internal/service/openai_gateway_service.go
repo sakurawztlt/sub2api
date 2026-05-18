@@ -4937,6 +4937,127 @@ func extractOpenAISSEDataLine(line string) (string, bool) {
 	return line[start:], true
 }
 
+// codex round23 / upstream PR #2530 (cc5328c49, 2026-05-17): OpenAI Responses
+// SSE 可能以两种形态发终止事件:
+//
+//	(A) event: response.completed
+//	    data: {"response": {...usage...}}            ← data 里 NO type 字段
+//
+//	(B) data: {"type":"response.completed","response":{...}}
+//
+// 之前本地代码只识别 (B), 上游 (A) 形态进来 data 里没 type → 解析器看不到
+// 终止 → 流卡住 → upstream 断开后 missing terminal event → 502/504 /
+// usage incomplete / 非流请求长拖延.
+//
+// 修法: 用 openAICompatSSEFrameParser 同时累积 event: 行 + data: 行, 在
+// 空白行 (frame boundary) 时一并 dispatch. dispatch 出来的 frame 带
+// EventType + Data; 调用方用 openAICompatPayloadWithEventType 在 data 没
+// type 时根据 event 名 patch 一个 type 字段, 让下游解析逻辑零侵入复用.
+//
+// 本地 fork 保留所有 (first-meaningful timeout / streamFailoverIfNoHeader /
+// large-context 日志 / 延迟写 header / 计费缓存 tool 修正) 不动. 此 patch
+// 只增加事件识别能力, 不改任何业务路径.
+
+// extractOpenAISSEEventLine extracts the value of an `event:` field line.
+// Returns (eventName, true) when the line is well-formed; ("", false)
+// otherwise. Whitespace after the colon (and trailing) is trimmed so the
+// caller can compare strings cleanly.
+func extractOpenAISSEEventLine(line string) (string, bool) {
+	if !strings.HasPrefix(line, "event:") {
+		return "", false
+	}
+	start := len("event:")
+	for start < len(line) {
+		if line[start] != ' ' && line[start] != '	' {
+			break
+		}
+		start++
+	}
+	return strings.TrimSpace(line[start:]), true
+}
+
+// openAICompatSSEFrame is one fully-buffered SSE frame — possibly with an
+// event name (when upstream chose form (A) above).
+type openAICompatSSEFrame struct {
+	EventType string
+	Data      string
+}
+
+// openAICompatSSEFrameParser is a tiny SSE buffer: AddLine consumes one
+// raw line at a time, returns (frame, hasFrame). hasFrame=true only when
+// the line was a blank line (frame boundary) AND at least one data:
+// payload had been accumulated since the last boundary. Finish() flushes
+// whatever's pending — callers MUST call it on upstream-close so a
+// terminal event arriving without a trailing blank line still surfaces.
+type openAICompatSSEFrameParser struct {
+	eventType string
+	dataLines []string
+}
+
+func (p *openAICompatSSEFrameParser) AddLine(line string) (openAICompatSSEFrame, bool) {
+	if line == "" {
+		return p.dispatch()
+	}
+	// SSE comment lines (": keepalive" etc.) are skipped without
+	// flushing — they don't terminate frames.
+	if strings.HasPrefix(line, ":") {
+		return openAICompatSSEFrame{}, false
+	}
+	if eventType, ok := extractOpenAISSEEventLine(line); ok {
+		p.eventType = eventType
+		return openAICompatSSEFrame{}, false
+	}
+	if data, ok := extractOpenAISSEDataLine(line); ok {
+		p.dataLines = append(p.dataLines, data)
+	}
+	return openAICompatSSEFrame{}, false
+}
+
+// Finish flushes any pending data/event without requiring a trailing
+// blank-line boundary. Used on upstream-close so the final event still
+// gets recognized.
+func (p *openAICompatSSEFrameParser) Finish() (openAICompatSSEFrame, bool) {
+	return p.dispatch()
+}
+
+func (p *openAICompatSSEFrameParser) dispatch() (openAICompatSSEFrame, bool) {
+	frame := openAICompatSSEFrame{
+		EventType: p.eventType,
+		Data:      strings.Join(p.dataLines, "\n"),
+	}
+	p.eventType = ""
+	p.dataLines = nil
+	return frame, frame.Data != ""
+}
+
+// openAICompatPayloadWithEventType patches a `type` field into the data
+// payload when the SSE event name carried it but the data didn't. This
+// lets every downstream consumer (json.Unmarshal into
+// apicompat.ResponsesStreamEvent etc.) keep treating "type" as the
+// single source of truth without having to learn about event:/data:
+// duality.
+//
+// No-ops for:
+//   - empty event name (form (B) — data already carries type)
+//   - empty/whitespace payload
+//   - the [DONE] sentinel (not JSON)
+//   - payloads that already have a `type` field (upstream sent both;
+//     don't overwrite)
+func openAICompatPayloadWithEventType(payload, eventType string) string {
+	eventType = strings.TrimSpace(eventType)
+	if eventType == "" || strings.TrimSpace(payload) == "" || strings.TrimSpace(payload) == "[DONE]" {
+		return payload
+	}
+	if gjson.Get(payload, "type").Exists() {
+		return payload
+	}
+	patched, err := sjson.Set(payload, "type", eventType)
+	if err != nil {
+		return payload
+	}
+	return patched
+}
+
 func (s *OpenAIGatewayService) replaceModelInSSELine(line, fromModel, toModel string) string {
 	data, ok := extractOpenAISSEDataLine(line)
 	if !ok {
@@ -5163,16 +5284,38 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 }
 
 func extractOpenAISSETerminalEvent(body string) (string, []byte, bool) {
+	// codex round23 fu40: walk via openAICompatSSEFrameParser so terminals
+	// arriving as `event: response.completed\ndata: {...}` (no type field
+	// in data) are recognized too. Apply openAICompatPayloadWithEventType
+	// to patch `type` from the event name when missing, then check the
+	// shared terminal-type allowlist.
+	var parser openAICompatSSEFrameParser
 	lines := strings.Split(body, "\n")
-	for _, line := range lines {
-		data, ok := extractOpenAISSEDataLine(line)
-		if !ok || data == "" || data == "[DONE]" {
-			continue
+	check := func(payload string) (string, []byte, bool) {
+		if payload == "" || strings.TrimSpace(payload) == "[DONE]" {
+			return "", nil, false
 		}
-		eventType := strings.TrimSpace(gjson.Get(data, "type").String())
+		eventType := strings.TrimSpace(gjson.Get(payload, "type").String())
 		switch eventType {
 		case "response.completed", "response.done", "response.failed", "response.incomplete", "response.cancelled", "response.canceled":
-			return eventType, []byte(data), true
+			return eventType, []byte(payload), true
+		}
+		return "", nil, false
+	}
+	for _, line := range lines {
+		frame, hasFrame := parser.AddLine(line)
+		if !hasFrame {
+			continue
+		}
+		payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
+		if t, b, ok := check(payload); ok {
+			return t, b, ok
+		}
+	}
+	if frame, hasFrame := parser.Finish(); hasFrame {
+		payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
+		if t, b, ok := check(payload); ok {
+			return t, b, ok
 		}
 	}
 	return "", nil, false
@@ -5208,20 +5351,38 @@ func (s *OpenAIGatewayService) writeOpenAINonStreamingProtocolError(resp *http.R
 }
 
 func extractCodexFinalResponse(body string) ([]byte, bool) {
+	// codex round23 fu40: parser-aware. See extractOpenAISSETerminalEvent
+	// for rationale — `event: response.completed\ndata: {...}` form
+	// would otherwise leave `type` empty in the JSON payload and we'd
+	// miss the final response.
+	var parser openAICompatSSEFrameParser
 	lines := strings.Split(body, "\n")
-	for _, line := range lines {
-		data, ok := extractOpenAISSEDataLine(line)
-		if !ok {
-			continue
+	check := func(payload string) ([]byte, bool) {
+		if payload == "" || strings.TrimSpace(payload) == "[DONE]" {
+			return nil, false
 		}
-		if data == "" || data == "[DONE]" {
-			continue
-		}
-		eventType := gjson.Get(data, "type").String()
+		eventType := gjson.Get(payload, "type").String()
 		if eventType == "response.done" || eventType == "response.completed" {
-			if response := gjson.Get(data, "response"); response.Exists() && response.Type == gjson.JSON && response.Raw != "" {
+			if response := gjson.Get(payload, "response"); response.Exists() && response.Type == gjson.JSON && response.Raw != "" {
 				return []byte(response.Raw), true
 			}
+		}
+		return nil, false
+	}
+	for _, line := range lines {
+		frame, hasFrame := parser.AddLine(line)
+		if !hasFrame {
+			continue
+		}
+		payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
+		if out, ok := check(payload); ok {
+			return out, ok
+		}
+	}
+	if frame, hasFrame := parser.Finish(); hasFrame {
+		payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
+		if out, ok := check(payload); ok {
+			return out, ok
 		}
 	}
 	return nil, false
@@ -5234,20 +5395,34 @@ func reconstructResponseOutputFromSSE(bodyText string) ([]byte, bool) {
 	acc := apicompat.NewBufferedResponseAccumulator()
 	imageOutputs := make([]json.RawMessage, 0, 1)
 	seenImages := make(map[string]struct{})
+	// codex round23 fu40: parser-aware. Accumulator's per-event delta
+	// recording needs the patched payload so events with type only in
+	// event: line still feed acc.ProcessEvent.
+	var parser openAICompatSSEFrameParser
 	lines := strings.Split(bodyText, "\n")
-	for _, line := range lines {
-		data, ok := extractOpenAISSEDataLine(line)
-		if !ok || data == "" || data == "[DONE]" {
-			continue
+	process := func(frame openAICompatSSEFrame) {
+		payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
+		if payload == "" || strings.TrimSpace(payload) == "[DONE]" {
+			return
 		}
-		if imageOutput, ok := extractImageGenerationOutputFromSSEData([]byte(data), seenImages); ok {
+		if imageOutput, ok := extractImageGenerationOutputFromSSEData([]byte(payload), seenImages); ok {
 			imageOutputs = append(imageOutputs, imageOutput)
 		}
 		var event apicompat.ResponsesStreamEvent
-		if err := json.Unmarshal([]byte(data), &event); err != nil {
-			continue
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			return
 		}
 		acc.ProcessEvent(&event)
+	}
+	for _, line := range lines {
+		frame, hasFrame := parser.AddLine(line)
+		if !hasFrame {
+			continue
+		}
+		process(frame)
+	}
+	if frame, hasFrame := parser.Finish(); hasFrame {
+		process(frame)
 	}
 	if !acc.HasContent() && len(imageOutputs) == 0 {
 		return nil, false
@@ -5301,16 +5476,28 @@ func extractImageGenerationOutputFromSSEData(data []byte, seen map[string]struct
 
 func (s *OpenAIGatewayService) parseSSEUsageFromBody(body string) *OpenAIUsage {
 	usage := &OpenAIUsage{}
+	// codex round23 fu40: parser-aware. parseSSEUsageBytes reads
+	// `usage` and `response.usage` paths; both are usually carried by
+	// the terminal response.completed frame, so missing the
+	// event-named form means missing usage entirely.
+	var parser openAICompatSSEFrameParser
 	lines := strings.Split(body, "\n")
+	consume := func(frame openAICompatSSEFrame) {
+		payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
+		if payload == "" || strings.TrimSpace(payload) == "[DONE]" {
+			return
+		}
+		s.parseSSEUsageBytes([]byte(payload), usage)
+	}
 	for _, line := range lines {
-		data, ok := extractOpenAISSEDataLine(line)
-		if !ok {
+		frame, hasFrame := parser.AddLine(line)
+		if !hasFrame {
 			continue
 		}
-		if data == "" || data == "[DONE]" {
-			continue
-		}
-		s.parseSSEUsageBytes([]byte(data), usage)
+		consume(frame)
+	}
+	if frame, hasFrame := parser.Finish(); hasFrame {
+		consume(frame)
 	}
 	return usage
 }

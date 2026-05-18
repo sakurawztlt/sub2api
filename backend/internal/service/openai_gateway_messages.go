@@ -765,10 +765,56 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 	}()
 	defer close(done)
 
+	// codex round23 / upstream cc5328c49: terminal events may arrive as
+	// `event: response.completed\ndata: {...}` (no type field in data).
+	// openAICompatSSEFrameParser buffers event+data lines per SSE frame so
+	// we recognize that form too. See openai_gateway_service.go for the
+	// parser/helpers and a long-form comment.
+	var parser openAICompatSSEFrameParser
+	processFrame := func(frame openAICompatSSEFrame) (terminalReturn bool, retResp *apicompat.ResponsesResponse, retErr error) {
+		payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
+		if strings.TrimSpace(payload) == "" {
+			return false, nil, nil
+		}
+		var event apicompat.ResponsesStreamEvent
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			logger.L().Warn(logPrefix+": failed to parse event",
+				zap.Error(err),
+				zap.String("request_id", requestID),
+			)
+			return false, nil, nil
+		}
+		acc.ProcessEvent(&event)
+		if !firstMeaningSeen && firstMeaningTimer != nil {
+			firstMeaningSeen = true
+			if !firstMeaningTimer.Stop() {
+				select {
+				case <-firstMeaningTimer.C:
+				default:
+				}
+			}
+		}
+		if isOpenAICompatResponsesTerminalEvent(event.Type) && event.Response != nil {
+			if event.Response.Usage != nil {
+				usage = copyOpenAIUsageFromResponsesUsage(event.Response.Usage)
+			}
+			return true, event.Response, nil
+		}
+		return false, nil, nil
+	}
+
 	for {
 		select {
 		case ev, ok := <-events:
 			if !ok {
+				// Upstream closed. Flush any pending parser state — the
+				// final SSE frame may have arrived without a trailing
+				// blank line.
+				if frame, hasFrame := parser.Finish(); hasFrame {
+					if isReturn, resp, err := processFrame(frame); isReturn {
+						return resp, usage, acc, err
+					}
+				}
 				return nil, usage, acc, nil
 			}
 			resetTimeout()
@@ -785,8 +831,12 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 			if isOpenAICompatDoneSentinelLine(ev.line) {
 				return nil, usage, acc, nil
 			}
-			payload, ok := extractOpenAISSEDataLine(ev.line)
-			if !ok || payload == "" {
+			frame, hasFrame := parser.AddLine(ev.line)
+			if !hasFrame {
+				continue
+			}
+			payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
+			if strings.TrimSpace(payload) == "" {
 				continue
 			}
 
@@ -1203,6 +1253,15 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	missingTerminalErr := func() (*OpenAIForwardResult, error) {
 		return resultWithUsage(), fmt.Errorf("stream usage incomplete: missing terminal event")
 	}
+	// codex round23 / upstream cc5328c49 fu40: processFrame is the new
+	// frame-aware entry point — patches `type` into payloads that arrived
+	// via `event: <name>` form (no type field in data). Wraps the existing
+	// processDataLine so all the local first-meaningful / billing / cache
+	// / tool-fix logic still runs unchanged.
+	processFrame := func(frame openAICompatSSEFrame) bool {
+		payload := openAICompatPayloadWithEventType(frame.Data, frame.EventType)
+		return processDataLine(payload)
+	}
 
 	// 5/9 codex audit #2: stream 层错误 (unexpected EOF / scanner err / 上游
 	// 断流没 [DONE]) 在客户响应**还没写 header** 时, 返 BreakSticky failover
@@ -1231,16 +1290,17 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 
 	// ── No keepalive: fast synchronous path (no goroutine overhead) ──
 	if streamInterval <= 0 && keepaliveInterval <= 0 {
+		var parser openAICompatSSEFrameParser
 		for scanner.Scan() {
 			line := scanner.Text()
 			if isOpenAICompatDoneSentinelLine(line) {
 				return missingTerminalErr()
 			}
-			payload, ok := extractOpenAISSEDataLine(line)
-			if !ok {
+			frame, hasFrame := parser.AddLine(line)
+			if !hasFrame {
 				continue
 			}
-			if processDataLine(payload) {
+			if processFrame(frame) {
 				return finalizeStream()
 			}
 		}
@@ -1248,6 +1308,18 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			handleScanErr(err)
 			origErr := fmt.Errorf("stream usage incomplete: %w", err)
 			return resultWithUsage(), streamFailoverIfNoHeader(origErr)
+		}
+		// Upstream closed cleanly — flush any pending parser state in case
+		// the final terminal event arrived without a trailing blank-line
+		// boundary (codex round23: this is the form that was previously
+		// silently dropped, causing missingTerminalErr).
+		if frame, hasFrame := parser.Finish(); hasFrame {
+			if strings.TrimSpace(frame.Data) == "[DONE]" {
+				return missingTerminalErr()
+			}
+			if processFrame(frame) {
+				return finalizeStream()
+			}
 		}
 		// channel closed without [DONE] sentinel = upstream truncation
 		if !headerWritten {
@@ -1299,6 +1371,8 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		keepaliveCh = keepaliveTicker.C
 	}
 	lastDataAt := time.Now()
+	// codex round23 fu40: parser shared across all events in this loop.
+	var parser openAICompatSSEFrameParser
 
 	for {
 		// codex 5/8 #3: drain max — client 断开后超过 drainMax 强制 abort.
@@ -1317,6 +1391,18 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			if !ok {
 				// Upstream closed without [DONE] = truncation. Try failover
 				// if the client hasn't seen any bytes yet.
+				//
+				// codex round23 fu40: flush pending parser state first —
+				// the final terminal event may have arrived without a
+				// trailing blank-line boundary and would otherwise be
+				// silently dropped (the bug PR #2530 fixed).
+				if frame, hasFrame := parser.Finish(); hasFrame {
+					if strings.TrimSpace(frame.Data) == "[DONE]" {
+						// fallthrough to truncation handling below
+					} else if processFrame(frame) {
+						return finalizeStream()
+					}
+				}
 				if !headerWritten {
 					return resultWithUsage(), &UpstreamFailoverError{
 						StatusCode: http.StatusBadGateway, BreakSticky: true,
@@ -1334,11 +1420,11 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			if isOpenAICompatDoneSentinelLine(line) {
 				return missingTerminalErr()
 			}
-			payload, ok := extractOpenAISSEDataLine(line)
-			if !ok {
+			frame, hasFrame := parser.AddLine(line)
+			if !hasFrame {
 				continue
 			}
-			if processDataLine(payload) {
+			if processFrame(frame) {
 				return finalizeStream()
 			}
 
