@@ -21,7 +21,14 @@ FROM ${NODE_IMAGE} AS frontend-builder
 WORKDIR /app/frontend
 
 # Install pnpm
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# codex round28 / upstream PR #2527 (2026-05-18): pin pnpm to major 9 so
+# corepack does not resolve "latest" to pnpm 11. pnpm 11 promotes
+# ERR_PNPM_IGNORED_BUILDS to a hard error, breaking
+# `pnpm install --frozen-lockfile` in the frontend-builder stage. CI
+# workflows (.github/workflows/*.yml: pnpm/action-setup@v4 version: 9)
+# and frontend/pnpm-lock.yaml (lockfileVersion: '9.0') already pin to 9;
+# the Dockerfile is the last hold-out drifting toward latest.
+RUN corepack enable && corepack prepare pnpm@9 --activate
 
 # Install dependencies first (better caching)
 COPY frontend/package.json frontend/pnpm-lock.yaml ./
