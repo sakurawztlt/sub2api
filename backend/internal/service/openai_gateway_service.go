@@ -3882,8 +3882,21 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 
 	needModelReplace := strings.TrimSpace(originalModel) != "" && strings.TrimSpace(mappedModel) != "" && strings.TrimSpace(originalModel) != strings.TrimSpace(mappedModel)
 
+	// codex round 24 fu41 (2026-05-18): track event:/blank-line state so
+	// `event: response.completed\ndata: {…}` (Form A) terminals still
+	// trigger sawTerminalEvent / parseSSEUsageBytes / failed-event
+	// detection. Without this, native OpenAI Responses passthrough users
+	// see the same hang we just fixed on the Anthropic/Chat mimic paths.
+	// The tracker only mutates the `data`/`trimmedData` analyzed by
+	// detection — the raw `line` we forward to the client stays
+	// byte-identical to upstream.
+	var passthroughEventTracker openAICompatLineEventTracker
+
 	for scanner.Scan() {
 		line := scanner.Text()
+		// Feed event:/blank lines into the tracker so the data: line
+		// below can pick up the open event name.
+		passthroughEventTracker.Update(line)
 		lineStartsClientOutput := false
 		forceFlushFailedEvent := false
 		if data, ok := extractOpenAISSEDataLine(line); ok {
@@ -3894,6 +3907,17 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 				if replacedData, replaced := extractOpenAISSEDataLine(line); replaced {
 					dataBytes = []byte(replacedData)
 					trimmedData = strings.TrimSpace(replacedData)
+				}
+			}
+			// codex round 24 fu41: Form A patch — if data has no `type`
+			// but the tracker is in an open event: scope, inject the
+			// event name into the analyzed payload so the existing
+			// detection (eventType / openAIStreamEventIsTerminal /
+			// parseSSEUsageBytes) sees the canonical shape.
+			if passthroughEventTracker.eventName != "" && !gjson.GetBytes(dataBytes, "type").Exists() {
+				if patched := openAICompatPayloadWithEventType(trimmedData, passthroughEventTracker.eventName); patched != "" && patched != trimmedData {
+					dataBytes = []byte(patched)
+					trimmedData = patched
 				}
 			}
 			eventType := strings.TrimSpace(gjson.Get(trimmedData, "type").String())
@@ -4721,10 +4745,18 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 		sendErrorEvent("stream_read_error")
 		return resultWithUsage(), fmt.Errorf("stream read error: %w", scanErr), true
 	}
+	// codex round 24 fu41 (2026-05-18): track event:/blank state across
+	// processSSELine invocations so Form A (`event: response.completed\n
+	// data: {…}`) terminals are recognized for native OpenAI Codex
+	// passthrough too. Closure captures the tracker; same rationale as
+	// in handleStreamingResponsePassthrough above.
+	var streamEventTracker openAICompatLineEventTracker
+
 	processSSELine := func(line string, queueDrained bool) {
 		if streamFailoverErr != nil {
 			return
 		}
+		streamEventTracker.Update(line)
 		// Extract data from SSE line (supports both "data: " and "data:" formats)
 		if data, ok := extractOpenAISSEDataLine(line); ok {
 
@@ -4735,6 +4767,16 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 			}
 
 			dataBytes := []byte(data)
+			// codex round 24 fu41: Form A patch — see twin block in
+			// handleStreamingResponsePassthrough. Detection downstream
+			// reads `type` from this dataBytes; the forwarded line stays
+			// byte-identical.
+			if streamEventTracker.eventName != "" && !gjson.GetBytes(dataBytes, "type").Exists() {
+				if patched := openAICompatPayloadWithEventType(data, streamEventTracker.eventName); patched != "" && patched != data {
+					dataBytes = []byte(patched)
+					data = patched
+				}
+			}
 			if openAIStreamEventIsTerminal(data) {
 				sawTerminalEvent = true
 			}
@@ -4995,6 +5037,19 @@ type openAICompatSSEFrameParser struct {
 }
 
 func (p *openAICompatSSEFrameParser) AddLine(line string) (openAICompatSSEFrame, bool) {
+	// codex round 24 fu41 (2026-05-18): trim trailing CR. bufio.Scanner
+	// strips both CR and LF when its split is ScanLines, so the streaming
+	// paths (handleAnthropic/Chat StreamingResponse) never carried the
+	// CR through. BUT the body-level callers (handleSSEToJSON,
+	// handlePassthroughSSEToJSON, etc.) walk with strings.Split(body,
+	// "\n") which leaves "\r" at the end of each line. Without this
+	// trim, "\r" alone fails the `line == ""` blank-line check and the
+	// frame never dispatches — the same Form A terminal we were trying
+	// to fix gets silently dropped on CRLF bodies. SSE spec accepts
+	// LF, CR, or CRLF as line endings; servers do send CRLF.
+	if len(line) > 0 && line[len(line)-1] == '\r' {
+		line = line[:len(line)-1]
+	}
 	if line == "" {
 		return p.dispatch()
 	}
@@ -5028,6 +5083,55 @@ func (p *openAICompatSSEFrameParser) dispatch() (openAICompatSSEFrame, bool) {
 	p.eventType = ""
 	p.dataLines = nil
 	return frame, frame.Data != ""
+}
+
+// openAICompatLineEventTracker tracks the currently-open event name as
+// SSE lines stream past. Used by passthrough/observer loops that forward
+// each line raw (so they can't use the line-buffering
+// openAICompatSSEFrameParser) but still need to recognize
+// `event: response.completed\ndata: {…}` (Form A) terminals.
+//
+// Update returns (patchedData, isDataLine):
+//   - isDataLine=true: the line was a data: line. patchedData is the
+//     data payload with type injected from the most recent event: line
+//     (no-op when data already carries `type` or no event: was seen).
+//   - isDataLine=false: blank line / event: line / comment. The tracker
+//     has internalized whatever state change was needed.
+//
+// codex round 24 fu41 (2026-05-18): added so handleStreamingResponsePassthrough
+// (native OpenAI Responses passthrough — clients hitting /v1/responses
+// directly) and handleStreamingResponse (Codex passthrough callback)
+// recognize Form A terminals on the same single-pass scan they use to
+// forward bytes to the client.
+type openAICompatLineEventTracker struct {
+	eventName string
+}
+
+func (t *openAICompatLineEventTracker) Update(line string) (string, bool) {
+	if t == nil {
+		return "", false
+	}
+	trimmed := line
+	if n := len(trimmed); n > 0 && trimmed[n-1] == '\r' {
+		trimmed = trimmed[:n-1]
+	}
+	if trimmed == "" {
+		// blank line = frame boundary; current event name closes.
+		t.eventName = ""
+		return "", false
+	}
+	if strings.HasPrefix(trimmed, ":") {
+		// comment — no state change.
+		return "", false
+	}
+	if ename, ok := extractOpenAISSEEventLine(trimmed); ok {
+		t.eventName = ename
+		return "", false
+	}
+	if data, ok := extractOpenAISSEDataLine(trimmed); ok {
+		return openAICompatPayloadWithEventType(data, t.eventName), true
+	}
+	return "", false
 }
 
 // openAICompatPayloadWithEventType patches a `type` field into the data
