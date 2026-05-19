@@ -2684,8 +2684,14 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			if c != nil {
 				c.JSON(http.StatusBadRequest, gin.H{
 					"error": gin.H{
-						"type":    "invalid_request_error",
-						"message": "function_call_output requires an inline function_call/tool_call providing call_id, or a previous_response_id (continuation via item_reference is not supported under store=false on this OAuth account).",
+						"type": "invalid_request_error",
+						// codex round34 fu53 (2026-05-19): neutralized wording.
+						// Earlier draft said "under store=false on this OAuth
+						// account" which leaks implementation detail (gateway
+						// internals, account topology). The client-visible
+						// message now only describes WHAT shape they need to
+						// send; the WHY stays in the Warn log above for ops.
+						"message": "function_call_output requires an inline function_call/tool_call providing call_id, or a supported continuation transport; item_reference continuation is not supported for this request.",
 					},
 				})
 			}
