@@ -9,8 +9,12 @@ import (
 )
 
 func TestApplyCodexOAuthTransform_ToolContinuationPreservesInput(t *testing.T) {
-	// 续链场景：保留 item_reference 与 id，但不再强制 store=true。
-
+	// codex round33 / fu52 (2026-05-19): OAuth default path forces
+	// store=false and the upstream rejects item_reference / any id ref
+	// under store=false. PR #2523 + local adaptation: PreserveReferences
+	// defaults to false on OAuth — item_reference is dropped, surviving
+	// items lose their `id`, function_call_output is preserved with
+	// call_* normalized to fc_*.
 	reqBody := map[string]any{
 		"model": "gpt-5.2",
 		"input": []any{
@@ -29,22 +33,26 @@ func TestApplyCodexOAuthTransform_ToolContinuationPreservesInput(t *testing.T) {
 
 	input, ok := reqBody["input"].([]any)
 	require.True(t, ok)
-	require.Len(t, input, 2)
+	// item_reference 被丢弃；只剩 function_call_output。
+	require.Len(t, input, 1)
 
-	// 校验 input[0] 为 map，避免断言失败导致测试中断。
-	first, ok := input[0].(map[string]any)
+	// 唯一保留的项是 function_call_output；call_1 已归一化为 fc_1；
+	// 之前用于跨轮关联的 id 字段被剥掉以满足 store=false 上游约束。
+	survivor, ok := input[0].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, "item_reference", first["type"])
-	require.Equal(t, "ref1", first["id"])
-
-	// 校验 input[1] 为 map，确保后续字段断言安全。
-	second, ok := input[1].(map[string]any)
-	require.True(t, ok)
-	require.Equal(t, "o1", second["id"])
-	require.Equal(t, "fc_1", second["call_id"])
+	require.Equal(t, "function_call_output", survivor["type"])
+	require.Equal(t, "fc_1", survivor["call_id"])
+	require.Equal(t, "ok", survivor["output"])
+	_, hasID := survivor["id"]
+	require.False(t, hasID, "function_call_output's id must be removed on OAuth default path to avoid store=false 404")
 }
 
-func TestApplyCodexOAuthTransform_ToolContinuationPreservesNativeMessageAndReasoningIDs(t *testing.T) {
+func TestApplyCodexOAuthTransform_ToolContinuationStripsNativeMessageAndReasoningIDs(t *testing.T) {
+	// codex round33 / fu52 (2026-05-19): OAuth default path drops
+	// item_reference entirely and strips `id` from surviving items
+	// (incl. type=message) to avoid store=false 404 from ChatGPT's
+	// internal Responses backend. Reasoning items referenced by
+	// item_reference are dropped.
 	reqBody := map[string]any{
 		"model": "gpt-5.2",
 		"input": []any{
@@ -58,18 +66,24 @@ func TestApplyCodexOAuthTransform_ToolContinuationPreservesNativeMessageAndReaso
 
 	input, ok := reqBody["input"].([]any)
 	require.True(t, ok)
-	require.Len(t, input, 2)
+	// item_reference 被丢弃；剩下 message。
+	require.Len(t, input, 1)
 
-	first, ok := input[0].(map[string]any)
+	survivor, ok := input[0].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, "msg_0", first["id"])
-
-	second, ok := input[1].(map[string]any)
-	require.True(t, ok)
-	require.Equal(t, "rs_123", second["id"])
+	require.Equal(t, "message", survivor["type"])
+	require.Equal(t, "user", survivor["role"])
+	_, hasID := survivor["id"]
+	require.False(t, hasID, "message item's id must be stripped on OAuth default path (store=false)")
 }
 
-func TestApplyCodexOAuthTransform_ToolContinuationNormalizesToolReferenceIDsOnly(t *testing.T) {
+func TestApplyCodexOAuthTransform_DropsItemReferenceKeepsFunctionCallOutputCallIDOnly(t *testing.T) {
+	// codex round33 / fu52 (2026-05-19): renamed from
+	// ToolContinuationNormalizesToolReferenceIDsOnly — the old test
+	// asserted that item_reference's id was kept and normalized; the
+	// correct OAuth behavior is to drop item_reference entirely.
+	// The function_call_output's call_id keeps the call_*→fc_*
+	// normalization independent of what happens to item_reference.
 	reqBody := map[string]any{
 		"model": "gpt-5.2",
 		"input": []any{
@@ -83,15 +97,13 @@ func TestApplyCodexOAuthTransform_ToolContinuationNormalizesToolReferenceIDsOnly
 
 	input, ok := reqBody["input"].([]any)
 	require.True(t, ok)
-	require.Len(t, input, 2)
+	// item_reference 被丢弃；剩 function_call_output。
+	require.Len(t, input, 1)
 
-	first, ok := input[0].(map[string]any)
+	survivor, ok := input[0].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, "fc_1", first["id"])
-
-	second, ok := input[1].(map[string]any)
-	require.True(t, ok)
-	require.Equal(t, "fc_1", second["call_id"])
+	require.Equal(t, "function_call_output", survivor["type"])
+	require.Equal(t, "fc_1", survivor["call_id"])
 }
 
 func TestApplyCodexOAuthTransform_ToolSearchOutputPreservesCallID(t *testing.T) {
@@ -139,6 +151,13 @@ func TestApplyCodexOAuthTransform_CustomAndMCPToolOutputsPreserveCallID(t *testi
 }
 
 func TestApplyCodexOAuthTransform_ImageAndWebSearchCallsDoNotGainCallID(t *testing.T) {
+	// codex round33 / fu52 (2026-05-19): test's original intent was to
+	// pin "image_generation_call / web_search_call MUST NOT acquire a
+	// call_id field" — that assertion still holds. The incidental
+	// `id="ig_123"` preservation assertion depended on the now-removed
+	// preserveReferences=true default; OAuth path now strips id from
+	// every surviving item to satisfy ChatGPT's internal store=false
+	// constraint (codex round33, upstream PR #2523).
 	reqBody := map[string]any{
 		"model": "gpt-5.2",
 		"input": []any{
@@ -154,16 +173,22 @@ func TestApplyCodexOAuthTransform_ImageAndWebSearchCallsDoNotGainCallID(t *testi
 	require.True(t, ok)
 	require.Len(t, input, 2)
 
+	// Primary intent: neither item gains a `call_id` field (regression
+	// guard against the bug this test was originally added to prevent).
 	first, ok := input[0].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, "ig_123", first["id"])
+	require.Equal(t, "image_generation_call", first["type"])
 	_, hasCallID := first["call_id"]
-	require.False(t, hasCallID)
+	require.False(t, hasCallID, "image_generation_call MUST NOT acquire call_id")
+	// codex round33: id stripped on OAuth default path (store=false).
+	_, hasID := first["id"]
+	require.False(t, hasID, "OAuth default path strips id (round33 / PR#2523)")
 
 	second, ok := input[1].(map[string]any)
 	require.True(t, ok)
+	require.Equal(t, "web_search_call", second["type"])
 	_, hasCallID = second["call_id"]
-	require.False(t, hasCallID)
+	require.False(t, hasCallID, "web_search_call MUST NOT acquire call_id (existing call_id=call_bad must be stripped, it was wrong shape)")
 }
 
 func TestApplyCodexOAuthTransform_ConvertsToolRoleMessageToFunctionCallOutput(t *testing.T) {

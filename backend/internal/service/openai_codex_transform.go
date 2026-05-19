@@ -82,6 +82,24 @@ type codexTransformResult struct {
 	Modified        bool
 	NormalizedModel string
 	PromptCacheKey  string
+	// PostTransformRequiresLocalReject — codex round33 fu52 (2026-05-19).
+	// Set to true when, after stripping item_reference + ids on the OAuth
+	// store=false path, the input still contains function_call_output
+	// items but has no inline function_call/tool_call providing the
+	// continuation context (and no previous_response_id). Forwarding
+	// such a request to ChatGPT's internal Responses backend would 502
+	// with the upstream complaining about orphan function_call_output
+	// — equivalent to the 404 PR #2523 was originally written to fix,
+	// just in a different shape.
+	//
+	// Native OpenAI Responses path (openai_gateway_service.go::Forward)
+	// honors this by emitting a local 400 instead of forwarding. Other
+	// callers (chat-completions and Claude /v1/messages bridge) only
+	// log: chat-completions because the upstream rejection there is
+	// already shaped like an OpenAI error, and the messages bridge
+	// because codex round33 explicitly carves it out ("不要影响
+	// /v1/messages 的 Claude mimic 主链路").
+	PostTransformRequiresLocalReject bool
 }
 
 const (
@@ -122,8 +140,41 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 	storeEnabled := opts.StoreEnabled
 
 	result := codexTransformResult{}
-	// 工具续链需求会影响存储策略与 input 过滤逻辑。
-	needsToolContinuation := NeedsToolContinuation(reqBody)
+	// codex round33 / upstream PR #2523 adapted (2026-05-19):
+	//
+	// Background. The OAuth path forces store=false (line ~150 below, plus
+	// normalizeOpenAIPassthroughOAuthBody) because ChatGPT's internal
+	// Responses backend rejected our earlier store=true attempts ("Store
+	// must be set to false"). Under store=false the upstream does NOT
+	// persist any prior turn's items, so any item_reference (or any
+	// surviving item that still carries an `id` from a prior turn) gets
+	// rejected with HTTP 404 ("Item with id '<fc_*|rs_*|...>' not found.
+	// Items are not persisted when `store` is set to false."). gcr then
+	// wraps that as a generic 502 to the client.
+	//
+	// Upstream PR #2523 (yetone, commit fa5af825) fixed this by passing
+	// PreserveReferences=false unconditionally on the OAuth path. The
+	// continuation context still works end-to-end because the standard
+	// Responses-API continuation shape — function_call + matching
+	// function_call_output inlined in the same input — carries the
+	// full context.
+	//
+	// Local fork adaptation (codex round33). We have an extra knob
+	// `opts.StoreEnabled` (per-account `openai_store_enabled` toggle)
+	// that lets some accounts opt into store=true. For those, references
+	// CAN be preserved — but only when the client's request body also
+	// explicitly carries `store:true`. Conservative two-condition gate:
+	//
+	//   preserveReferences = false
+	//   if opts.StoreEnabled AND requestStoreExplicitTrue(reqBody):
+	//       preserveReferences = NeedsToolContinuation(reqBody)
+	//
+	// Missing-store-field never preserves (the previous behavior of
+	// preserving on missing field is exactly what triggered the 404).
+	preserveReferences := false
+	if opts.StoreEnabled && requestStoreExplicitTrue(reqBody) {
+		preserveReferences = NeedsToolContinuation(reqBody)
+	}
 
 	model := ""
 	if v, ok := reqBody["model"].(string); ok {
@@ -258,11 +309,31 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 			result.Modified = true
 		}
 		input = filterCodexInputWithOptions(input, codexInputFilterOptions{
-			PreserveReferences: needsToolContinuation,
+			PreserveReferences: preserveReferences,
 			PreserveCallIDs:    opts.PreserveToolCallIDs,
 		})
 		reqBody["input"] = input
 		result.Modified = true
+
+		// codex round33 fu52 (2026-05-19): post-filter shape check. If we
+		// dropped item_reference (preserveReferences=false) AND the
+		// resulting input still has function_call_output without an
+		// inline function_call/tool_call providing the call_id context
+		// (and no previous_response_id), the upstream Responses backend
+		// will reject the request. Mark the result so the native
+		// /v1/responses caller can emit a local 400 instead of
+		// forwarding. Messages-bridge (Claude /v1/messages) caller
+		// ignores this — codex round33 explicitly carves the Claude
+		// mimic main path out of scope.
+		if !preserveReferences {
+			postValidation := ValidateFunctionCallOutputContext(reqBody)
+			if postValidation.HasFunctionCallOutput && !postValidation.HasToolCallContext {
+				prevID, _ := reqBody["previous_response_id"].(string)
+				if strings.TrimSpace(prevID) == "" {
+					result.PostTransformRequiresLocalReject = true
+				}
+			}
+		}
 	} else if inputStr, ok := reqBody["input"].(string); ok {
 		// ChatGPT codex endpoint requires input to be a list, not a string.
 		// Convert string input to the expected message array format.
@@ -282,6 +353,33 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 	}
 
 	return result
+}
+
+// requestStoreExplicitTrue reports whether the client request body
+// CARRIES an explicit `store: true` literal. Returns false for:
+//
+//   - missing field
+//   - explicit `store: false`
+//   - non-boolean value (string, null, object, etc.)
+//
+// codex round33 / fu52 (2026-05-19): used as the second condition for
+// preserving item_reference / id refs on the OAuth path. The
+// conservative choice — only honor explicit literal true, never default
+// to preserve — matches codex's explicit guidance: "保守一点: 只认显式
+// store:true, 不要因为字段缺失就默认保留引用, 避免又踩 store=false 404".
+func requestStoreExplicitTrue(reqBody map[string]any) bool {
+	if reqBody == nil {
+		return false
+	}
+	v, ok := reqBody["store"]
+	if !ok {
+		return false
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return false
+	}
+	return b
 }
 
 func normalizeCodexToolChoice(reqBody map[string]any) bool {

@@ -2667,6 +2667,30 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		if codexResult.PromptCacheKey != "" {
 			promptCacheKey = codexResult.PromptCacheKey
 		}
+		// codex round33 fu52 (2026-05-19): post-transform orphan-output
+		// rejection. PR #2523's PreserveReferences=false strips
+		// item_reference under store=false; if the request still has a
+		// function_call_output without inline function_call/tool_call
+		// context (and no previous_response_id), upstream would 502.
+		// Emit a local 400 instead to avoid the round-trip + give the
+		// client a actionable shape-level error.
+		if codexResult.PostTransformRequiresLocalReject {
+			logger.L().Warn("openai responses: function_call_output orphan after codex oauth transform",
+				zap.String("model", upstreamModel),
+				zap.Int64("account_id", account.ID),
+				zap.String("account_type", string(account.Type)),
+				zap.String("reason", "store_false_dropped_item_reference_no_inline_tool_context"),
+			)
+			if c != nil {
+				c.JSON(http.StatusBadRequest, gin.H{
+					"error": gin.H{
+						"type":    "invalid_request_error",
+						"message": "function_call_output requires an inline function_call/tool_call providing call_id, or a previous_response_id (continuation via item_reference is not supported under store=false on this OAuth account).",
+					},
+				})
+			}
+			return nil, errors.New("codex oauth transform left orphan function_call_output without inline tool call context (round33 fu52)")
+		}
 	}
 
 	// Handle max_output_tokens based on platform and account type
