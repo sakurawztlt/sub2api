@@ -1216,6 +1216,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				zap.String("client_request_id", cliReqIDFinal),
 				zap.String("gcr_request_id", c.Request.Header.Get("X-GCR-Request-Id")),
 				zap.String("newapi_request_id", c.Request.Header.Get("X-Newapi-Request-Id")),
+				zap.String("oneapi_request_id", c.Request.Header.Get("X-Oneapi-Request-Id")),
 				zap.String("model", originalModel),
 				zap.Int("inbound_body_len", inboundBodyLen),
 				zap.String("gcr_depth_bucket", c.Request.Header.Get("X-GCR-Depth-Bucket")),
@@ -1237,6 +1238,40 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				zap.Bool("has_turn_state", meta.HasTurnState),
 				zap.Int("time_to_headers_ms", meta.TimeToHeadersMs),
 			)
+			// codex round31 fu50 (2026-05-19): explicit warn when the
+			// account-side cache accounting (gcr X-GCR-Estimated-Tokens,
+			// which NewAPI translates into a cache_read figure for the
+			// client) shows a large request but the upstream OpenAI
+			// Responses API reported cached_input_tokens=0. Means the
+			// upstream actually reprocessed the entire prompt — the
+			// user-visible "X tokens read from cache" is purely book-
+			// keeping. Pair with first_meaningful_ms to confirm the
+			// perceived slowness is real upstream work, not a sub2api
+			// stall.
+			//
+			// Threshold: any large-context request (IsLargeContextCtx
+			// already gates us here) with upstream cached=0 is worth
+			// a distinct log line. The Info above stays as the base
+			// summary; this Warn surfaces only the mismatch case so
+			// ops grep `book_cache_hit_upstream_miss` directly.
+			if state.RawCachedInputTokens == 0 {
+				logger.L().Warn("openai messages stream: book_cache_hit_upstream_miss (账面缓存命中但上游未命中)",
+					zap.String("request_id", requestID),
+					zap.String("client_request_id", cliReqIDFinal),
+					zap.String("gcr_request_id", c.Request.Header.Get("X-GCR-Request-Id")),
+					zap.String("newapi_request_id", c.Request.Header.Get("X-Newapi-Request-Id")),
+					zap.String("oneapi_request_id", c.Request.Header.Get("X-Oneapi-Request-Id")),
+					zap.String("gcr_estimated_tokens", c.Request.Header.Get("X-GCR-Estimated-Tokens")),
+					zap.Int("upstream_total_input_tokens", state.RawTotalInputTokens),
+					zap.Int("upstream_cached_input_tokens", state.RawCachedInputTokens),
+					zap.Int("first_token_ms", ftMsFinal),
+					zap.Int("first_meaningful_ms", fmMsFinal),
+					zap.Bool("has_previous_response_id", meta.HasPreviousResponseID),
+					zap.Bool("has_turn_state", meta.HasTurnState),
+					zap.Int("messages_count", meta.MessagesCount),
+					zap.Duration("total_duration", time.Since(startTime)),
+				)
+			}
 		}
 		return resultWithUsage(), nil
 	}
