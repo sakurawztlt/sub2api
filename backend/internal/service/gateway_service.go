@@ -7004,6 +7004,19 @@ func (s *GatewayService) isThinkingBlockSignatureError(respBody []byte) bool {
 		return true
 	}
 
+	// codex round39 fu57 / upstream PR #2636 (2026-05-20): cross-model
+	// session reuse — some clients carry assistant history from another
+	// model that contains type=thinking blocks WITHOUT the thinking text
+	// field, then hand it to Claude with extended thinking enabled.
+	// Upstream rejects with:
+	//   "messages.X.content.Y.thinking: each thinking block must contain thinking"
+	// FilterThinkingBlocksForRetry already knows how to drop such blocks,
+	// so add this pattern to the matcher to trigger the existing retry.
+	if strings.Contains(msg, "thinking block must contain") {
+		logger.LegacyPrintf("service.gateway", "[SignatureCheck] Detected thinking block missing content error")
+		return true
+	}
+
 	return false
 }
 

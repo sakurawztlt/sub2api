@@ -53,12 +53,21 @@ func AnthropicToResponses(req *AnthropicRequest) (*ResponsesRequest, error) {
 	}
 
 	out := &ResponsesRequest{
-		Model:       req.Model,
-		Input:       inputJSON,
-		Temperature: req.Temperature,
-		TopP:        req.TopP,
-		Stream:      req.Stream,
-		Include:     include,
+		Model:   req.Model,
+		Input:   inputJSON,
+		Stream:  req.Stream,
+		Include: include,
+	}
+
+	// codex round39 fu57 / upstream PR #2580 (2026-05-20): gpt-5.x
+	// reasoning models served via the Responses API reject requests that
+	// include temperature or top_p ("Unsupported parameter: temperature").
+	// Non-reasoning models (gpt-4o etc.) still accept these. Use
+	// isReasoningModel to gate the forward. Both fields are *float64 with
+	// omitempty on the receiving struct, so nil is safely omitted.
+	if !isReasoningModel(req.Model) {
+		out.Temperature = req.Temperature
+		out.TopP = req.TopP
 	}
 
 	storeFalse := false
@@ -1230,4 +1239,17 @@ func downgradeFileMediaType(mediaType string) string {
 		return "text/plain"
 	}
 	return mediaType
+}
+
+// isReasoningModel reports whether the model is a reasoning-only model that
+// rejects sampling parameters (temperature, top_p) via the OpenAI Responses
+// API. All gpt-5.x variants are reasoning-only.
+//
+// codex round39 fu57 / upstream PR #2580 (2026-05-20): added so the
+// Anthropic→Responses and ChatCompletions→Responses converters can skip
+// forwarding temperature/top_p when the target model is reasoning-only,
+// preventing the upstream 400 "Unsupported parameter" we were silently
+// producing for Claude Code agent/subagent calls against gpt-5.x groups.
+func isReasoningModel(model string) bool {
+	return strings.HasPrefix(model, "gpt-5")
 }

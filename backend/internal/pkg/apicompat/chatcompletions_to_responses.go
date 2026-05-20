@@ -51,11 +51,16 @@ func ChatCompletionsToResponses(req *ChatCompletionsRequest) (*ResponsesRequest,
 		Model:        req.Model,
 		Instructions: req.Instructions,
 		Input:        inputJSON,
-		Temperature:  req.Temperature,
-		TopP:         req.TopP,
 		Stream:       true, // upstream always streams
 		Include:      []string{"reasoning.encrypted_content"},
 		ServiceTier:  req.ServiceTier,
+	}
+
+	// codex round39 fu57 / upstream PR #2580: see isReasoningModel in
+	// anthropic_to_responses.go — gpt-5.x rejects temperature/top_p.
+	if !isReasoningModel(req.Model) {
+		out.Temperature = req.Temperature
+		out.TopP = req.TopP
 	}
 
 	storeFalse := false
