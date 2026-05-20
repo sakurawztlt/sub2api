@@ -131,6 +131,20 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 				responsesBody = stripped
 			}
 		}
+		// codex round42 fu60 (2026-05-20): when an APIKey-backed account
+		// routes Cursor's Responses-shaped body to /v1/chat/completions and
+		// the upstream maps to gpt-5.x, the raw forward above keeps any
+		// temperature/top_p the client sent. OAuth path gets these removed
+		// by applyCodexOAuthTransform downstream; APIKey path does not, so
+		// strip explicitly here to mirror the normal branch (line ~158)
+		// and prevent the upstream 400 "Unsupported parameter".
+		if apicompat.IsReasoningModel(upstreamModel) {
+			for _, field := range []string{"temperature", "top_p"} {
+				if stripped, derr := sjson.DeleteBytes(responsesBody, field); derr == nil {
+					responsesBody = stripped
+				}
+			}
+		}
 		responsesBody, normalizedServiceTier, err := normalizeResponsesBodyServiceTier(responsesBody)
 		if err != nil {
 			return nil, fmt.Errorf("normalize service_tier in responses-shape body: %w", err)

@@ -2684,6 +2684,27 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				delete(text, "verbosity")
 			}
 		}
+
+		// codex round42 fu60 (2026-05-20): native /v1/responses path bottom
+		// guard. When the upstream model maps to a gpt-5.x reasoning model,
+		// strip top-level temperature/top_p before any transform runs. OAuth
+		// accounts also hit applyCodexOAuthTransform below, which strips
+		// these — keeping the explicit strip here is idempotent for OAuth
+		// and load-bearing for the APIKey-backed /v1/responses path that
+		// would otherwise forward temperature/top_p straight to a gpt-5
+		// upstream and trigger 400 "Unsupported parameter".
+		if apicompat.IsReasoningModel(upstreamModel) {
+			if _, ok := reqBody["temperature"]; ok {
+				delete(reqBody, "temperature")
+				bodyModified = true
+				markPatchSet("temperature", nil)
+			}
+			if _, ok := reqBody["top_p"]; ok {
+				delete(reqBody, "top_p")
+				bodyModified = true
+				markPatchSet("top_p", nil)
+			}
+		}
 	}
 
 	// 规范化 reasoning.effort 参数（minimal -> none），与上游允许值对齐。

@@ -27,14 +27,14 @@ import (
 
 // gin context keys (跟 OpsUpstreamRequestBodyKey 平级)
 const (
-	TrafficCaptureInboundBodyKey      = "traffic_capture_inbound_body"
-	TrafficCaptureAccountIDKey        = "traffic_capture_account_id"
-	TrafficCaptureGroupIDKey          = "traffic_capture_group_id"
-	TrafficCapturePlatformKey         = "traffic_capture_platform"
-	TrafficCaptureAccountTypeKey      = "traffic_capture_account_type"
-	TrafficCaptureModelKey            = "traffic_capture_model"
-	TrafficCaptureUpstreamReqIDKey    = "traffic_capture_upstream_req_id"
-	TrafficCaptureOutboundHeadersKey  = "traffic_capture_outbound_headers"
+	TrafficCaptureInboundBodyKey     = "traffic_capture_inbound_body"
+	TrafficCaptureAccountIDKey       = "traffic_capture_account_id"
+	TrafficCaptureGroupIDKey         = "traffic_capture_group_id"
+	TrafficCapturePlatformKey        = "traffic_capture_platform"
+	TrafficCaptureAccountTypeKey     = "traffic_capture_account_type"
+	TrafficCaptureModelKey           = "traffic_capture_model"
+	TrafficCaptureUpstreamReqIDKey   = "traffic_capture_upstream_req_id"
+	TrafficCaptureOutboundHeadersKey = "traffic_capture_outbound_headers"
 )
 
 // SetTrafficCaptureContext — gateway_service 内部调用, stash 选中 account 信息.
