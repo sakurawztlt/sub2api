@@ -767,10 +767,9 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 		requestIDHeader = idHeader
 
 		// Capture upstream request body for ops retry of this attempt.
-		if c != nil {
-			// In this code path `body` is already the JSON sent to upstream.
-			c.Set(OpsUpstreamRequestBodyKey, string(body))
-		}
+		// codex round40 fu58: route through setOpsUpstreamRequestBody so the
+		// 4 MiB cap applies on this path too (previously bypassed).
+		setOpsUpstreamRequestBody(c, body)
 
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 		if err != nil {
@@ -1292,10 +1291,9 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		requestIDHeader = idHeader
 
 		// Capture upstream request body for ops retry of this attempt.
-		if c != nil {
-			// In this code path `body` is already the JSON sent to upstream.
-			c.Set(OpsUpstreamRequestBodyKey, string(body))
-		}
+		// codex round40 fu58: route through setOpsUpstreamRequestBody so the
+		// 4 MiB cap applies on this path too (previously bypassed).
+		setOpsUpstreamRequestBody(c, body)
 
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 		if err != nil {

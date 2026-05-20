@@ -629,9 +629,10 @@ urlFallbackLoop:
 			}
 
 			// Capture upstream request body for ops retry of this attempt.
-			if p.c != nil && len(p.body) > 0 {
-				p.c.Set(OpsUpstreamRequestBodyKey, string(p.body))
-			}
+			// codex round40 fu58: route through setOpsUpstreamRequestBody so
+			// the 4 MiB cap applies here too — previously this site bypassed
+			// the helper and could retain 39 MiB pathological bodies.
+			setOpsUpstreamRequestBody(p.c, p.body)
 
 			resp, err = p.httpUpstream.Do(upstreamReq, p.proxyURL, p.account.ID, p.account.Concurrency)
 			if err == nil && resp == nil {

@@ -1,12 +1,37 @@
 package service
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+)
+
+// codex round40 fu58 (2026-05-20) / upstream PR #2581 intent:
+// hard cap on the upstream request body captured for ops retry replay.
+// Bodies above this size are NOT stored verbatim in gin context or
+// ops_error_logs — they are replaced with a JSON marker envelope
+// containing only size + sha256_short + base64-preview head/tail.
+//
+// Why a cap is required:
+//   typical request:        <  100 KiB
+//   large-context request:  ~  800 KiB - 2 MiB
+//   pathological example in codex round40: 39 MiB
+// At 39 MiB, full-body capture inflates gin context retention + DB
+// columns + retry replay buffers — measurable memory pressure under
+// concurrency, and the DB row is essentially unreadable anyway.
+//
+// 4 MiB leaves comfortable headroom for legitimate large-context
+// requests; anything beyond is treated as "ops can identify by hash;
+// retry from the client's original body, not from our captured copy".
+const (
+	opsUpstreamRequestBodyCapBytes     = 4 * 1024 * 1024
+	opsUpstreamRequestBodyPreviewBytes = 8 * 1024
 )
 
 // Gin context keys used by Ops error logger for capturing upstream error details.
@@ -43,8 +68,62 @@ func setOpsUpstreamRequestBody(c *gin.Context, body []byte) {
 	if c == nil || len(body) == 0 {
 		return
 	}
-	// 热路径避免 string(body) 额外分配，按需在落库前再转换。
-	c.Set(OpsUpstreamRequestBodyKey, body)
+	if len(body) <= opsUpstreamRequestBodyCapBytes {
+		// 热路径避免 string(body) 额外分配，按需在落库前再转换。
+		c.Set(OpsUpstreamRequestBodyKey, body)
+		return
+	}
+	// codex round40 fu58: body exceeds the cap. Replace with a marker
+	// envelope so we still record enough for ops triage (size + hash +
+	// preview) without retaining 4MB+ of bytes in the gin context. The
+	// envelope is a valid JSON string; existing readers in
+	// appendOpsUpstreamError hit the `string` branch of the type switch.
+	c.Set(OpsUpstreamRequestBodyKey, buildOpsUpstreamRequestBodyTruncationMarker(body))
+}
+
+// buildOpsUpstreamRequestBodyTruncationMarker returns a JSON envelope
+// describing an over-cap body. Format:
+//
+//	{
+//	  "_truncated": true,
+//	  "_size_bytes": <int>,
+//	  "_sha256_short": "<16 hex chars>",
+//	  "_preview_head_b64": "<base64 of body[:N]>",
+//	  "_preview_tail_b64": "<base64 of body[len-N:]>"   (omitted on overlap)
+//	}
+//
+// All field names start with `_` so ops tools that scan upstream
+// request bodies for protocol fields (model, messages, etc.) clearly
+// see this is metadata, not a real request body. The body content is
+// base64-encoded so binary payloads are safely embedded without
+// breaking the surrounding JSON.
+func buildOpsUpstreamRequestBodyTruncationMarker(body []byte) string {
+	hash := sha256.Sum256(body)
+	previewEnd := opsUpstreamRequestBodyPreviewBytes
+	if previewEnd > len(body) {
+		previewEnd = len(body)
+	}
+	tailStart := len(body) - opsUpstreamRequestBodyPreviewBytes
+	if tailStart < 0 {
+		tailStart = 0
+	}
+	envelope := struct {
+		Truncated   bool   `json:"_truncated"`
+		SizeBytes   int    `json:"_size_bytes"`
+		Sha256Short string `json:"_sha256_short"`
+		PreviewHead string `json:"_preview_head_b64"`
+		PreviewTail string `json:"_preview_tail_b64,omitempty"`
+	}{
+		Truncated:   true,
+		SizeBytes:   len(body),
+		Sha256Short: hex.EncodeToString(hash[:])[:16],
+		PreviewHead: base64.StdEncoding.EncodeToString(body[:previewEnd]),
+	}
+	if tailStart > previewEnd {
+		envelope.PreviewTail = base64.StdEncoding.EncodeToString(body[tailStart:])
+	}
+	out, _ := json.Marshal(envelope)
+	return string(out)
 }
 
 // 2026-05-12 R29 traffic_capture 桥 — service 包不能 import handler 包 (circular),
