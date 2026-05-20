@@ -2685,24 +2685,31 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 		}
 
-		// codex round42 fu60 (2026-05-20): native /v1/responses path bottom
-		// guard. When the upstream model maps to a gpt-5.x reasoning model,
-		// strip top-level temperature/top_p before any transform runs. OAuth
-		// accounts also hit applyCodexOAuthTransform below, which strips
-		// these — keeping the explicit strip here is idempotent for OAuth
-		// and load-bearing for the APIKey-backed /v1/responses path that
-		// would otherwise forward temperature/top_p straight to a gpt-5
-		// upstream and trigger 400 "Unsupported parameter".
+		// codex round42 fu60 / round43 fu61 (2026-05-20): native /v1/responses
+		// path bottom guard. When the upstream model maps to a gpt-5.x
+		// reasoning model, strip top-level temperature/top_p before any
+		// transform runs. OAuth path also hits applyCodexOAuthTransform
+		// below; the explicit strip here is idempotent for OAuth and
+		// load-bearing for the APIKey-backed /v1/responses path.
+		//
+		// round43 fu61: switched from markPatchSet("...", nil) to
+		// markPatchDelete("..."). The Set variant on a single-field
+		// request would have run through the fast-patch path and emitted
+		// "temperature": null instead of removing the key, which the
+		// upstream still rejects as an unsupported parameter. Two-field
+		// case falls through to disablePatch via mismatched patchPath, so
+		// the marshal path runs and the deleted reqBody map keys are
+		// already gone — net effect is correct in both shapes now.
 		if apicompat.IsReasoningModel(upstreamModel) {
 			if _, ok := reqBody["temperature"]; ok {
 				delete(reqBody, "temperature")
 				bodyModified = true
-				markPatchSet("temperature", nil)
+				markPatchDelete("temperature")
 			}
 			if _, ok := reqBody["top_p"]; ok {
 				delete(reqBody, "top_p")
 				bodyModified = true
-				markPatchSet("top_p", nil)
+				markPatchDelete("top_p")
 			}
 		}
 	}
@@ -3347,6 +3354,18 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	if policyModel == "" {
 		policyModel = reqModel
 	}
+
+	// codex round43 fu61 (2026-05-20): passthrough mode forwards the
+	// client body raw — none of the non-passthrough paths' strip logic
+	// runs. If the upstream model is gpt-5.x, temperature/top_p still
+	// reach upstream and trigger 400 "Unsupported parameter". This is
+	// codex round43's #2 finding (the missing fourth entry point).
+	// Same shared helper as the Cursor branch and the native
+	// /v1/responses path so all four entry points stay consistent.
+	if stripped, modified, serr := stripSamplingParamsForReasoningModelBody(policyModel, body); serr == nil && modified {
+		body = stripped
+	}
+
 	updatedBody, policyErr := s.applyOpenAIFastPolicyToBody(ctx, account, policyModel, body)
 	if policyErr != nil {
 		var blocked *OpenAIFastBlockedError
