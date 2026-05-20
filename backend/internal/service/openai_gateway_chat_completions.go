@@ -152,6 +152,13 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 			return nil, fmt.Errorf("convert chat completions to responses: %w", err)
 		}
 		responsesReq.Model = upstreamModel
+		// codex round41 fu59 (2026-05-20): same as openai_gateway_messages.go —
+		// strip sampling params AFTER the upstream model mapping, otherwise
+		// gpt-5.x models keep receiving temperature/top_p and return 400.
+		if apicompat.IsReasoningModel(upstreamModel) {
+			responsesReq.Temperature = nil
+			responsesReq.TopP = nil
+		}
 		normalizeResponsesRequestServiceTier(responsesReq)
 		responsesBody, err = json.Marshal(responsesReq)
 		if err != nil {

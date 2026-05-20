@@ -939,6 +939,7 @@ func mapAnthropicEffortToResponses(effort string) string {
 //  3. Other Anthropic server-side tools (`computer_*`, `text_editor_*`,
 //     `bash_*`) are still DROPPED because sub2api's Codex path has no
 //     matching hosted tool in the Responses output side.
+//
 // anthropicToolsIncludeWebSearch reports whether the request carries any
 // `web_search_*` Anthropic tool. Used to decide whether to opt the outgoing
 // Responses request into action.sources exposure.
@@ -1241,15 +1242,40 @@ func downgradeFileMediaType(mediaType string) string {
 	return mediaType
 }
 
-// isReasoningModel reports whether the model is a reasoning-only model that
+// IsReasoningModel reports whether the model is a reasoning-only model that
 // rejects sampling parameters (temperature, top_p) via the OpenAI Responses
 // API. All gpt-5.x variants are reasoning-only.
 //
-// codex round39 fu57 / upstream PR #2580 (2026-05-20): added so the
+// codex round39 fu57 / upstream PR #2580 (2026-05-20): introduced so the
 // Anthropic→Responses and ChatCompletions→Responses converters can skip
 // forwarding temperature/top_p when the target model is reasoning-only,
 // preventing the upstream 400 "Unsupported parameter" we were silently
 // producing for Claude Code agent/subagent calls against gpt-5.x groups.
+//
+// codex round41 fu59 (2026-05-20): exported (was lowercase) so the gateway
+// layer can re-evaluate after model mapping. In our real path the converter
+// sees the client-side model (e.g. claude-opus-4-6); the gateway maps to
+// the upstream model (e.g. gpt-5.x) AFTER conversion, so a converter-time
+// check would silently miss the strip on every Claude→gpt-5 request.
+//
+// Hardened against:
+//   - leading/trailing whitespace ("  gpt-5.2  " → reasoning)
+//   - mixed case ("GPT-5.2", "Gpt-5") → reasoning
+//   - vendor prefixes ("openai/gpt-5.4", "azure/gpt-5") → reasoning
+func IsReasoningModel(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if idx := strings.IndexByte(m, '/'); idx >= 0 && idx < len(m)-1 {
+		// Strip a single recognised provider prefix segment ("openai/", "azure/", ...).
+		// We deliberately match on the `/` separator only — a slash inside a
+		// model id past the first segment is extremely unusual.
+		m = m[idx+1:]
+	}
+	return strings.HasPrefix(m, "gpt-5")
+}
+
+// isReasoningModel is the package-internal alias preserved at converter
+// call sites for readability. Kept synonymous with IsReasoningModel —
+// the two MUST always agree.
 func isReasoningModel(model string) bool {
-	return strings.HasPrefix(model, "gpt-5")
+	return IsReasoningModel(model)
 }

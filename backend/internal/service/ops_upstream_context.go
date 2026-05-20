@@ -19,9 +19,11 @@ import (
 // containing only size + sha256_short + base64-preview head/tail.
 //
 // Why a cap is required:
-//   typical request:        <  100 KiB
-//   large-context request:  ~  800 KiB - 2 MiB
-//   pathological example in codex round40: 39 MiB
+//
+//	typical request:        <  100 KiB
+//	large-context request:  ~  800 KiB - 2 MiB
+//	pathological example in codex round40: 39 MiB
+//
 // At 39 MiB, full-body capture inflates gin context retention + DB
 // columns + retry replay buffers — measurable memory pressure under
 // concurrency, and the DB row is essentially unreadable anyway.

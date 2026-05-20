@@ -232,9 +232,19 @@ func TrafficCaptureMiddleware(svc *service.TrafficCaptureService) gin.HandlerFun
 		entry.ResponseTotalBytes = w.totalBytes
 
 		// 5. P2/P3/P4: 各种 metadata 从 gateway_service stash 的 context 拿
+		// codex round41 fu59 (2026-05-20): also accept string. fu58 introduced
+		// the 4 MiB cap on setOpsUpstreamRequestBody — over-cap bodies are
+		// now stored as a marker envelope (string), not []byte. Without this
+		// string branch traffic_capture would silently lose outbound body
+		// metadata on every pathological-size request. The marker JSON still
+		// carries _truncated/_size_bytes/_sha256_short, which is much more
+		// useful for ops triage than an empty field.
 		if v, ok := c.Get(service.OpsUpstreamRequestBodyKey); ok {
-			if b, ok := v.([]byte); ok {
-				entry.OutboundBody = b
+			switch raw := v.(type) {
+			case []byte:
+				entry.OutboundBody = raw
+			case string:
+				entry.OutboundBody = []byte(raw)
 			}
 		}
 		entry.RequestID = extractFirstHeader(c, "X-Oneapi-Request-Id", "X-Newapi-Request-Id", "X-Request-Id")

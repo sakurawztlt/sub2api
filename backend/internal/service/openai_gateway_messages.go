@@ -132,6 +132,17 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	}
 
 	responsesReq.Model = upstreamModel
+	// codex round41 fu59 (2026-05-20): re-evaluate the reasoning-model
+	// strip AFTER the upstream model mapping. The converter at line 119
+	// above only sees the client-side model (e.g. claude-opus-4-6); the
+	// claude → gpt-5.x mapping happens here at line ~134 via upstreamModel.
+	// Without this second strip, gpt-5 reasoning models still receive
+	// temperature/top_p and return 400 "Unsupported parameter" — exactly
+	// the bug PR #2580 set out to fix.
+	if apicompat.IsReasoningModel(upstreamModel) {
+		responsesReq.Temperature = nil
+		responsesReq.TopP = nil
+	}
 	if previousResponseID != "" {
 		responsesReq.PreviousResponseID = previousResponseID
 		trimAnthropicCompatResponsesInputToLatestTurn(responsesReq)
