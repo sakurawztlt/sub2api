@@ -249,17 +249,17 @@ type AnthropicDelta struct {
 
 // ResponsesRequest is the request body for POST /v1/responses.
 type ResponsesRequest struct {
-	Model           string              `json:"model"`
-	Instructions    string              `json:"instructions,omitempty"`
-	Input           json.RawMessage     `json:"input"` // string or []ResponsesInputItem
-	MaxOutputTokens *int                `json:"max_output_tokens,omitempty"`
-	Temperature     *float64            `json:"temperature,omitempty"`
-	TopP            *float64            `json:"top_p,omitempty"`
-	Stream          bool                `json:"stream,omitempty"`
-	Text            *ResponsesText      `json:"text,omitempty"`
-	Tools           []ResponsesTool     `json:"tools,omitempty"`
-	Include         []string            `json:"include,omitempty"`
-	Store           *bool               `json:"store,omitempty"`
+	Model           string          `json:"model"`
+	Instructions    string          `json:"instructions,omitempty"`
+	Input           json.RawMessage `json:"input"` // string or []ResponsesInputItem
+	MaxOutputTokens *int            `json:"max_output_tokens,omitempty"`
+	Temperature     *float64        `json:"temperature,omitempty"`
+	TopP            *float64        `json:"top_p,omitempty"`
+	Stream          bool            `json:"stream,omitempty"`
+	Text            *ResponsesText  `json:"text,omitempty"`
+	Tools           []ResponsesTool `json:"tools,omitempty"`
+	Include         []string        `json:"include,omitempty"`
+	Store           *bool           `json:"store,omitempty"`
 	// 2026-05-06 partial port of upstream 0584305e (Claude Code compat).
 	// ParallelToolCalls/PromptCacheKey/PreviousResponseID/Text.Verbosity
 	// are needed by openai_messages_continuation/replay_guard wiring to
@@ -585,9 +585,10 @@ type ChatImageURL struct {
 
 // ChatFile contains file data for a file content part (OpenAI Chat
 // Completions multimodal file input). One of:
-//   FileID    (pre-uploaded to OpenAI Files API)
-//   Filename + FileData (base64 data URI in file_data)
-//   Filename + FileURL  (codex upstream PR#2497 — remote URL fetch)
+//
+//	FileID    (pre-uploaded to OpenAI Files API)
+//	Filename + FileData (base64 data URI in file_data)
+//	Filename + FileURL  (codex upstream PR#2497 — remote URL fetch)
 type ChatFile struct {
 	Filename string `json:"filename,omitempty"`
 	FileData string `json:"file_data,omitempty"`

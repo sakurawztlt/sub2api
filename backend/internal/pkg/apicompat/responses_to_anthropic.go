@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/tidwall/sjson"
 )
 
 // generateAnthropicMessageID returns a synthetic id matching Anthropic's
@@ -463,11 +465,51 @@ func FinalizeResponsesAnthropicStream(state *ResponsesEventToAnthropicState) []A
 }
 
 // ResponsesAnthropicEventToSSE formats an AnthropicStreamEvent as an SSE line pair.
+//
+// codex round44 fu62 (2026-05-21): canonical Claude SSE wire shape.
+// Real Claude emits these explicit nulls that the default json.Marshal
+// drops or normalises:
+//
+//   - message_start.message.stop_reason   → null (default: "")
+//   - message_start.message.stop_sequence → null (default: omitted)
+//   - message_delta.delta.stop_sequence   → null (default: omitted)
+//
+// Why patch at the SSE boundary instead of changing struct tags:
+// AnthropicDelta is shared between message_delta and the content_block_delta
+// variants (text_delta / thinking_delta / signature_delta / input_json_delta).
+// Removing omitempty on AnthropicDelta.StopSequence would emit
+// `"stop_sequence":null` inside every text_delta event too, which real
+// Claude never does. Patching here keeps both shapes byte-correct.
+//
+// Same logic for AnthropicResponse.StopReason: it lives on the
+// non-streaming JSON response as well, where the empty-string form is
+// fine; we only need to canonicalise the streaming message_start case.
 func ResponsesAnthropicEventToSSE(evt AnthropicStreamEvent) (string, error) {
 	data, err := json.Marshal(evt)
 	if err != nil {
 		return "", err
 	}
+
+	switch evt.Type {
+	case "message_start":
+		if evt.Message != nil {
+			if patched, perr := sjson.SetRawBytes(data, "message.stop_reason", []byte("null")); perr == nil {
+				data = patched
+			}
+			if patched, perr := sjson.SetRawBytes(data, "message.stop_sequence", []byte("null")); perr == nil {
+				data = patched
+			}
+		}
+	case "message_delta":
+		if evt.Delta != nil {
+			// delta.stop_reason is set by the caller ("end_turn", "tool_use",
+			// "stop_sequence", ...) — only stop_sequence needs the explicit null.
+			if patched, perr := sjson.SetRawBytes(data, "delta.stop_sequence", []byte("null")); perr == nil {
+				data = patched
+			}
+		}
+	}
+
 	return fmt.Sprintf("event: %s\ndata: %s\n\n", evt.Type, data), nil
 }
 
