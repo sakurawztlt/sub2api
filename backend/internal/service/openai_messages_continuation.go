@@ -201,22 +201,51 @@ func describeTurnStateKeySource(c *gin.Context, promptCacheKey string) string {
 }
 
 // hasMetadataUserSessionID reports whether the request body has a
-// non-empty metadata.user_id.session_id field. fu55 records this only
-// as an observability boolean (has_metadata_session) — the value is
-// NOT used to derive the cache key yet. A fu56+ round may promote it
-// to a real key source; for now, ops uses this signal to estimate how
-// many requests would benefit from metadata-based derivation.
+// non-empty session id inside metadata.user_id. fu55 records this
+// only as an observability boolean (has_metadata_session) — the value
+// is NOT used to derive the cache key yet. A fu56+ round may promote
+// it to a real key source; for now, ops uses this signal to estimate
+// how many requests would benefit from metadata-based derivation.
 //
 // Privacy: returns bool, never the session id itself.
+//
+// codex round37 fu56 (2026-05-20): metadata.user_id has two real-world
+// shapes in our traffic. The original fu55 helper only checked the
+// nested-object path and missed the gcr-injected mainstream shape:
+//
+//	(A) JSON STRING form (gcr-injected main stream, Claude Code >= 2.1.78):
+//	    {"metadata":{"user_id":"{\"device_id\":\"...\",\"session_id\":\"...\"}"}}
+//	(B) Legacy concatenated string (Claude Code < 2.1.78):
+//	    {"metadata":{"user_id":"user_<64hex>_account__session_<36uuid>"}}
+//	(C) Nested object (some custom integrations / tests):
+//	    {"metadata":{"user_id":{"session_id":"..."}}}
+//
+// ParseMetadataUserID handles (A) and (B) natively. The nested-path
+// fallback covers (C). Without (A) coverage, has_metadata_session
+// would falsely report false on the dominant production traffic
+// shape and ops would systematically under-count requests that
+// could benefit from a fu57+ metadata-derived cache key.
 func hasMetadataUserSessionID(body []byte) bool {
 	if len(body) == 0 {
 		return false
 	}
-	v := gjson.GetBytes(body, "metadata.user_id.session_id")
-	if !v.Exists() {
-		return false
+	// (A) + (B): metadata.user_id as a string — try ParseMetadataUserID,
+	// which handles both the JSON-encoded JSON-string form and the
+	// legacy concatenated form.
+	if raw := strings.TrimSpace(gjson.GetBytes(body, "metadata.user_id").String()); raw != "" {
+		if parsed := ParseMetadataUserID(raw); parsed != nil && strings.TrimSpace(parsed.SessionID) != "" {
+			return true
+		}
 	}
-	return strings.TrimSpace(v.String()) != ""
+	// (C) fallback: nested object path. ParseMetadataUserID rejects
+	// inputs without a device_id, so a nested object that only carries
+	// a session_id reaches us here.
+	if v := gjson.GetBytes(body, "metadata.user_id.session_id"); v.Exists() {
+		if strings.TrimSpace(v.String()) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // openAICompatTurnStateKey derives the cache key for the

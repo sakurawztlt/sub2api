@@ -448,10 +448,13 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// 058 step 2: Codex SSE returns x-codex-turn-state on the success header.
 	// Cache it under the prompt cache key so the next turn can resume the
 	// same internal slot.
-	if account.Type == AccountTypeOAuth && promptCacheKey != "" {
-		if turnState := strings.TrimSpace(resp.Header.Get("x-codex-turn-state")); turnState != "" {
-			s.bindOpenAICompatSessionTurnState(ctx, c, account, promptCacheKey, turnState)
-		}
+	//
+	// codex round37 fu56 (2026-05-20): capture the outbound signal too so
+	// the summary log can distinguish "our cache fed prior state in" from
+	// "upstream emitted fresh state we'll cache for next turn".
+	upstreamTurnState := strings.TrimSpace(resp.Header.Get("x-codex-turn-state"))
+	if account.Type == AccountTypeOAuth && promptCacheKey != "" && upstreamTurnState != "" {
+		s.bindOpenAICompatSessionTurnState(ctx, c, account, promptCacheKey, upstreamTurnState)
 	}
 
 	// 9. Handle normal response
@@ -473,6 +476,8 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	streamMeta.TurnStateCacheHit = strings.TrimSpace(compatTurnState) != ""
 	streamMeta.HasSessionHeader = c != nil && strings.TrimSpace(c.GetHeader("X-Claude-Code-Session-Id")) != ""
 	streamMeta.HasMetadataSession = hasMetadataUserSessionID(body)
+	// codex round37 fu56 (2026-05-20): outbound signal — see field doc.
+	streamMeta.UpstreamTurnStateReturned = upstreamTurnState != ""
 	if clientStream {
 		result, handleErr = s.handleAnthropicStreamingResponse(resp, c, originalModel, billingModel, upstreamModel, startTime, len(body), streamMeta)
 	} else {
@@ -1246,14 +1251,25 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				zap.String("prompt_cache_key_sha", meta.PromptCacheKeySha256),
 				zap.Bool("has_previous_response_id", meta.HasPreviousResponseID),
 				zap.Bool("has_turn_state", meta.HasTurnState),
-				// codex round36 fu55 (2026-05-20): observability for the
-				// fu54 turn_state cache. turn_state_hit is the INBOUND cache
-				// lookup (sub2api side) — DIFFERENT from has_turn_state above
-				// (which is the upstream-side response header). Grep these
-				// together with has_turn_state to verify fu54 is effective:
-				// source=session_header + turn_state_hit=true → fu54 working.
+				// codex round36 fu55 / round37 fu56 (2026-05-20):
+				// observability for the fu54 turn_state cache.
+				//
+				// has_turn_state and turn_state_hit are SYNONYMS — both
+				// reflect the INBOUND sub2api cache lookup at request time.
+				// fu55 originally claimed has_turn_state was outbound;
+				// codex round37 corrected that — it has always been
+				// inbound (codex round 11al introduced it as such). The
+				// duplicate field name is kept for grep compatibility
+				// across the older and newer ops log query templates.
+				//
+				// upstream_turn_state_returned is the TRUE outbound signal
+				// (resp.Header["x-codex-turn-state"] != "" for this turn).
+				// Together they form the fu54 effectiveness story:
+				//   turn_state_hit=true                 → our cache fed prior state IN
+				//   upstream_turn_state_returned=true   → upstream emitted fresh state OUT
 				zap.String("turn_state_key_source", meta.TurnStateKeySource),
 				zap.Bool("turn_state_hit", meta.TurnStateCacheHit),
+				zap.Bool("upstream_turn_state_returned", meta.UpstreamTurnStateReturned),
 				zap.Bool("has_session_header", meta.HasSessionHeader),
 				zap.Bool("has_metadata_session", meta.HasMetadataSession),
 				zap.Int("time_to_headers_ms", meta.TimeToHeadersMs),

@@ -242,21 +242,49 @@ type streamReqMeta struct {
 	MessagesCount         int    // gjson 数 body.messages 长度
 	PromptCacheKeySha256  string // sha256(promptCacheKey) hex 前 16 位
 	HasPreviousResponseID bool
-	HasTurnState          bool   // upstream RESPONSE carried x-codex-turn-state (outbound)
-	ProxyHash             string // proxy URL sha256 前 12 位 (无 proxy=空)
 
-	// codex round36 fu55 (2026-05-20): observability fields for the
-	// fu54 turn_state cache. These describe the INBOUND cache lookup
-	// (sub2api side), not the upstream response — do NOT confuse with
-	// HasTurnState above.
+	// HasTurnState — codex round37 fu56 (2026-05-20): clarified semantics.
+	// This field reflects whether the INBOUND cache lookup
+	// (getOpenAICompatSessionTurnState) returned a non-empty value at
+	// request time. It is fed from the compatTurnState local variable in
+	// the handler, NOT from the upstream response. fu55 added a
+	// misleading "(outbound)" comment that codex round37 flagged —
+	// codex round 11al introduced this field as inbound and it has
+	// always been inbound.
+	//
+	// For the upstream-side signal (did the server return a fresh
+	// x-codex-turn-state for THIS turn) use UpstreamTurnStateReturned
+	// below.
+	HasTurnState bool
+	ProxyHash    string // proxy URL sha256 前 12 位 (无 proxy=空)
+
+	// codex round36 fu55 (2026-05-20) / round37 fu56 (2026-05-20):
+	// observability fields for the fu54 turn_state cache.
 	//
 	// codex constraint: never log the raw session id. Only enum / bool
 	// fields. The raw header value lives in the request context, never
 	// in our log lines.
 	TurnStateKeySource string // enum: "session_header" | "metadata_session" | "prompt_cache_key" | "none"
-	TurnStateCacheHit  bool   // true when getOpenAICompatSessionTurnState returned a non-empty value
-	HasSessionHeader   bool   // X-Claude-Code-Session-Id header was present and non-empty
-	HasMetadataSession bool   // body.metadata.user_id.session_id was present and non-empty
+
+	// TurnStateCacheHit — same semantics as HasTurnState above (both
+	// reflect the INBOUND cache lookup result). codex round37 kept this
+	// alongside HasTurnState for grep compatibility with the new log
+	// field name introduced in fu55; the two values are always equal.
+	TurnStateCacheHit bool
+
+	HasSessionHeader   bool // X-Claude-Code-Session-Id header was present and non-empty
+	HasMetadataSession bool // metadata.user_id session id was present and non-empty (see hasMetadataUserSessionID for the shapes covered)
+
+	// UpstreamTurnStateReturned — codex round37 fu56 (2026-05-20): the
+	// OUTBOUND signal. True when the upstream HTTP response carried a
+	// non-empty `x-codex-turn-state` header for THIS turn. Distinct
+	// from HasTurnState / TurnStateCacheHit (which describe what
+	// sub2api had in cache before sending the request).
+	//
+	// Grep pattern for fu54 effectiveness:
+	//   turn_state_hit=true   → our cache fed prior state into the request
+	//   upstream_turn_state_returned=true → upstream emitted fresh state we'll cache for the next turn
+	UpstreamTurnStateReturned bool
 }
 
 type OpenAIForwardResult struct {
