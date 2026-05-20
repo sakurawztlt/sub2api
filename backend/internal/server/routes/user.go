@@ -32,6 +32,7 @@ func RegisterUserRoutes(
 			user.DELETE("/account-bindings/:provider", h.User.UnbindIdentity)
 			user.POST("/auth-identities/bind/start", h.User.StartIdentityBinding)
 			user.GET("/platform-quotas", h.User.GetMyPlatformQuotas)
+			user.GET("/api-keys/:id/usage/daily", h.Usage.GetMyAPIKeyDailyUsage)
 
 			// 通知邮箱管理
 			notifyEmail := user.Group("/notify-email")
