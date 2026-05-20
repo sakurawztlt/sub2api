@@ -1480,6 +1480,12 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				zap.String("client_request_id", func() string { v, _ := c.Request.Context().Value(ctxkey.ClientRequestID).(string); return v }()),
 				zap.String("gcr_request_id", c.Request.Header.Get("X-GCR-Request-Id")),
 				zap.String("newapi_request_id", c.Request.Header.Get("X-Newapi-Request-Id")),
+				// codex round35 fu54 (2026-05-20): NewAPI/QuantumNous forks
+				// send X-Oneapi-Request-Id (not X-Newapi). Summary log at
+				// line 1218-1219 already records both — mirror it here so
+				// timeout triage doesn't need to chase the request via two
+				// different log lines.
+				zap.String("oneapi_request_id", c.Request.Header.Get("X-Oneapi-Request-Id")),
 				zap.Int("inbound_body_len", inboundBodyLen),
 				zap.Bool("large_context_request", IsLargeContextCtx(c.Request.Context())),
 				zap.String("gcr_depth_bucket", c.Request.Header.Get("X-GCR-Depth-Bucket")),
@@ -1532,6 +1538,8 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				zap.String("client_request_id", clientReqID),
 				zap.String("gcr_request_id", c.Request.Header.Get("X-GCR-Request-Id")),
 				zap.String("newapi_request_id", c.Request.Header.Get("X-Newapi-Request-Id")),
+				// codex round35 fu54: mirror oneapi_request_id (see data interval timeout above).
+				zap.String("oneapi_request_id", c.Request.Header.Get("X-Oneapi-Request-Id")),
 				zap.String("model", originalModel),
 				zap.Duration("timeout", firstMeaningfulTimeout),
 				zap.Bool("header_written", headerWritten),

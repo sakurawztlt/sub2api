@@ -157,6 +157,55 @@ func openAICompatSessionResponseKey(c *gin.Context, account *Account, promptCach
 	}, "\x00")
 }
 
+// openAICompatTurnStateKey derives the cache key for the
+// x-codex-turn-state continuation (codex OAuth /v1/responses path).
+//
+// codex round35 fu54 (2026-05-20): prefer a conversation-stable
+// session identifier (X-Claude-Code-Session-Id header) over the
+// rolling promptCacheKey when one is present. The promptCacheKey
+// rolls every turn (prefix hash of messages), so binding turn_state
+// under that key means follow-up turns within the same conversation
+// can never hit — gcr reports has_turn_state=false on every turn
+// even when the conversation is continuing. A conversation-level
+// session id stays stable across turns and tracks continuation state
+// correctly.
+//
+// The previous_response_id cache (store=true path) intentionally
+// still uses openAICompatSessionResponseKey above to keep this change
+// scoped to the OAuth continuation issue codex actually flagged.
+// Both keys share s.openaiCompatSessionResponses, but the "turnstate"
+// namespace bytes guarantee the two key spaces are disjoint —
+// a request that has no session id and falls back to promptCacheKey
+// still gets a distinct entry from the response-id binding for the
+// same (account, apiKeyID, promptCacheKey) triple.
+func openAICompatTurnStateKey(c *gin.Context, account *Account, promptCacheKey string) string {
+	if account == nil {
+		return ""
+	}
+	primary := ""
+	if c != nil {
+		if sid := strings.TrimSpace(c.GetHeader("X-Claude-Code-Session-Id")); sid != "" {
+			primary = sid
+		}
+	}
+	if primary == "" {
+		primary = strings.TrimSpace(promptCacheKey)
+	}
+	if primary == "" {
+		return ""
+	}
+	apiKeyID := int64(0)
+	if c != nil {
+		apiKeyID = getAPIKeyIDFromContext(c)
+	}
+	return strings.Join([]string{
+		strconv.FormatInt(account.ID, 10),
+		strconv.FormatInt(apiKeyID, 10),
+		"turnstate",
+		primary,
+	}, "\x00")
+}
+
 func (s *OpenAIGatewayService) getOpenAICompatSessionResponseID(_ context.Context, c *gin.Context, account *Account, promptCacheKey string) string {
 	if s == nil {
 		return ""
@@ -289,7 +338,9 @@ func (s *OpenAIGatewayService) getOpenAICompatSessionTurnState(_ context.Context
 	if s == nil {
 		return ""
 	}
-	key := openAICompatSessionResponseKey(c, account, promptCacheKey)
+	// codex round35 fu54: turn_state key derives from session-id when
+	// present (stable across follow-up turns) — see openAICompatTurnStateKey.
+	key := openAICompatTurnStateKey(c, account, promptCacheKey)
 	if key == "" {
 		return ""
 	}
@@ -312,7 +363,9 @@ func (s *OpenAIGatewayService) bindOpenAICompatSessionTurnState(_ context.Contex
 	if s == nil {
 		return
 	}
-	key := openAICompatSessionResponseKey(c, account, promptCacheKey)
+	// codex round35 fu54: see getOpenAICompatSessionTurnState — same key
+	// namespace.
+	key := openAICompatTurnStateKey(c, account, promptCacheKey)
 	state := strings.TrimSpace(turnState)
 	if key == "" || state == "" {
 		return
@@ -321,6 +374,9 @@ func (s *OpenAIGatewayService) bindOpenAICompatSessionTurnState(_ context.Contex
 		TurnState: state,
 		ExpiresAt: time.Now().Add(s.openAIWSResponseStickyTTL()),
 	}
+	// The turnstate-namespaced key never collides with the response_id key
+	// space, but preserve any state that might already be there
+	// (e.g. a future caller in the same namespace) defensively.
 	if raw, ok := s.openaiCompatSessionResponses.Load(key); ok {
 		if existing, ok := raw.(openAICompatSessionResponseBinding); ok {
 			binding.ResponseID = existing.ResponseID
