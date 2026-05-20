@@ -463,6 +463,16 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// 能写出 account_id/type / proxy_hash / messages_count / cache key
 	// hash / continuation 状态 / time_to_headers_ms.
 	streamMeta := computeStreamReqMeta(account, body, promptCacheKey, previousResponseID, compatTurnState, proxyURL, timeToHeadersMs)
+	// codex round36 fu55 (2026-05-20): annotate the turn_state cache
+	// lookup for the large_context_request summary log. Only enum / bool —
+	// never the raw session id (codex privacy constraint). Set unconditionally
+	// (not gated on shouldAutoInjectPromptCacheKeyForCompat) so the
+	// "lookup never attempted" case is recorded as source=none + hit=false,
+	// distinguishing it from "tried + missed".
+	streamMeta.TurnStateKeySource = describeTurnStateKeySource(c, promptCacheKey)
+	streamMeta.TurnStateCacheHit = strings.TrimSpace(compatTurnState) != ""
+	streamMeta.HasSessionHeader = c != nil && strings.TrimSpace(c.GetHeader("X-Claude-Code-Session-Id")) != ""
+	streamMeta.HasMetadataSession = hasMetadataUserSessionID(body)
 	if clientStream {
 		result, handleErr = s.handleAnthropicStreamingResponse(resp, c, originalModel, billingModel, upstreamModel, startTime, len(body), streamMeta)
 	} else {
@@ -1236,6 +1246,16 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				zap.String("prompt_cache_key_sha", meta.PromptCacheKeySha256),
 				zap.Bool("has_previous_response_id", meta.HasPreviousResponseID),
 				zap.Bool("has_turn_state", meta.HasTurnState),
+				// codex round36 fu55 (2026-05-20): observability for the
+				// fu54 turn_state cache. turn_state_hit is the INBOUND cache
+				// lookup (sub2api side) — DIFFERENT from has_turn_state above
+				// (which is the upstream-side response header). Grep these
+				// together with has_turn_state to verify fu54 is effective:
+				// source=session_header + turn_state_hit=true → fu54 working.
+				zap.String("turn_state_key_source", meta.TurnStateKeySource),
+				zap.Bool("turn_state_hit", meta.TurnStateCacheHit),
+				zap.Bool("has_session_header", meta.HasSessionHeader),
+				zap.Bool("has_metadata_session", meta.HasMetadataSession),
 				zap.Int("time_to_headers_ms", meta.TimeToHeadersMs),
 			)
 			// codex round31 fu50 (2026-05-19): explicit warn when the

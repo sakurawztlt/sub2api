@@ -157,6 +157,68 @@ func openAICompatSessionResponseKey(c *gin.Context, account *Account, promptCach
 	}, "\x00")
 }
 
+// codex round36 fu55 (2026-05-20): enum constants for the
+// turn_state_key_source observability field on the
+// large_context_request summary log. These describe which derivation
+// path openAICompatTurnStateKey took for the current request. They
+// are NEVER fed back into key bytes — they exist only so ops grepping
+// the log can quickly distinguish "Claude Code header path" from
+// "rolling promptCacheKey path" from "no session signal at all".
+//
+// The "metadata_session" value is reserved: fu55 records whether the
+// body has metadata.user_id.session_id (via the has_metadata_session
+// bool) but does NOT yet derive the cache key from it. A future
+// round may promote it to a key source between session_header and
+// prompt_cache_key. Keeping the constant here documents the planned
+// enum surface so log grep templates can be written ahead of time.
+const (
+	turnStateKeySourceNone            = "none"
+	turnStateKeySourceSessionHeader   = "session_header"
+	turnStateKeySourceMetadataSession = "metadata_session" // reserved for fu56+
+	turnStateKeySourcePromptCacheKey  = "prompt_cache_key"
+)
+
+// describeTurnStateKeySource mirrors the precedence in
+// openAICompatTurnStateKey for observability. Currently fu54 only
+// honors header → promptCacheKey, so the returned value will be
+// exactly one of: turnStateKeySourceSessionHeader,
+// turnStateKeySourcePromptCacheKey, turnStateKeySourceNone. The
+// metadata_session value is reserved (see the constant block above).
+//
+// IMPORTANT: this MUST stay in lock-step with openAICompatTurnStateKey
+// — if a future round adds a new derivation source there, add it here
+// too. Drift between the two will mislead ops triage.
+func describeTurnStateKeySource(c *gin.Context, promptCacheKey string) string {
+	if c != nil {
+		if sid := strings.TrimSpace(c.GetHeader("X-Claude-Code-Session-Id")); sid != "" {
+			return turnStateKeySourceSessionHeader
+		}
+	}
+	if strings.TrimSpace(promptCacheKey) != "" {
+		return turnStateKeySourcePromptCacheKey
+	}
+	return turnStateKeySourceNone
+}
+
+// hasMetadataUserSessionID reports whether the request body has a
+// non-empty metadata.user_id.session_id field. fu55 records this only
+// as an observability boolean (has_metadata_session) — the value is
+// NOT used to derive the cache key yet. A fu56+ round may promote it
+// to a real key source; for now, ops uses this signal to estimate how
+// many requests would benefit from metadata-based derivation.
+//
+// Privacy: returns bool, never the session id itself.
+func hasMetadataUserSessionID(body []byte) bool {
+	if len(body) == 0 {
+		return false
+	}
+	v := gjson.GetBytes(body, "metadata.user_id.session_id")
+	if !v.Exists() {
+		return false
+	}
+	return strings.TrimSpace(v.String()) != ""
+}
+
 // openAICompatTurnStateKey derives the cache key for the
 // x-codex-turn-state continuation (codex OAuth /v1/responses path).
 //

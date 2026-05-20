@@ -242,8 +242,21 @@ type streamReqMeta struct {
 	MessagesCount         int    // gjson 数 body.messages 长度
 	PromptCacheKeySha256  string // sha256(promptCacheKey) hex 前 16 位
 	HasPreviousResponseID bool
-	HasTurnState          bool
+	HasTurnState          bool   // upstream RESPONSE carried x-codex-turn-state (outbound)
 	ProxyHash             string // proxy URL sha256 前 12 位 (无 proxy=空)
+
+	// codex round36 fu55 (2026-05-20): observability fields for the
+	// fu54 turn_state cache. These describe the INBOUND cache lookup
+	// (sub2api side), not the upstream response — do NOT confuse with
+	// HasTurnState above.
+	//
+	// codex constraint: never log the raw session id. Only enum / bool
+	// fields. The raw header value lives in the request context, never
+	// in our log lines.
+	TurnStateKeySource string // enum: "session_header" | "metadata_session" | "prompt_cache_key" | "none"
+	TurnStateCacheHit  bool   // true when getOpenAICompatSessionTurnState returned a non-empty value
+	HasSessionHeader   bool   // X-Claude-Code-Session-Id header was present and non-empty
+	HasMetadataSession bool   // body.metadata.user_id.session_id was present and non-empty
 }
 
 type OpenAIForwardResult struct {
