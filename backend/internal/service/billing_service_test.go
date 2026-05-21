@@ -522,6 +522,98 @@ func TestCalculateCostWithServiceTier_GPT55PriorityIsNot_2x(t *testing.T) {
 		priorityCost.OutputCost, baseCost.OutputCost*2)
 }
 
+// codex round56 fu66 (2026-05-21): priority cache_creation 也按 2.5x 走.
+// fu65 漏了, computeCacheCreationCost 仍按 standard CacheCreationPricePerToken
+// 算; 管理员 pass priority + cache write 时少计费. fu66 加
+// CacheCreationPricePerTokenPriority 字段 + priority swap branch.
+func TestRound56_GPT55PriorityCacheCreationUses_2_5x(t *testing.T) {
+	svc := newTestBillingService()
+	tokens := UsageTokens{InputTokens: 100, OutputTokens: 50, CacheCreationTokens: 40}
+
+	baseCost, err := svc.CalculateCost("gpt-5.5", tokens, 1.0)
+	require.NoError(t, err)
+	priorityCost, err := svc.CalculateCostWithServiceTier("gpt-5.5", tokens, 1.0, "priority")
+	require.NoError(t, err)
+
+	require.InDelta(t, baseCost.CacheCreationCost*2.5, priorityCost.CacheCreationCost, 1e-10,
+		"gpt-5.5 priority cache_creation must be 2.5x base (codex round56 #1)")
+	// 全 4 个 cost dim 一致 2.5x
+	require.InDelta(t, baseCost.InputCost*2.5, priorityCost.InputCost, 1e-10)
+	require.InDelta(t, baseCost.OutputCost*2.5, priorityCost.OutputCost, 1e-10)
+}
+
+// codex round56 fu66 (2026-05-21): long-context multiplier 之前只乘 input/
+// output. cached input 在长上下文也上浮 (官方 GPT-5.5 doc), cache write 跟
+// input 同价格族也上浮. 用 InputMultiplier (input-side 流量).
+func TestRound56_LongContext_CacheReadAlsoUsesInputMultiplier(t *testing.T) {
+	svc := newTestBillingService()
+
+	// 普通 (input + cache_read 合计 < 272K)
+	smallTokens := UsageTokens{InputTokens: 1000, OutputTokens: 100, CacheReadTokens: 500}
+	smallCost, err := svc.CalculateCost("gpt-5.5", smallTokens, 1.0)
+	require.NoError(t, err)
+
+	// 触发长上下文 (input + cache_read 合计 > 272K)
+	largeTokens := UsageTokens{InputTokens: 200000, OutputTokens: 100, CacheReadTokens: 100000}
+	largeCost, err := svc.CalculateCost("gpt-5.5", largeTokens, 1.0)
+	require.NoError(t, err)
+
+	// gpt-5.5 long-context input multiplier = 2x; CacheReadCost 每 token 应上浮 2x.
+	smallPerToken := smallCost.CacheReadCost / float64(smallTokens.CacheReadTokens)
+	largePerToken := largeCost.CacheReadCost / float64(largeTokens.CacheReadTokens)
+	require.InDelta(t, smallPerToken*2.0, largePerToken, 1e-12,
+		"gpt-5.5 long-context cache_read 单价必须 2x 上浮 (codex round56 #2)")
+}
+
+func TestRound56_LongContext_CacheCreationAlsoUsesInputMultiplier(t *testing.T) {
+	svc := newTestBillingService()
+
+	smallTokens := UsageTokens{InputTokens: 1000, OutputTokens: 100, CacheCreationTokens: 500}
+	smallCost, err := svc.CalculateCost("gpt-5.5", smallTokens, 1.0)
+	require.NoError(t, err)
+
+	// shouldApplySessionLongContextPricing 用 InputTokens + CacheReadTokens
+	// 跟阈值比较 (cache_creation 不计入). 用 InputTokens > 272K 触发.
+	largeTokens := UsageTokens{InputTokens: 280000, OutputTokens: 100, CacheCreationTokens: 100000}
+	largeCost, err := svc.CalculateCost("gpt-5.5", largeTokens, 1.0)
+	require.NoError(t, err)
+
+	smallPerToken := smallCost.CacheCreationCost / float64(smallTokens.CacheCreationTokens)
+	largePerToken := largeCost.CacheCreationCost / float64(largeTokens.CacheCreationTokens)
+	require.InDelta(t, smallPerToken*2.0, largePerToken, 1e-12,
+		"gpt-5.5 long-context cache_creation 单价必须 2x 上浮 (codex round56 #2)")
+}
+
+// codex round56 fu66 #3: codex 担心 JSON 缺 gpt-5.5 entry → UI/枚举接口
+// 可能看不到. 真路径 verify: GetModelPricing("gpt-5.5") via fallback 必须
+// 返完整 ModelPricing (priority + long-context + cache_creation 全字段).
+// 不依赖 model_prices_and_context_window.json.
+func TestRound56_GPT55FallbackProvidesCompletePriorityPricing(t *testing.T) {
+	svc := newTestBillingService()
+	pricing, err := svc.GetModelPricing("gpt-5.5")
+	require.NoError(t, err)
+	require.NotNil(t, pricing)
+
+	// 标准价格
+	require.InDelta(t, 5e-6, pricing.InputPricePerToken, 1e-12)
+	require.InDelta(t, 30e-6, pricing.OutputPricePerToken, 1e-12)
+	require.InDelta(t, 0.5e-6, pricing.CacheReadPricePerToken, 1e-12)
+	require.InDelta(t, 5e-6, pricing.CacheCreationPricePerToken, 1e-12)
+
+	// Priority 2.5x 全字段
+	require.InDelta(t, 12.5e-6, pricing.InputPricePerTokenPriority, 1e-12,
+		"priority input 字段必须从 fallback 走通 (codex round56 #3)")
+	require.InDelta(t, 75e-6, pricing.OutputPricePerTokenPriority, 1e-12)
+	require.InDelta(t, 1.25e-6, pricing.CacheReadPricePerTokenPriority, 1e-12)
+	require.InDelta(t, 12.5e-6, pricing.CacheCreationPricePerTokenPriority, 1e-12,
+		"priority cache_creation 字段必须从 fallback 走通 (codex round56 #3)")
+
+	// Long-context multiplier 字段
+	require.Equal(t, 272000, pricing.LongContextInputThreshold)
+	require.InDelta(t, 2.0, pricing.LongContextInputMultiplier, 1e-12)
+	require.InDelta(t, 1.5, pricing.LongContextOutputMultiplier, 1e-12)
+}
+
 func TestCalculateCostWithServiceTier_FlexAppliesHalfMultiplier(t *testing.T) {
 	svc := newTestBillingService()
 	tokens := UsageTokens{InputTokens: 100, OutputTokens: 50, CacheCreationTokens: 40, CacheReadTokens: 20}

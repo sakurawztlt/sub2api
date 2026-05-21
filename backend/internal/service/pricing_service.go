@@ -52,20 +52,21 @@ var (
 	// openAIGPT54FallbackPricing → 真用 gpt-5.5 但按 5.4 半价记账, NewAPI
 	// 报表跟 OpenAI 实际账单偏离 ~2x. Opus 升 gpt-5.5 后这条必须修.
 	openAIGPT55FallbackPricing = &LiteLLMModelPricing{
-		InputCostPerToken:               5e-06,    // $5 per MTok
-		InputCostPerTokenPriority:       1.25e-05, // $12.5 per MTok (2.5x)
-		OutputCostPerToken:              3e-05,    // $30 per MTok
-		OutputCostPerTokenPriority:      7.5e-05,  // $75 per MTok (2.5x)
-		CacheCreationInputTokenCost:     5e-06,    // $5 per MTok (跟 input 同价)
-		CacheReadInputTokenCost:         5e-07,    // $0.5 per MTok
-		CacheReadInputTokenCostPriority: 1.25e-06, // $1.25 per MTok (2.5x)
-		LongContextInputTokenThreshold:  272000,
-		LongContextInputCostMultiplier:  2.0,
-		LongContextOutputCostMultiplier: 1.5,
-		LiteLLMProvider:                 "openai",
-		Mode:                            "chat",
-		SupportsPromptCaching:           true,
-		SupportsServiceTier:             true, // gpt-5.5 真支持 priority tier
+		InputCostPerToken:                   5e-06,    // $5 per MTok
+		InputCostPerTokenPriority:           1.25e-05, // $12.5 per MTok (2.5x)
+		OutputCostPerToken:                  3e-05,    // $30 per MTok
+		OutputCostPerTokenPriority:          7.5e-05,  // $75 per MTok (2.5x)
+		CacheCreationInputTokenCost:         5e-06,    // $5 per MTok (跟 input 同价)
+		CacheCreationInputTokenCostPriority: 1.25e-05, // $12.5 per MTok (2.5x, codex round56 fu66)
+		CacheReadInputTokenCost:             5e-07,    // $0.5 per MTok
+		CacheReadInputTokenCostPriority:     1.25e-06, // $1.25 per MTok (2.5x)
+		LongContextInputTokenThreshold:      272000,
+		LongContextInputCostMultiplier:      2.0,
+		LongContextOutputCostMultiplier:     1.5,
+		LiteLLMProvider:                     "openai",
+		Mode:                                "chat",
+		SupportsPromptCaching:               true,
+		SupportsServiceTier:                 true, // gpt-5.5 真支持 priority tier
 	}
 	openAIGPT54MiniFallbackPricing = &LiteLLMModelPricing{
 		InputCostPerToken:       7.5e-07,
@@ -93,6 +94,7 @@ type LiteLLMModelPricing struct {
 	OutputCostPerToken                  float64 `json:"output_cost_per_token"`
 	OutputCostPerTokenPriority          float64 `json:"output_cost_per_token_priority"`
 	CacheCreationInputTokenCost         float64 `json:"cache_creation_input_token_cost"`
+	CacheCreationInputTokenCostPriority float64 `json:"cache_creation_input_token_cost_priority"` // codex round56 fu66
 	CacheCreationInputTokenCostAbove1hr float64 `json:"cache_creation_input_token_cost_above_1hr"`
 	CacheReadInputTokenCost             float64 `json:"cache_read_input_token_cost"`
 	CacheReadInputTokenCostPriority     float64 `json:"cache_read_input_token_cost_priority"`
@@ -120,6 +122,7 @@ type LiteLLMRawEntry struct {
 	OutputCostPerToken                  *float64 `json:"output_cost_per_token"`
 	OutputCostPerTokenPriority          *float64 `json:"output_cost_per_token_priority"`
 	CacheCreationInputTokenCost         *float64 `json:"cache_creation_input_token_cost"`
+	CacheCreationInputTokenCostPriority *float64 `json:"cache_creation_input_token_cost_priority"` // codex round56 fu66
 	CacheCreationInputTokenCostAbove1hr *float64 `json:"cache_creation_input_token_cost_above_1hr"`
 	CacheReadInputTokenCost             *float64 `json:"cache_read_input_token_cost"`
 	CacheReadInputTokenCostPriority     *float64 `json:"cache_read_input_token_cost_priority"`
@@ -430,6 +433,9 @@ func (s *PricingService) parsePricingData(body []byte) (map[string]*LiteLLMModel
 		}
 		if entry.CacheCreationInputTokenCost != nil {
 			pricing.CacheCreationInputTokenCost = *entry.CacheCreationInputTokenCost
+		}
+		if entry.CacheCreationInputTokenCostPriority != nil {
+			pricing.CacheCreationInputTokenCostPriority = *entry.CacheCreationInputTokenCostPriority
 		}
 		if entry.CacheCreationInputTokenCostAbove1hr != nil {
 			pricing.CacheCreationInputTokenCostAbove1hr = *entry.CacheCreationInputTokenCostAbove1hr
