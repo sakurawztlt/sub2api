@@ -373,8 +373,11 @@ func TestResolveOpenAIMessagesDispatchMappedModel(t *testing.T) {
 	})
 
 	t.Run("uses_family_default_when_no_override", func(t *testing.T) {
+		// codex round54 fu64 (2026-05-21) Phase 1: Opus family default 升 gpt-5.5
+		// (跟 gcr ModelMap claude-opus-4-7/4-6 → gpt-5.5 同步). Sonnet/Haiku
+		// family default 不动. Detail: openai_messages_dispatch.go const block.
 		apiKey := &service.APIKey{Group: &service.Group{}}
-		require.Equal(t, "gpt-5.4", resolveOpenAIMessagesDispatchMappedModel(apiKey, "claude-opus-4-6"))
+		require.Equal(t, "gpt-5.5", resolveOpenAIMessagesDispatchMappedModel(apiKey, "claude-opus-4-6"))
 		require.Equal(t, "gpt-5.3-codex", resolveOpenAIMessagesDispatchMappedModel(apiKey, "claude-sonnet-4-5-20250929"))
 		require.Equal(t, "gpt-5.4-mini", resolveOpenAIMessagesDispatchMappedModel(apiKey, "claude-haiku-4-5-20251001"))
 	})

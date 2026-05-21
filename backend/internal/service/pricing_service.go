@@ -34,25 +34,38 @@ var (
 		Mode:                            "chat",
 		SupportsPromptCaching:           true,
 	}
-	// codex round54 fu64 (2026-05-21) Phase 1: gpt-5.5 fallback pricing.
-	// 官方价 (developers.openai.com/api/docs/models/gpt-5.5/): input $5/1M,
-	// cached $0.5/1M, output $30/1M, 1.05M context, 128k max output, >272K
-	// 长上下文上浮 (跟 gpt-5.4 同 multiplier). 约 gpt-5.4 的 2x 价.
+	// codex round54 fu64 + round55 fu65 (2026-05-21) Phase 1: gpt-5.5 fallback
+	// pricing. 官方 (developers.openai.com/api/docs/models/gpt-5.5/ +
+	// platform.openai.com/docs/pricing):
+	//   - 标准: input $5/1M, cached $0.5/1M, output $30/1M
+	//   - **Priority 2.5x**: input $12.5/1M, cached $1.25/1M, output $75/1M
+	//   - cache creation 跟 input 同价 (5e-6 标准)
+	//   - 1.05M context, 128k max output, >272K 长上下文 multiplier 跟 gpt-5.4 同
+	//
+	// codex round55 修正 fu64 把 priority 字段补齐 — 不补的话 PricingService 路径
+	// 走这个 fallback 时返 priority=0, 管理员 pass service_tier=priority 会
+	// 完全 underbill. 既然 service_tier 默认会被 scrub_service_tier.go 剥离,
+	// 普通客户触发不到, 但 BillingService.GetModelPricing 优先 PricingService
+	// 路径, 缺 priority 字段就丢 ~2.5x 高价信息.
 	//
 	// 修复 round54 前 bug: gpt-5.5 prefix 在 pricing fallback 路径静默走
-	// openAIGPT54FallbackPricing → 真用 gpt-5.5 但按 5.4 半价记账, 报表
-	// 低估成本. Opus 升 gpt-5.5 后这条必须修, 否则 NewAPI 看到的 quota 跟
-	// OpenAI 实际账单偏离 ~2x.
+	// openAIGPT54FallbackPricing → 真用 gpt-5.5 但按 5.4 半价记账, NewAPI
+	// 报表跟 OpenAI 实际账单偏离 ~2x. Opus 升 gpt-5.5 后这条必须修.
 	openAIGPT55FallbackPricing = &LiteLLMModelPricing{
-		InputCostPerToken:               5e-06, // $5 per MTok
-		OutputCostPerToken:              3e-05, // $30 per MTok
-		CacheReadInputTokenCost:         5e-07, // $0.5 per MTok
+		InputCostPerToken:               5e-06,    // $5 per MTok
+		InputCostPerTokenPriority:       1.25e-05, // $12.5 per MTok (2.5x)
+		OutputCostPerToken:              3e-05,    // $30 per MTok
+		OutputCostPerTokenPriority:      7.5e-05,  // $75 per MTok (2.5x)
+		CacheCreationInputTokenCost:     5e-06,    // $5 per MTok (跟 input 同价)
+		CacheReadInputTokenCost:         5e-07,    // $0.5 per MTok
+		CacheReadInputTokenCostPriority: 1.25e-06, // $1.25 per MTok (2.5x)
 		LongContextInputTokenThreshold:  272000,
 		LongContextInputCostMultiplier:  2.0,
 		LongContextOutputCostMultiplier: 1.5,
 		LiteLLMProvider:                 "openai",
 		Mode:                            "chat",
 		SupportsPromptCaching:           true,
+		SupportsServiceTier:             true, // gpt-5.5 真支持 priority tier
 	}
 	openAIGPT54MiniFallbackPricing = &LiteLLMModelPricing{
 		InputCostPerToken:       7.5e-07,

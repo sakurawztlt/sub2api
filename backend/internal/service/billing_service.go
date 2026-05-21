@@ -217,19 +217,24 @@ func (s *BillingService) initFallbackPricing() {
 		LongContextInputMultiplier:     openAIGPT54LongContextInputMultiplier,
 		LongContextOutputMultiplier:    openAIGPT54LongContextOutputMultiplier,
 	}
-	// codex round54 fu64 (2026-05-21) Phase 1: GPT-5.5 独立定价，跟 gcr Opus
-	// 升 gpt-5.5 同步生效. 官方 (developers.openai.com/api/docs/models/gpt-5.5):
-	// input $5/1M, cached $0.5/1M, output $30/1M; >272K 长上下文跟 gpt-5.4 同
-	// multiplier. 之前 alias 到 gpt-5.4 是 bug — 真用 gpt-5.5 但按 5.4 半价
-	// 记账, NewAPI 报表跟 OpenAI 实际账单偏离 ~2x.
+	// codex round54 fu64 + round55 fu65 (2026-05-21) Phase 1: GPT-5.5 独立定价.
+	// 官方 (developers.openai.com/api/docs/models/gpt-5.5 + platform/docs/pricing):
+	//   - 标准: input $5/1M, cached $0.5/1M, output $30/1M
+	//   - **Priority: 2.5x** standard — input $12.5/1M, cached $1.25/1M, output $75/1M
+	//   - cache creation 跟 input 同价 (5e-6 标准 / 12.5e-6 priority)
+	//   - >272K 长上下文 multiplier 跟 gpt-5.4 同 (2x input / 1.5x output)
+	//
+	// codex round55 修正 fu64 的 priority 2x → 真官方 2.5x. service_tier 通常被
+	// scrub_service_tier.go 剥离, 普通客户触发不到 priority 路径; 但管理员
+	// 或 channel-level priority 配置会用到, fu64 2x 是真 underbill bug.
 	s.fallbackPrices["gpt-5.5"] = &ModelPricing{
-		InputPricePerToken:             5e-6,   // $5 per MTok
-		InputPricePerTokenPriority:     10e-6,  // priority tier 2x (跟 5.4 同 ratio)
-		OutputPricePerToken:            30e-6,  // $30 per MTok
-		OutputPricePerTokenPriority:    60e-6,  // priority tier 2x
-		CacheCreationPricePerToken:     5e-6,   // $5 per MTok (跟 input 同价)
-		CacheReadPricePerToken:         0.5e-6, // $0.5 per MTok
-		CacheReadPricePerTokenPriority: 1e-6,   // priority tier 2x
+		InputPricePerToken:             5e-6,    // $5 per MTok
+		InputPricePerTokenPriority:     12.5e-6, // $12.5 per MTok (2.5x)
+		OutputPricePerToken:            30e-6,   // $30 per MTok
+		OutputPricePerTokenPriority:    75e-6,   // $75 per MTok (2.5x)
+		CacheCreationPricePerToken:     5e-6,    // $5 per MTok (跟 input 同价)
+		CacheReadPricePerToken:         0.5e-6,  // $0.5 per MTok
+		CacheReadPricePerTokenPriority: 1.25e-6, // $1.25 per MTok (2.5x)
 		SupportsCacheBreakdown:         false,
 		LongContextInputThreshold:      openAIGPT54LongContextInputThreshold,
 		LongContextInputMultiplier:     openAIGPT54LongContextInputMultiplier,

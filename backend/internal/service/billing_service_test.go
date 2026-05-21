@@ -480,6 +480,48 @@ func TestCalculateCostWithServiceTier_OpenAIPriorityUsesPriorityPricing(t *testi
 	require.InDelta(t, baseCost.TotalCost*2, priorityCost.TotalCost, 1e-10)
 }
 
+// codex round55 fu65 (2026-05-21): gpt-5.5 priority 真按 2.5x 走 (官方
+// $12.5/$1.25/$75), 不是 fu64 误设的 2x. service_tier=priority 默认被
+// scrub_service_tier.go 剥离, 但管理员/channel-level priority 配置仍可触发,
+// fu64 underbill 是真 bug.
+func TestCalculateCostWithServiceTier_GPT55PriorityUses_2_5x(t *testing.T) {
+	svc := newTestBillingService()
+	tokens := UsageTokens{InputTokens: 100, OutputTokens: 50, CacheReadTokens: 20}
+
+	baseCost, err := svc.CalculateCost("gpt-5.5", tokens, 1.0)
+	require.NoError(t, err)
+
+	priorityCost, err := svc.CalculateCostWithServiceTier("gpt-5.5", tokens, 1.0, "priority")
+	require.NoError(t, err)
+
+	// Official ratio per developers.openai.com docs: priority = 2.5x standard.
+	require.InDelta(t, baseCost.InputCost*2.5, priorityCost.InputCost, 1e-10,
+		"gpt-5.5 priority input must be exactly 2.5x base (codex round55)")
+	require.InDelta(t, baseCost.OutputCost*2.5, priorityCost.OutputCost, 1e-10,
+		"gpt-5.5 priority output must be exactly 2.5x base (codex round55)")
+	require.InDelta(t, baseCost.CacheReadCost*2.5, priorityCost.CacheReadCost, 1e-10,
+		"gpt-5.5 priority cached read must be exactly 2.5x base (codex round55)")
+}
+
+// codex round55 fu65: 明确防 future regression to 2x (codex round54 fu64 bug).
+func TestCalculateCostWithServiceTier_GPT55PriorityIsNot_2x(t *testing.T) {
+	svc := newTestBillingService()
+	tokens := UsageTokens{InputTokens: 100, OutputTokens: 50}
+
+	baseCost, err := svc.CalculateCost("gpt-5.5", tokens, 1.0)
+	require.NoError(t, err)
+	priorityCost, err := svc.CalculateCostWithServiceTier("gpt-5.5", tokens, 1.0, "priority")
+	require.NoError(t, err)
+
+	// 2x 是 fu64 的 underbill bug; 不允许 future regression.
+	require.Greater(t, math.Abs(priorityCost.InputCost-baseCost.InputCost*2), 1e-9,
+		"gpt-5.5 priority input must NOT be 2x (fu64 regression guard); got %v expected ≠ %v",
+		priorityCost.InputCost, baseCost.InputCost*2)
+	require.Greater(t, math.Abs(priorityCost.OutputCost-baseCost.OutputCost*2), 1e-9,
+		"gpt-5.5 priority output must NOT be 2x (fu64 regression guard); got %v expected ≠ %v",
+		priorityCost.OutputCost, baseCost.OutputCost*2)
+}
+
 func TestCalculateCostWithServiceTier_FlexAppliesHalfMultiplier(t *testing.T) {
 	svc := newTestBillingService()
 	tokens := UsageTokens{InputTokens: 100, OutputTokens: 50, CacheCreationTokens: 40, CacheReadTokens: 20}

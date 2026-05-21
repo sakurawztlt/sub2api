@@ -74,7 +74,9 @@ func claudeMessagesDispatchFamily(model string) string {
 //     cctest opus-4-7 behavior validation regressed from 85% to 60% because
 //     groups that relied on DefaultMappedModel for Claude requests were
 //     silently falling to the hard-coded family defaults.)
-//  4. Hard-coded family default (gpt-5.4 / gpt-5.3-codex / gpt-5.4-mini)
+//  4. Hard-coded family default (gpt-5.5 Opus / gpt-5.3-codex Sonnet /
+//     gpt-5.4-mini Haiku). codex round54 fu64 (2026-05-21) Phase 1: Opus
+//     升 gpt-5.5; Sonnet/Haiku 不动. See const block above.
 //
 // Fork deliberately diverges from upstream/main here: upstream went back to
 // no groupDefault fallback. Our groups historically configured
