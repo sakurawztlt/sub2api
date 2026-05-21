@@ -614,6 +614,49 @@ func TestRound56_GPT55FallbackProvidesCompletePriorityPricing(t *testing.T) {
 	require.InDelta(t, 1.5, pricing.LongContextOutputMultiplier, 1e-12)
 }
 
+// codex round57 fu67 (2026-05-21): shouldApplySessionLongContextPricing
+// 之前 totalInputTokens 只算 InputTokens + CacheReadTokens, 没算
+// CacheCreationTokens. 边缘场景: 冷启动大量 cache write — input + cache_read
+// 不过 272K, 但 cache_creation 巨大. cache_creation 也是 input-side 流量,
+// 应该参与长上下文阈值判断. 否则 cache_creation 单价该 2x 但实际仍标准,
+// underbill.
+func TestRound57_LongContextTriggerByCacheCreationAlone(t *testing.T) {
+	svc := newTestBillingService()
+
+	// InputTokens 很小, CacheCreationTokens > 272K — 现在应触发长上下文
+	smallTokens := UsageTokens{InputTokens: 1000, OutputTokens: 100, CacheCreationTokens: 500}
+	smallCost, err := svc.CalculateCost("gpt-5.5", smallTokens, 1.0)
+	require.NoError(t, err)
+	smallPerToken := smallCost.CacheCreationCost / float64(smallTokens.CacheCreationTokens)
+
+	// 关键 fixture: InputTokens 远低于 272K, CacheCreationTokens 单独触发阈值
+	largeTokens := UsageTokens{InputTokens: 1000, OutputTokens: 100, CacheCreationTokens: 300000}
+	largeCost, err := svc.CalculateCost("gpt-5.5", largeTokens, 1.0)
+	require.NoError(t, err)
+	largePerToken := largeCost.CacheCreationCost / float64(largeTokens.CacheCreationTokens)
+
+	require.InDelta(t, smallPerToken*2.0, largePerToken, 1e-12,
+		"gpt-5.5 长上下文阈值必须算入 cache_creation: 仅大量 cache write 应触发 2x 上浮 (codex round57)")
+}
+
+// 边界: cache_creation 单独不够阈值, 但加上 input + cache_read 后过阈值,
+// 行为应跟之前一致 (cache_creation 上浮 2x). codex round56 已覆盖此 case,
+// 此 test 防 round57 修改让该场景退化.
+func TestRound57_LongContextStillTriggeredByCombinedInputAndCacheCreation(t *testing.T) {
+	svc := newTestBillingService()
+	// input=100K, cache_read=100K, cache_creation=100K — combined 300K > 272K
+	tokens := UsageTokens{InputTokens: 100000, OutputTokens: 100,
+		CacheReadTokens: 100000, CacheCreationTokens: 100000}
+	cost, err := svc.CalculateCost("gpt-5.5", tokens, 1.0)
+	require.NoError(t, err)
+
+	// cache_creation per-token cost = standard 5e-6 × LongContextInputMultiplier 2 = 10e-6
+	require.InDelta(t, 100000*10e-6, cost.CacheCreationCost, 1e-9,
+		"combined > 272K cache_creation 单价 2x 上浮 (round56 行为不变)")
+	require.InDelta(t, 100000*1e-6, cost.CacheReadCost, 1e-9,
+		"combined > 272K cache_read 单价 2x 上浮 (round56 行为不变)")
+}
+
 func TestCalculateCostWithServiceTier_FlexAppliesHalfMultiplier(t *testing.T) {
 	svc := newTestBillingService()
 	tokens := UsageTokens{InputTokens: 100, OutputTokens: 50, CacheCreationTokens: 40, CacheReadTokens: 20}

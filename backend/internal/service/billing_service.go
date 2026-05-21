@@ -687,7 +687,12 @@ func (s *BillingService) shouldApplySessionLongContextPricing(tokens UsageTokens
 	if pricing.LongContextInputMultiplier <= 1 && pricing.LongContextOutputMultiplier <= 1 {
 		return false
 	}
-	totalInputTokens := tokens.InputTokens + tokens.CacheReadTokens
+	// codex round57 fu67 (2026-05-21): cache_creation 也算入 input-side 流量
+	// 触发长上下文阈值. 边缘场景: 冷启动大量 cache write — input + cache_read
+	// 不过 272K 但 cache_creation 巨大, 现在该一起计入阈值判断. 跟 fu66 把
+	// long-context multiplier 应用到 cache_creation 一致 (cache_creation
+	// 跟 input 同价格族, 跟 input 同长上下文行为).
+	totalInputTokens := tokens.InputTokens + tokens.CacheReadTokens + tokens.CacheCreationTokens
 	return totalInputTokens > pricing.LongContextInputThreshold
 }
 
