@@ -572,8 +572,10 @@ func TestRound56_LongContext_CacheCreationAlsoUsesInputMultiplier(t *testing.T) 
 	smallCost, err := svc.CalculateCost("gpt-5.5", smallTokens, 1.0)
 	require.NoError(t, err)
 
-	// shouldApplySessionLongContextPricing 用 InputTokens + CacheReadTokens
-	// 跟阈值比较 (cache_creation 不计入). 用 InputTokens > 272K 触发.
+	// 此 fixture 用 InputTokens > 272K 触发阈值 (round56 时 cache_creation 不计入
+	// 阈值; round57 fu67 已修 — cache_creation 也算入阈值, 见
+	// TestRound57_LongContextTriggerByCacheCreationAlone 覆盖 cache write 单独
+	// 触发 case). 这条仍按 InputTokens 主导触发, 保留作为 round56 主路径不变验证.
 	largeTokens := UsageTokens{InputTokens: 280000, OutputTokens: 100, CacheCreationTokens: 100000}
 	largeCost, err := svc.CalculateCost("gpt-5.5", largeTokens, 1.0)
 	require.NoError(t, err)

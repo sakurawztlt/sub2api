@@ -723,6 +723,18 @@ func (s *BillingService) CalculateCostWithConfig(model string, tokens UsageToken
 // 示例：缓存 210k + 输入 10k = 220k，阈值 200k，倍率 2.0
 // 拆分为：范围内 (200k, 0) + 范围外 (10k, 10k)
 // 范围内正常计费，范围外 × 2 计费
+//
+// **使用范围 (Gemini-only)**: 实际生产仅 gateway_service.go LongContextThreshold>0
+// 分支调用 (Gemini 200K 阈值 RecordUsageWithLongContext). GPT-5.5 / Claude 等
+// 走 CalculateCost / CalculateCostWithServiceTier → CalculateCostInternal 主路径
+// 的 shouldApplySessionLongContextPricing (基于 model pricing 的
+// LongContextInputThreshold/Multiplier), 跟此 helper 没关系.
+//
+// codex round58 (2026-05-22): 注意此 helper 阈值判断 `total = CacheReadTokens +
+// InputTokens` 不含 CacheCreationTokens (跟主路径 shouldApplySessionLongContextPricing
+// fu67 一致后**故意保留** Gemini 特殊语义 — Gemini 长上下文按 input + cache_read
+// 拆分计费的契约, 不是 multiplier 模型). 若 future 决定补一致, 注意 Gemini
+// 计费定价契约可能受影响, 跟 codex 商.
 func (s *BillingService) CalculateCostWithLongContext(model string, tokens UsageTokens, rateMultiplier float64, threshold int, extraMultiplier float64) (*CostBreakdown, error) {
 	// 未启用长上下文计费，直接走正常计费
 	if threshold <= 0 || extraMultiplier <= 1 {
