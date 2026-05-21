@@ -86,10 +86,13 @@ func TestResolveMessagesDispatchModel_GroupDefaultFallback(t *testing.T) {
 			want:           "gpt-5.5",
 		},
 		{
-			name:           "no config at all: hard-coded family default kicks in",
+			// codex round54 fu64 (2026-05-21): Opus 默认从 gpt-5.4 → gpt-5.5.
+			// 客户绕过 gcr 直连 sub2api 用 Anthropic-shape 时, Opus 也走 gpt-5.5
+			// 跟 gcr ModelMap 一致. Sonnet/Haiku 默认不动 (Phase 1).
+			name:           "no config at all: hard-coded opus family default → gpt-5.5",
 			group:          &Group{},
 			requestedModel: "claude-opus-4-7",
-			want:           "gpt-5.4",
+			want:           "gpt-5.5",
 		},
 		{
 			name:           "no config at all: sonnet hard-coded default",

@@ -3,7 +3,14 @@ package service
 import "strings"
 
 const (
-	defaultOpenAIMessagesDispatchOpusMappedModel   = "gpt-5.4"
+	// codex round54 fu64 (2026-05-21) Phase 1: Opus 升 gpt-5.5 ($5/$0.5/$30
+	// per 1M, ~2x gpt-5.4 价). 跟 gcr ModelMap (claude-opus-4-7/4-6 → gpt-5.5)
+	// 同步; sub2api pricing 同 commit 加 gpt-5.5 fallback 不再静默走 gpt-5.4.
+	// Sonnet 4.x / Haiku 4.x 暂留 gpt-5.4 family (codex: 先灰度), 这边只动 Opus.
+	// 客户绕过 gcr 直打 sub2api 的 Anthropic-shape 请求也走相同路径.
+	// Group.MessagesDispatchModelConfig.OpusMappedModel / ExactModelMappings
+	// 仍优先 (DB 可显式覆盖此默认值).
+	defaultOpenAIMessagesDispatchOpusMappedModel   = "gpt-5.5"
 	defaultOpenAIMessagesDispatchSonnetMappedModel = "gpt-5.3-codex"
 	defaultOpenAIMessagesDispatchHaikuMappedModel  = "gpt-5.4-mini"
 )

@@ -217,8 +217,24 @@ func (s *BillingService) initFallbackPricing() {
 		LongContextInputMultiplier:     openAIGPT54LongContextInputMultiplier,
 		LongContextOutputMultiplier:    openAIGPT54LongContextOutputMultiplier,
 	}
-	// GPT-5.5 暂无独立定价，回退到 GPT-5.4
-	s.fallbackPrices["gpt-5.5"] = s.fallbackPrices["gpt-5.4"]
+	// codex round54 fu64 (2026-05-21) Phase 1: GPT-5.5 独立定价，跟 gcr Opus
+	// 升 gpt-5.5 同步生效. 官方 (developers.openai.com/api/docs/models/gpt-5.5):
+	// input $5/1M, cached $0.5/1M, output $30/1M; >272K 长上下文跟 gpt-5.4 同
+	// multiplier. 之前 alias 到 gpt-5.4 是 bug — 真用 gpt-5.5 但按 5.4 半价
+	// 记账, NewAPI 报表跟 OpenAI 实际账单偏离 ~2x.
+	s.fallbackPrices["gpt-5.5"] = &ModelPricing{
+		InputPricePerToken:             5e-6,   // $5 per MTok
+		InputPricePerTokenPriority:     10e-6,  // priority tier 2x (跟 5.4 同 ratio)
+		OutputPricePerToken:            30e-6,  // $30 per MTok
+		OutputPricePerTokenPriority:    60e-6,  // priority tier 2x
+		CacheCreationPricePerToken:     5e-6,   // $5 per MTok (跟 input 同价)
+		CacheReadPricePerToken:         0.5e-6, // $0.5 per MTok
+		CacheReadPricePerTokenPriority: 1e-6,   // priority tier 2x
+		SupportsCacheBreakdown:         false,
+		LongContextInputThreshold:      openAIGPT54LongContextInputThreshold,
+		LongContextInputMultiplier:     openAIGPT54LongContextInputMultiplier,
+		LongContextOutputMultiplier:    openAIGPT54LongContextOutputMultiplier,
+	}
 
 	s.fallbackPrices["gpt-5.4-mini"] = &ModelPricing{
 		InputPricePerToken:     7.5e-7,

@@ -34,6 +34,26 @@ var (
 		Mode:                            "chat",
 		SupportsPromptCaching:           true,
 	}
+	// codex round54 fu64 (2026-05-21) Phase 1: gpt-5.5 fallback pricing.
+	// 官方价 (developers.openai.com/api/docs/models/gpt-5.5/): input $5/1M,
+	// cached $0.5/1M, output $30/1M, 1.05M context, 128k max output, >272K
+	// 长上下文上浮 (跟 gpt-5.4 同 multiplier). 约 gpt-5.4 的 2x 价.
+	//
+	// 修复 round54 前 bug: gpt-5.5 prefix 在 pricing fallback 路径静默走
+	// openAIGPT54FallbackPricing → 真用 gpt-5.5 但按 5.4 半价记账, 报表
+	// 低估成本. Opus 升 gpt-5.5 后这条必须修, 否则 NewAPI 看到的 quota 跟
+	// OpenAI 实际账单偏离 ~2x.
+	openAIGPT55FallbackPricing = &LiteLLMModelPricing{
+		InputCostPerToken:               5e-06, // $5 per MTok
+		OutputCostPerToken:              3e-05, // $30 per MTok
+		CacheReadInputTokenCost:         5e-07, // $0.5 per MTok
+		LongContextInputTokenThreshold:  272000,
+		LongContextInputCostMultiplier:  2.0,
+		LongContextOutputCostMultiplier: 1.5,
+		LiteLLMProvider:                 "openai",
+		Mode:                            "chat",
+		SupportsPromptCaching:           true,
+	}
 	openAIGPT54MiniFallbackPricing = &LiteLLMModelPricing{
 		InputCostPerToken:       7.5e-07,
 		OutputCostPerToken:      4.5e-06,
@@ -794,11 +814,15 @@ func (s *PricingService) matchOpenAIModel(model string) *LiteLLMModelPricing {
 		}
 	}
 
-	// GPT-5.5 回退到 GPT-5.4 定价
+	// codex round54 fu64 (2026-05-21) Phase 1: gpt-5.5 用专属 fallback
+	// pricing ($5/$0.5/$30 per 1M), 之前静默走 gpt-5.4 (半价) 是 bug —
+	// gcr ModelMap 升 Opus 到 gpt-5.5 后, NewAPI 看到的 quota 跟 OpenAI 实际
+	// 账单偏离 ~2x. pricingData 加载真 LiteLLM JSON 时如果有 gpt-5.5 entry
+	// 会优先用那个 (本函数是 fallback 链), 否则用这条 static price.
 	if strings.HasPrefix(model, "gpt-5.5") {
 		logger.With(zap.String("component", "service.pricing")).
-			Info(fmt.Sprintf("[Pricing] OpenAI fallback matched %s -> %s", model, "gpt-5.4(static)"))
-		return openAIGPT54FallbackPricing
+			Info(fmt.Sprintf("[Pricing] OpenAI fallback matched %s -> %s", model, "gpt-5.5(static)"))
+		return openAIGPT55FallbackPricing
 	}
 
 	if strings.HasPrefix(model, "gpt-5.4-mini") {

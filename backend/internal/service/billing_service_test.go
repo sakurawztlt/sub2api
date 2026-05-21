@@ -187,6 +187,12 @@ func TestGetFallbackPricing_FamilyMatching(t *testing.T) {
 		{name: "openai gpt5.4 mini", model: "gpt-5.4-mini", expectedInput: 7.5e-7},
 		{name: "openai gpt5.3 codex", model: "gpt-5.3-codex", expectedInput: 1.5e-6},
 		{name: "openai gpt5.3 codex spark", model: "gpt-5.3-codex-spark", expectedInput: 1.5e-6},
+		// codex round54 fu64: gpt-5.5 不再 fallback 到 gpt-5.4 半价, 用专属
+		// $5/$0.5/$30 fallback pricing. 防 gcr Opus 升 5.5 后 NewAPI 报表
+		// 跟 OpenAI 实际账单偏离 2x.
+		{name: "openai gpt5.5 uses gpt5.5 fallback (not gpt5.4)", model: "gpt-5.5", expectedInput: 5e-6},
+		{name: "openai gpt5.5 high variant", model: "gpt-5.5-high", expectedInput: 5e-6},
+		{name: "openai gpt5.5 xhigh variant", model: "gpt-5.5-xhigh", expectedInput: 5e-6},
 		{name: "openai legacy gpt5.1 falls back to gpt5.4", model: "gpt-5.1", expectedInput: 2.5e-6},
 		{name: "openai legacy gpt5.1 codex falls back to gpt5.3 codex", model: "gpt-5.1-codex", expectedInput: 1.5e-6},
 		{name: "openai legacy codex mini latest falls back to gpt5.3 codex", model: "codex-mini-latest", expectedInput: 1.5e-6},
