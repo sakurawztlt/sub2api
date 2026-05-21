@@ -541,7 +541,6 @@ func (s *AccountTestService) testBedrockAccountConnection(c *gin.Context, ctx co
 // testOpenAIAccountConnection tests an OpenAI account's connection
 func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account *Account, modelID string, prompt string, mode string) error {
 	ctx := c.Request.Context()
-	_ = prompt
 	mode = normalizeAccountTestMode(mode)
 
 	// Default to openai.DefaultTestModel for OpenAI testing
@@ -602,14 +601,8 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		if err != nil {
 			return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid base URL: %s", err.Error()))
 		}
-		// 账号已被探测为不支持 Responses（如 DeepSeek/Kimi 等）时，丢出明确提示。
-		// 账号本身可用（网关会走 CC 直转），仅测试入口需要补齐 CC SSE 处理逻辑。
-		// TODO：实现 CC 格式的账号测试路径（需专门的 CC SSE handler）。
 		if !openai_compat.ShouldUseResponsesAPI(account.Extra) {
-			return s.sendErrorAndEnd(c,
-				"账号已被探测为不支持 OpenAI Responses API（如 DeepSeek/Kimi 等三方兼容上游），"+
-					"账号本身可正常使用，但当前测试接口仅支持 Responses API 路径。请直接通过实际 API 调用验证。",
-			)
+			return s.testOpenAIChatCompletionsConnection(c, account, testModelID, prompt, normalizedBaseURL, authToken)
 		}
 		apiURL = buildOpenAIResponsesURL(normalizedBaseURL)
 	} else {
