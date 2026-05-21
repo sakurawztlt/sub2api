@@ -339,11 +339,11 @@ func TestResponsesToAnthropic_ToolUse(t *testing.T) {
 // OpenAI 上游 → OpenAI 返 call_xxx → fromResponsesCallID → toolu_xxx 给客户.
 func TestCallIDRoundTripLossless(t *testing.T) {
 	cases := []string{
-		"AAA",                          // 任意字符
-		"ABCdef123",                    // alphanum
-		"Pf2nMQX1m9",                   // OpenAI 真实风格
-		"01HV6X8N3P9Q2K7T4M5R6Y8Z3W",   // ULID 风格
-		"a-b_c.d~e",                    // 含 url-safe 特殊字符
+		"AAA",                        // 任意字符
+		"ABCdef123",                  // alphanum
+		"Pf2nMQX1m9",                 // OpenAI 真实风格
+		"01HV6X8N3P9Q2K7T4M5R6Y8Z3W", // ULID 风格
+		"a-b_c.d~e",                  // 含 url-safe 特殊字符
 	}
 	for _, body := range cases {
 		anthID := "toolu_" + body
@@ -2860,8 +2860,8 @@ func TestAnthropicToResponses_ToolsAsBackgroundGate_MultiTurnSkipped(t *testing.
 // 客户明确 tool_choice — 尊重客户.
 func TestAnthropicToResponses_ToolsAsBackgroundGate_ExplicitToolChoiceRespected(t *testing.T) {
 	req := &AnthropicRequest{
-		Model:     "claude-opus-4-7",
-		MaxTokens: 1024,
+		Model:      "claude-opus-4-7",
+		MaxTokens:  1024,
 		ToolChoice: json.RawMessage(`{"type":"auto"}`),
 		Messages: []AnthropicMessage{
 			{Role: "user", Content: json.RawMessage(`"hello"`)},
