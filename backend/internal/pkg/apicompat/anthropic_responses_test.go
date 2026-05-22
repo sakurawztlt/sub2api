@@ -1629,6 +1629,10 @@ func TestResponsesToAnthropicRequest_ToolChoiceLegacyFunctionName(t *testing.T) 
 // ---------------------------------------------------------------------------
 
 func TestAnthropicToResponses_UserImageBlock(t *testing.T) {
+	// codex round-multimodal fu69: image-conversion isolation tests disable the
+	// multimodal cue to keep parts count assertions stable; cue 行为由
+	// multimodal_cue_test.go 单独覆盖.
+	t.Setenv("SUB2API_MULTIMODAL_CUE_ENABLED", "0")
 	req := &AnthropicRequest{
 		Model:     "gpt-5.2",
 		MaxTokens: 1024,
@@ -1658,6 +1662,10 @@ func TestAnthropicToResponses_UserImageBlock(t *testing.T) {
 }
 
 func TestAnthropicToResponses_ImageOnlyUserMessage(t *testing.T) {
+	// codex round-multimodal fu69: image-conversion isolation tests disable the
+	// multimodal cue to keep parts count assertions stable; cue 行为由
+	// multimodal_cue_test.go 单独覆盖.
+	t.Setenv("SUB2API_MULTIMODAL_CUE_ENABLED", "0")
 	req := &AnthropicRequest{
 		Model:     "gpt-5.2",
 		MaxTokens: 1024,
@@ -1683,6 +1691,10 @@ func TestAnthropicToResponses_ImageOnlyUserMessage(t *testing.T) {
 }
 
 func TestAnthropicToResponses_ToolResultWithImage(t *testing.T) {
+	// codex round-multimodal fu69: image-conversion isolation tests disable the
+	// multimodal cue to keep parts count assertions stable; cue 行为由
+	// multimodal_cue_test.go 单独覆盖.
+	t.Setenv("SUB2API_MULTIMODAL_CUE_ENABLED", "0")
 	req := &AnthropicRequest{
 		Model:     "gpt-5.2",
 		MaxTokens: 1024,
@@ -1720,6 +1732,10 @@ func TestAnthropicToResponses_ToolResultWithImage(t *testing.T) {
 }
 
 func TestAnthropicToResponses_ToolResultMixed(t *testing.T) {
+	// codex round-multimodal fu69: image-conversion isolation tests disable the
+	// multimodal cue to keep parts count assertions stable; cue 行为由
+	// multimodal_cue_test.go 单独覆盖.
+	t.Setenv("SUB2API_MULTIMODAL_CUE_ENABLED", "0")
 	req := &AnthropicRequest{
 		Model:     "gpt-5.2",
 		MaxTokens: 1024,
@@ -1784,6 +1800,10 @@ func TestAnthropicToResponses_TextOnlyToolResultBackwardCompat(t *testing.T) {
 }
 
 func TestAnthropicToResponses_ImageEmptyMediaType(t *testing.T) {
+	// codex round-multimodal fu69: image-conversion isolation tests disable the
+	// multimodal cue to keep parts count assertions stable; cue 行为由
+	// multimodal_cue_test.go 单独覆盖.
+	t.Setenv("SUB2API_MULTIMODAL_CUE_ENABLED", "0")
 	req := &AnthropicRequest{
 		Model:     "gpt-5.2",
 		MaxTokens: 1024,
@@ -1813,6 +1833,10 @@ func TestAnthropicToResponses_ImageEmptyMediaType(t *testing.T) {
 // 时, base64 magic header 嗅探覆盖 declared media_type → OpenAI OCR 不再
 // 静默变差.
 func TestAnthropicToResponses_ImageSniffsPNGWhenMediaTypeWrong(t *testing.T) {
+	// codex round-multimodal fu69: image-conversion isolation tests disable the
+	// multimodal cue to keep parts count assertions stable; cue 行为由
+	// multimodal_cue_test.go 单独覆盖.
+	t.Setenv("SUB2API_MULTIMODAL_CUE_ENABLED", "0")
 	req := &AnthropicRequest{
 		Model:     "gpt-5.2",
 		MaxTokens: 1024,
@@ -1951,6 +1975,10 @@ func TestAnthropicToResponses_ToolWithNilSchema(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAnthropicToResponses_DocumentBase64PDF(t *testing.T) {
+	// codex round-multimodal fu69: document-conversion isolation tests disable
+	// the multimodal cue to keep parts count assertions stable; cue 行为由
+	// multimodal_cue_test.go 单独覆盖.
+	t.Setenv("SUB2API_MULTIMODAL_CUE_ENABLED", "0")
 	req := &AnthropicRequest{
 		Model:     "gpt-5.2",
 		MaxTokens: 1024,
@@ -1979,6 +2007,10 @@ func TestAnthropicToResponses_DocumentBase64PDF(t *testing.T) {
 }
 
 func TestAnthropicToResponses_DocumentBase64PDFWithTitle(t *testing.T) {
+	// codex round-multimodal fu69: document-conversion isolation tests disable
+	// the multimodal cue to keep parts count assertions stable; cue 行为由
+	// multimodal_cue_test.go 单独覆盖.
+	t.Setenv("SUB2API_MULTIMODAL_CUE_ENABLED", "0")
 	// A title on the document block becomes the input_file filename.
 	req := &AnthropicRequest{
 		Model:     "gpt-5.2",
@@ -2003,6 +2035,10 @@ func TestAnthropicToResponses_DocumentBase64PDFWithTitle(t *testing.T) {
 }
 
 func TestAnthropicToResponses_DocumentBase64EmptyMediaTypeDefaultsToPDF(t *testing.T) {
+	// codex round-multimodal fu69: document-conversion isolation tests disable
+	// the multimodal cue to keep parts count assertions stable; cue 行为由
+	// multimodal_cue_test.go 单独覆盖.
+	t.Setenv("SUB2API_MULTIMODAL_CUE_ENABLED", "0")
 	req := &AnthropicRequest{
 		Model:     "gpt-5.2",
 		MaxTokens: 1024,
@@ -2027,6 +2063,10 @@ func TestAnthropicToResponses_DocumentBase64EmptyMediaTypeDefaultsToPDF(t *testi
 // 客户端标错 MIME (PDF bytes 标 application/octet-stream) 仍能正确识别
 // + 自动补 .pdf 扩展名 (帮 OpenAI 类型推断更准)
 func TestAnthropicToResponses_DocumentBase64PDFSniffsGenericMediaType(t *testing.T) {
+	// codex round-multimodal fu69: document-conversion isolation tests disable
+	// the multimodal cue to keep parts count assertions stable; cue 行为由
+	// multimodal_cue_test.go 单独覆盖.
+	t.Setenv("SUB2API_MULTIMODAL_CUE_ENABLED", "0")
 	req := &AnthropicRequest{
 		Model:     "gpt-5.2",
 		MaxTokens: 1024,
@@ -2050,6 +2090,10 @@ func TestAnthropicToResponses_DocumentBase64PDFSniffsGenericMediaType(t *testing
 }
 
 func TestAnthropicToResponses_DocumentBase64DocxFilenameExtension(t *testing.T) {
+	// codex round-multimodal fu69: document-conversion isolation tests disable
+	// the multimodal cue to keep parts count assertions stable; cue 行为由
+	// multimodal_cue_test.go 单独覆盖.
+	t.Setenv("SUB2API_MULTIMODAL_CUE_ENABLED", "0")
 	req := &AnthropicRequest{
 		Model:     "gpt-5.2",
 		MaxTokens: 1024,
@@ -2098,6 +2142,10 @@ func TestAnthropicToResponses_DocumentTextSource(t *testing.T) {
 }
 
 func TestAnthropicToResponses_DocumentContentSourceRecursive(t *testing.T) {
+	// codex round-multimodal fu69: document-conversion isolation tests disable
+	// the multimodal cue to keep parts count assertions stable; cue 行为由
+	// multimodal_cue_test.go 单独覆盖.
+	t.Setenv("SUB2API_MULTIMODAL_CUE_ENABLED", "0")
 	// type=content source expands nested text+image blocks into flat parts,
 	// wrapped in [Document...] / [/Document] markers.
 	req := &AnthropicRequest{
@@ -2214,6 +2262,10 @@ func TestAnthropicToResponses_DocumentMissingSourceDropped(t *testing.T) {
 }
 
 func TestAnthropicToResponses_DocumentMimeDowngrade(t *testing.T) {
+	// codex round-multimodal fu69: document-conversion isolation tests disable
+	// the multimodal cue to keep parts count assertions stable; cue 行为由
+	// multimodal_cue_test.go 单独覆盖.
+	t.Setenv("SUB2API_MULTIMODAL_CUE_ENABLED", "0")
 	cases := []struct {
 		name          string
 		inputMime     string
@@ -2557,6 +2609,10 @@ func TestAnthropicToResponses_OnlyDroppedServerSideToolsResultsInEmptyTools(t *t
 }
 
 func TestAnthropicToResponses_ToolResultWithDocument(t *testing.T) {
+	// codex round-multimodal fu69: document-conversion isolation tests disable
+	// the multimodal cue to keep parts count assertions stable; cue 行为由
+	// multimodal_cue_test.go 单独覆盖.
+	t.Setenv("SUB2API_MULTIMODAL_CUE_ENABLED", "0")
 	// A document inside tool_result is extracted into a follow-up user message,
 	// mirroring how images inside tool_result are handled (the function_call_output
 	// text stays "(empty)" because all content was non-text).

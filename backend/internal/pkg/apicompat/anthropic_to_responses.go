@@ -26,6 +26,23 @@ func reasoningSummaryGateEnabled() bool {
 	return os.Getenv("SUB2API_GATE_REASONING_SUMMARY") == "1"
 }
 
+// multimodalCueEnabled reports whether to append a short cue text part to user
+// turns containing image / document blocks, instructing GPT to read the
+// attached media and answer directly. codex round-multimodal (2026-05-22): GPT
+// fallback observed "streamed_bytes 6-8 / output_before 9-10" — refusing to
+// read the attachment because of weaker default vision behavior than Claude.
+// Cue is GPT-only nudge, not exposed in client-visible response (GPT follows
+// the instruction but typically doesn't echo it). Default: on. Set to "0"
+// for emergency disable.
+func multimodalCueEnabled() bool {
+	return os.Getenv("SUB2API_MULTIMODAL_CUE_ENABLED") != "0"
+}
+
+// multimodalCueText is the short bilingual nudge added after media parts so
+// GPT doesn't refuse on "I can't see images". Kept short to minimize prompt
+// token impact and avoid breaking client's stated intent.
+const multimodalCueText = "Please read the attached image(s) / document(s) and answer the user's question directly. Do not refuse on the basis of being unable to view the attachment."
+
 // AnthropicToResponses converts an Anthropic Messages request directly into
 // a Responses API request. This preserves fields that would be lost in a
 // Chat Completions intermediary round-trip (e.g. thinking, cache_control,
@@ -511,6 +528,16 @@ func anthropicUserToResponses(raw json.RawMessage) ([]ResponsesInputItem, error)
 		parts = append(parts, ResponsesContentPart{Type: "input_text", Text: txt})
 	}
 
+	// codex round-multimodal (2026-05-22): 当 user turn 含 image / document
+	// (含 tool_result 抽出的 media), 在 parts 末尾追加一段短 cue, 让 GPT
+	// 不要 refuse on "I can't see images". GPT fallback path 在坏 worker /
+	// 无 cc-api 凭证时是唯一回答路径, 多模态可见质量必须自己 stable.
+	// Env SUB2API_MULTIMODAL_CUE_ENABLED=0 应急回退. cue 是 input_text part,
+	// 客户 response 不 echo (GPT follow but typically doesn't 复述指令).
+	if multimodalCueEnabled() && partsContainsMedia(parts) {
+		parts = append(parts, ResponsesContentPart{Type: "input_text", Text: multimodalCueText})
+	}
+
 	if len(parts) > 0 {
 		content, err := json.Marshal(parts)
 		if err != nil {
@@ -520,6 +547,18 @@ func anthropicUserToResponses(raw json.RawMessage) ([]ResponsesInputItem, error)
 	}
 
 	return out, nil
+}
+
+// partsContainsMedia reports whether any part in the slice is an attachment
+// (image or file). codex round-multimodal (2026-05-22) helper for the
+// multimodal cue gate.
+func partsContainsMedia(parts []ResponsesContentPart) bool {
+	for _, p := range parts {
+		if p.Type == "input_image" || p.Type == "input_file" {
+			return true
+		}
+	}
+	return false
 }
 
 // anthropicAssistantToResponses handles an Anthropic assistant message.
