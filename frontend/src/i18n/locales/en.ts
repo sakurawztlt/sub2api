@@ -3961,6 +3961,9 @@ export default {
       createProxy: 'Create Proxy',
       editProxy: 'Edit Proxy',
       deleteProxy: 'Delete Proxy',
+      ad: {
+        inline: 'Need proxy IP?'
+      },
       dataImport: 'Import',
       dataExportSelected: 'Export Selected',
       dataImportTitle: 'Import Proxies',
