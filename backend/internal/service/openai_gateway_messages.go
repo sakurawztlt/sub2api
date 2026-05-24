@@ -1037,6 +1037,26 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		firstMeaningfulDeadlineCh = firstMeaningfulTimer.C
 	}
 
+	// sub2api fu70 codex round-two-stage-header (2026-05-24): early meta
+	// flush timer. When request matches narrow gate (X-GCR-Early-Flush
+	// header OR body > 64KB) AND cfg.Gateway.EarlyMetaFlushAfterMs > 0,
+	// arm a short timer; on fire, if message_start is already in pending
+	// events but no meaningful event yet, flush header proactively. Solves
+	// the "OpenAI sends 20-60s of metadata before first text/thinking"
+	// slow path. Does NOT change empty-stream behavior (still goes via
+	// firstMeaningfulTimeout → 502).
+	earlyFlushDelay := time.Duration(0)
+	if s.cfg != nil && s.cfg.Gateway.EarlyMetaFlushAfterMs > 0 && isEarlyFlushEligible(c.Request, inboundBodyLen) {
+		earlyFlushDelay = time.Duration(s.cfg.Gateway.EarlyMetaFlushAfterMs) * time.Millisecond
+	}
+	var earlyFlushDeadlineCh <-chan time.Time
+	var earlyFlushTimer *time.Timer
+	if earlyFlushDelay > 0 {
+		earlyFlushTimer = time.NewTimer(earlyFlushDelay)
+		defer earlyFlushTimer.Stop()
+		earlyFlushDeadlineCh = earlyFlushTimer.C
+	}
+
 	// codex 5/8 #3: drain after client disconnect 上限. 0 关.
 	drainMax := time.Duration(0)
 	if s.cfg != nil && s.cfg.Gateway.DrainAfterClientDisconnectMaxSeconds > 0 {
@@ -1552,6 +1572,63 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				}
 			}
 			return resultWithUsage(), fmt.Errorf("stream data interval timeout")
+
+		case <-earlyFlushDeadlineCh:
+			// sub2api fu70 codex round-two-stage-header (2026-05-24): Stage 2.
+			// EarlyMetaFlushAfterMs has elapsed without firstMeaningfulSeen.
+			// If pendingEvents has message_start, flush proactively so the
+			// client sees Claude SSE start. If no message_start yet (upstream
+			// hasn't sent anything beyond raw bytes), leave the gate closed —
+			// firstMeaningfulTimeout still handles true empty-stream → 502.
+			if firstMeaningfulSeen {
+				// late timer, ignore
+				continue
+			}
+			if !hasMessageStartInPending(pendingEvents) {
+				// no message_start yet — preserve clean-failover window;
+				// firstMeaningfulTimeout will still fire if upstream stays silent
+				continue
+			}
+			firstMeaningfulSeen = true
+			fmMs := int(time.Since(startTime).Milliseconds())
+			firstMeaningfulMs = &fmMs
+			writeStreamHeader()
+			if firstMeaningfulTimer != nil {
+				firstMeaningfulTimer.Stop()
+			}
+			logger.L().Info("openai messages stream: early meta flush triggered",
+				zap.String("request_id", requestID),
+				zap.String("model", originalModel),
+				zap.Int("pending_events", len(pendingEvents)),
+				zap.Int("early_flush_after_ms", int(earlyFlushDelay.Milliseconds())),
+				zap.String("gcr_request_id", c.Request.Header.Get("X-GCR-Request-Id")),
+				zap.String("newapi_request_id", c.Request.Header.Get("X-Newapi-Request-Id")),
+				zap.Int("inbound_body_len", inboundBodyLen),
+			)
+			if !clientDisconnected {
+				for _, evt := range pendingEvents {
+					sse, err := apicompat.ResponsesAnthropicEventToSSE(evt)
+					if err != nil {
+						logger.L().Warn("openai messages stream: early flush failed to marshal pending event",
+							zap.Error(err),
+							zap.String("request_id", requestID),
+						)
+						continue
+					}
+					if _, err := fmt.Fprint(c.Writer, sse); err != nil {
+						logger.L().Warn("openai messages stream: early flush write failed",
+							zap.Error(err),
+							zap.String("request_id", requestID),
+						)
+						clientDisconnected = true
+						break
+					}
+				}
+				if !clientDisconnected {
+					c.Writer.Flush()
+				}
+			}
+			pendingEvents = nil
 
 		case <-firstMeaningfulDeadlineCh:
 			// codex 5/8 #2: 首个 meaningful event 超时. 如果还没 WriteHeader,

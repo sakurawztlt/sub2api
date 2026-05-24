@@ -665,8 +665,8 @@ type GatewayConfig struct {
 	// BufferedFirstMeaningfulTimeout: 首个 meaningful event (terminal /
 	// non-heartbeat) 超时(秒). 上游迟迟不发任何业务事件时快速 fail-fast 让
 	// 客户走 failover 或拿 504, 不傻等. 0=禁用.
-	BufferedTotalTimeout            int `mapstructure:"buffered_total_timeout"`
-	BufferedFirstMeaningfulTimeout  int `mapstructure:"buffered_first_meaningful_timeout"`
+	BufferedTotalTimeout           int `mapstructure:"buffered_total_timeout"`
+	BufferedFirstMeaningfulTimeout int `mapstructure:"buffered_first_meaningful_timeout"`
 	// LargeRequest* — codex round 11ai (2026-05-15):
 	// 大上下文请求 (msgs > LargeRequestMsgThreshold 或 body bytes >
 	// LargeRequestBodyBytesThreshold) 切到 LargeRequestFirstMeaningfulTimeout
@@ -687,6 +687,27 @@ type GatewayConfig struct {
 	// 是空流 200 等 180s. 0 = 禁用 (回到旧行为, 立即 200).
 	// 默认 60s.
 	FirstMeaningfulEventTimeoutSeconds int `mapstructure:"first_meaningful_event_timeout_seconds"`
+
+	// EarlyMetaFlushAfterMs (sub2api fu70 codex round-two-stage-header 2026-05-24):
+	// 两阶段 header 第一阶段. 当上游已发 message_start (累积在 pendingEvents)
+	// 但还没出 meaningful event (text_delta / thinking_delta / tool_use /
+	// terminal usage), 等 EarlyMetaFlushAfterMs 毫秒后强制 flush header +
+	// pendingEvents (message_start / ping / content_block_start metadata).
+	// 客户立刻看到 SSE 开始, 不会因 OpenAI 隐藏 reasoning / 重 schema
+	// prefill 卡 30s+ 首字. 跟 FirstMeaningfulEventTimeoutSeconds (终止性
+	// 超时, 返 502) 不冲突 — 早 flush 后超时如 fire 仍标 timeout.
+	//
+	// Narrow gate (跟 isEarlyFlushEligible 共同决定是否启用):
+	//   - stream=true
+	//   - 必须命中 narrow 条件之一:
+	//       * gcr 内部 header `X-GCR-Early-Flush: 1`
+	//       * tools_count >= 20
+	//       * 请求 body > 64KB
+	//
+	// 0 = 全局禁用 (回到 fu69 行为, 必须等 meaningful). 默认 2000ms.
+	// 推荐 1500-3000ms; 建议留 < FirstMeaningfulEventTimeoutSeconds 至少
+	// 5s 间隔避免 race.
+	EarlyMetaFlushAfterMs int `mapstructure:"early_meta_flush_after_ms"`
 
 	// DrainAfterClientDisconnectMaxSeconds (codex 5/8 audit):
 	// 客户断开后继续 drain upstream 给 billing 的最大时间. 超过 abort
@@ -2384,6 +2405,21 @@ func (c *Config) Validate() error {
 	if c.Gateway.FirstMeaningfulEventTimeoutSeconds != 0 &&
 		(c.Gateway.FirstMeaningfulEventTimeoutSeconds < 10 || c.Gateway.FirstMeaningfulEventTimeoutSeconds > 300) {
 		return fmt.Errorf("gateway.first_meaningful_event_timeout_seconds must be 0 or between 10-300 seconds")
+	}
+	// sub2api fu70 codex round-two-stage-header (2026-05-24): validate
+	// EarlyMetaFlushAfterMs. 0 = disabled. Allowed [500, 10000] ms.
+	// Constraint: must be less than FirstMeaningfulEventTimeoutSeconds (in
+	// ms) so early flush happens before terminal timeout.
+	if c.Gateway.EarlyMetaFlushAfterMs < 0 {
+		return fmt.Errorf("gateway.early_meta_flush_after_ms must be non-negative")
+	}
+	if c.Gateway.EarlyMetaFlushAfterMs != 0 &&
+		(c.Gateway.EarlyMetaFlushAfterMs < 500 || c.Gateway.EarlyMetaFlushAfterMs > 10000) {
+		return fmt.Errorf("gateway.early_meta_flush_after_ms must be 0 or between 500-10000 ms")
+	}
+	if c.Gateway.EarlyMetaFlushAfterMs > 0 && c.Gateway.FirstMeaningfulEventTimeoutSeconds > 0 &&
+		c.Gateway.EarlyMetaFlushAfterMs >= c.Gateway.FirstMeaningfulEventTimeoutSeconds*1000 {
+		return fmt.Errorf("gateway.early_meta_flush_after_ms must be less than first_meaningful_event_timeout_seconds*1000")
 	}
 	if c.Gateway.DrainAfterClientDisconnectMaxSeconds < 0 {
 		return fmt.Errorf("gateway.drain_after_client_disconnect_max_seconds must be non-negative")
