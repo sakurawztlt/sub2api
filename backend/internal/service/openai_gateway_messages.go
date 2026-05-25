@@ -1110,6 +1110,49 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		}
 	}
 
+	clientDisconnectLogFields := func(stage string) []zap.Field {
+		clientReqID, _ := c.Request.Context().Value(ctxkey.ClientRequestID).(string)
+		ftMs := 0
+		if firstTokenMs != nil {
+			ftMs = *firstTokenMs
+		}
+		fmMs := 0
+		if firstMeaningfulMs != nil {
+			fmMs = *firstMeaningfulMs
+		}
+		accID := int64(0)
+		accName := ""
+		accPlat := ""
+		accType := ""
+		if meta.Account != nil {
+			accID = meta.Account.ID
+			accName = meta.Account.Name
+			accPlat = meta.Account.Platform
+			accType = string(meta.Account.Type)
+		}
+		return []zap.Field{
+			zap.String("request_id", requestID),
+			zap.String("client_request_id", clientReqID),
+			zap.String("gcr_request_id", c.Request.Header.Get("X-GCR-Request-Id")),
+			zap.String("newapi_request_id", c.Request.Header.Get("X-Newapi-Request-Id")),
+			zap.String("oneapi_request_id", c.Request.Header.Get("X-Oneapi-Request-Id")),
+			zap.String("disconnect_stage", stage),
+			zap.String("model", originalModel),
+			zap.Int64("elapsed_ms", time.Since(startTime).Milliseconds()),
+			zap.Int("first_token_ms", ftMs),
+			zap.Int("first_meaningful_ms", fmMs),
+			zap.Bool("header_written", headerWritten),
+			zap.Int("inbound_body_len", inboundBodyLen),
+			zap.Bool("large_context_request", IsLargeContextCtx(c.Request.Context())),
+			zap.String("gcr_depth_bucket", c.Request.Header.Get("X-GCR-Depth-Bucket")),
+			zap.String("gcr_estimated_tokens", c.Request.Header.Get("X-GCR-Estimated-Tokens")),
+			zap.Int64("account_id", accID),
+			zap.String("account_name", accName),
+			zap.String("account_platform", accPlat),
+			zap.String("account_type", accType),
+		}
+	}
+
 	// processDataLine handles a single "data: ..." SSE line from upstream.
 	processDataLine := func(payload string) bool {
 		if firstChunk {
@@ -1201,7 +1244,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 						clientDisconnected = true
 						disconnectedAt = time.Now()
 						logger.L().Info("openai messages stream: client disconnected during initial flush",
-							zap.String("request_id", requestID),
+							clientDisconnectLogFields("initial_flush")...,
 						)
 						break
 					}
@@ -1229,7 +1272,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 					clientDisconnected = true
 					disconnectedAt = time.Now()
 					logger.L().Info("openai messages stream: client disconnected, continuing to drain upstream for billing",
-						zap.String("request_id", requestID),
+						clientDisconnectLogFields("forward")...,
 					)
 					break
 				}
@@ -1251,8 +1294,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				}
 				if _, err := fmt.Fprint(c.Writer, sse); err != nil {
 					clientDisconnected = true
+					disconnectedAt = time.Now()
 					logger.L().Info("openai messages stream: client disconnected during final flush",
-						zap.String("request_id", requestID),
+						clientDisconnectLogFields("final_flush")...,
 					)
 					break
 				}
@@ -1823,9 +1867,10 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			if _, err := fmt.Fprint(c.Writer, "event: ping\ndata: {\"type\":\"ping\"}\n\n"); err != nil {
 				// Client disconnected
 				logger.L().Info("openai messages stream: client disconnected during keepalive",
-					zap.String("request_id", requestID),
+					clientDisconnectLogFields("keepalive")...,
 				)
 				clientDisconnected = true
+				disconnectedAt = time.Now()
 				continue
 			}
 			c.Writer.Flush()
