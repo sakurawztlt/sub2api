@@ -160,10 +160,21 @@ func (w *trafficCaptureWriter) WriteString(s string) (int, error) {
 // 顺序建议: 装在 OpsErrorLoggerMiddleware 之前 (顶部), 这样 inbound capture
 // 不被 ops 中间件影响, response wrap 在最外层覆盖完整 SSE body.
 //
-// 防 OOM 保护 (P1 codex audit 补): 读 inbound 用 maxInboundBodyForCapture cap (16MB),
-// 超过 cap 直接 abort 不 capture 这条 (防恶意大 body 把 sub2api 进程撑爆).
-// 16MB > 任何 cctest 多模态最大. 正常请求 < 5MB, 不影响测试.
-const maxInboundBodyForCapture = 16 * 1024 * 1024 // 16MB hard ceiling
+// 防 OOM 保护 (P1 codex audit 补): 默认 inbound hard ceiling 16MB.
+// 备用环境需要完整留存 Claude Console 大请求时, 可通过
+// SUB2API_TRAFFIC_CAPTURE_MAX_BYTES 把 capture cap 调高; 此 hard ceiling 会跟随
+// svc.MaxBytesCap() 放大。生产默认不启用 traffic_capture, 不影响热路径.
+const defaultInboundBodyCaptureCeiling = 16 * 1024 * 1024 // 16MB default ceiling
+
+func inboundBodyCaptureCeiling(svc *service.TrafficCaptureService) int64 {
+	limit := defaultInboundBodyCaptureCeiling
+	if svc != nil {
+		if capBytes := svc.MaxBytesCap(); capBytes > limit {
+			limit = capBytes
+		}
+	}
+	return int64(limit)
+}
 
 func TrafficCaptureMiddleware(svc *service.TrafficCaptureService) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -181,10 +192,11 @@ func TrafficCaptureMiddleware(svc *service.TrafficCaptureService) gin.HandlerFun
 		// 大请求是恶意流量直接拒.
 		var inboundBody []byte
 		if c.Request.Body != nil {
-			limited := http.MaxBytesReader(c.Writer, c.Request.Body, maxInboundBodyForCapture)
+			inboundLimit := inboundBodyCaptureCeiling(svc)
+			limited := http.MaxBytesReader(c.Writer, c.Request.Body, inboundLimit)
 			b, err := io.ReadAll(limited)
 			if err != nil {
-				log.Printf("[traffic-capture] inbound exceeded %d byte hard ceiling or read error: %v", maxInboundBodyForCapture, err)
+				log.Printf("[traffic-capture] inbound exceeded %d byte hard ceiling or read error: %v", inboundLimit, err)
 				c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{
 					"type": "error",
 					"error": gin.H{
@@ -239,7 +251,14 @@ func TrafficCaptureMiddleware(svc *service.TrafficCaptureService) gin.HandlerFun
 		// metadata on every pathological-size request. The marker JSON still
 		// carries _truncated/_size_bytes/_sha256_short, which is much more
 		// useful for ops triage than an empty field.
-		if v, ok := c.Get(service.OpsUpstreamRequestBodyKey); ok {
+		if v, ok := c.Get(service.TrafficCaptureUpstreamRequestBodyKey); ok {
+			switch raw := v.(type) {
+			case []byte:
+				entry.OutboundBody = raw
+			case string:
+				entry.OutboundBody = []byte(raw)
+			}
+		} else if v, ok := c.Get(service.OpsUpstreamRequestBodyKey); ok {
 			switch raw := v.(type) {
 			case []byte:
 				entry.OutboundBody = raw

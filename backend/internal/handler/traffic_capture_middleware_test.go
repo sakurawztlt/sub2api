@@ -1,13 +1,13 @@
 // 2026-05-12 R29 P7 middleware behavior tests.
 //
 // 覆盖 codex audit 7 项的 middleware 行为面:
-//   1) inbound 大于 cap → 业务 handler 拿到完整 body (P1 fix)
-//   2) 落库 inbound 按 cap 截 + truncated=true
-//   3) 200 成功也 capture (不只 error)
-//   4) response totalBytes 真实大小 (P5 fix)
-//   5) UpstreamRequestID 接得上 (P3)
-//   6) OutboundHeaders 落库脱敏 (P4)
-//   7) client_ip / user_agent 落库 (P-B)
+//  1. inbound 大于 cap → 业务 handler 拿到完整 body (P1 fix)
+//  2. 落库 inbound 按 cap 截 + truncated=true
+//  3. 200 成功也 capture (不只 error)
+//  4. response totalBytes 真实大小 (P5 fix)
+//  5. UpstreamRequestID 接得上 (P3)
+//  6. OutboundHeaders 落库脱敏 (P4)
+//  7. client_ip / user_agent 落库 (P-B)
 package handler
 
 import (
@@ -248,5 +248,33 @@ func TestTrafficCaptureMiddleware_OversizeReturns413(t *testing.T) {
 	body := w.Body.String()
 	if !strings.Contains(body, "invalid_request_error") {
 		t.Errorf("response body should be Anthropic-shaped 413, got: %s", body)
+	}
+}
+
+func TestTrafficCaptureMiddleware_CeilingFollowsCaptureMaxBytes(t *testing.T) {
+	bodyLen := defaultInboundBodyCaptureCeiling + 1
+	cfg := service.TrafficCaptureConfig{Enabled: true, MaxBytes: bodyLen + 1024, TTL: time.Hour, Sampling: 1.0}
+	svc := service.NewTrafficCaptureService(nil, cfg)
+	defer svc.Close(context.Background())
+
+	r := gin.New()
+	r.Use(TrafficCaptureMiddleware(svc))
+	var handlerSaw int
+	r.POST("/v1/messages", func(c *gin.Context) {
+		b, _ := io.ReadAll(c.Request.Body)
+		handlerSaw = len(b)
+		c.JSON(200, gin.H{"ok": true})
+	})
+
+	bigBody := bytes.Repeat([]byte("X"), bodyLen)
+	req := httptest.NewRequest("POST", "/v1/messages", bytes.NewReader(bigBody))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if handlerSaw != bodyLen {
+		t.Fatalf("handler body len = %d, want %d", handlerSaw, bodyLen)
 	}
 }

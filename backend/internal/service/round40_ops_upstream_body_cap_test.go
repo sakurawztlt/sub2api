@@ -81,6 +81,41 @@ func TestRound40_SetOpsUpstreamRequestBody_OverCapReplacedWithMarker(t *testing.
 		"marker envelope must start with the recognizable `_truncated` field so ops grep can identify capped rows")
 }
 
+func TestRound40_SetOpsUpstreamRequestBody_TrafficCaptureKeepsFullBodyWhenEnabled(t *testing.T) {
+	t.Setenv("SUB2API_TRAFFIC_CAPTURE_ENABLED", "true")
+	t.Setenv("SUB2API_TRAFFIC_CAPTURE_MAX_BYTES", "8388608")
+
+	c := newRound40GinContext()
+	body := bytes.Repeat([]byte("C"), opsUpstreamRequestBodyCapBytes+1)
+	setOpsUpstreamRequestBody(c, body)
+
+	opsValue, ok := c.Get(OpsUpstreamRequestBodyKey)
+	require.True(t, ok)
+	_, opsIsMarker := opsValue.(string)
+	require.True(t, opsIsMarker, "ops path must keep 4 MiB marker behavior")
+
+	captureValue, ok := c.Get(TrafficCaptureUpstreamRequestBodyKey)
+	require.True(t, ok, "traffic_capture should get an independent full-body key when enabled")
+	captureBody, ok := captureValue.([]byte)
+	require.True(t, ok, "traffic_capture body under env cap must stay verbatim []byte")
+	require.Equal(t, body, captureBody)
+}
+
+func TestRound40_SetOpsUpstreamRequestBody_TrafficCaptureUsesMarkerOverEnvCap(t *testing.T) {
+	t.Setenv("SUB2API_TRAFFIC_CAPTURE_ENABLED", "1")
+	t.Setenv("SUB2API_TRAFFIC_CAPTURE_MAX_BYTES", "1024")
+
+	c := newRound40GinContext()
+	body := bytes.Repeat([]byte("C"), opsUpstreamRequestBodyCapBytes+1)
+	setOpsUpstreamRequestBody(c, body)
+
+	captureValue, ok := c.Get(TrafficCaptureUpstreamRequestBodyKey)
+	require.True(t, ok)
+	marker, ok := captureValue.(string)
+	require.True(t, ok, "traffic_capture body above env cap must use marker")
+	require.Contains(t, marker, `"_capture_cap_bytes":1024`)
+}
+
 func TestRound40_TruncationMarker_EnvelopeShape(t *testing.T) {
 	// Construct a deterministic over-cap body so we can compute the
 	// expected hash and verify each field of the envelope.

@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -64,11 +66,24 @@ const (
 	// OpsSkipPassthroughKey 由 applyErrorPassthroughRule 在命中 skip_monitoring=true 的规则时设置。
 	// ops_error_logger 中间件检查此 key，为 true 时跳过错误记录。
 	OpsSkipPassthroughKey = "ops_skip_passthrough"
+
+	// TrafficCaptureUpstreamRequestBodyKey is independent from
+	// OpsUpstreamRequestBodyKey. Ops keeps a 4 MiB cap for retry/debug safety,
+	// while backup-only traffic_capture may intentionally retain the full
+	// upstream body when SUB2API_TRAFFIC_CAPTURE_ENABLED is on.
+	TrafficCaptureUpstreamRequestBodyKey = "traffic_capture_upstream_request_body"
 )
 
 func setOpsUpstreamRequestBody(c *gin.Context, body []byte) {
 	if c == nil || len(body) == 0 {
 		return
+	}
+	if capBytes := trafficCaptureFullBodyCapBytes(); capBytes > 0 {
+		if len(body) <= capBytes {
+			c.Set(TrafficCaptureUpstreamRequestBodyKey, body)
+		} else {
+			c.Set(TrafficCaptureUpstreamRequestBodyKey, buildTrafficCaptureBodyTruncationMarker(body, capBytes))
+		}
 	}
 	if len(body) <= opsUpstreamRequestBodyCapBytes {
 		// 热路径避免 string(body) 额外分配，按需在落库前再转换。
@@ -81,6 +96,34 @@ func setOpsUpstreamRequestBody(c *gin.Context, body []byte) {
 	// envelope is a valid JSON string; existing readers in
 	// appendOpsUpstreamError hit the `string` branch of the type switch.
 	c.Set(OpsUpstreamRequestBodyKey, buildOpsUpstreamRequestBodyTruncationMarker(body))
+}
+
+func trafficCaptureFullBodyCapBytes() int {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("SUB2API_TRAFFIC_CAPTURE_ENABLED")))
+	if !(v == "1" || v == "true" || v == "yes" || v == "on") {
+		return 0
+	}
+	capBytes := 256 * 1024
+	if raw := strings.TrimSpace(os.Getenv("SUB2API_TRAFFIC_CAPTURE_MAX_BYTES")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			capBytes = n
+		}
+	}
+	return capBytes
+}
+
+func buildTrafficCaptureBodyTruncationMarker(body []byte, capBytes int) string {
+	marker := buildOpsUpstreamRequestBodyTruncationMarker(body)
+	if capBytes > 0 {
+		var envelope map[string]any
+		if err := json.Unmarshal([]byte(marker), &envelope); err == nil {
+			envelope["_capture_cap_bytes"] = capBytes
+			if b, err := json.Marshal(envelope); err == nil {
+				return string(b)
+			}
+		}
+	}
+	return marker
 }
 
 // buildOpsUpstreamRequestBodyTruncationMarker returns a JSON envelope
