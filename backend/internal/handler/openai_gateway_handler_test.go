@@ -151,8 +151,8 @@ func TestOpenAIEnsureForwardErrorResponse_WritesFallbackWhenNotWritten(t *testin
 	require.NoError(t, err)
 	errorObj, ok := parsed["error"].(map[string]any)
 	require.True(t, ok)
-	// codex round 11am: customer-facing 中性化, "upstream_error" → "api_error",
-	// "Upstream request failed" → "Internal server error"
+	// Keep customer-facing fallback neutral while still emitting protocol-correct
+	// stream termination when headers have already been written.
 	assert.Equal(t, "api_error", errorObj["type"])
 	assert.Equal(t, "Internal server error", errorObj["message"])
 }
@@ -177,6 +177,7 @@ func TestOpenAIEnsureForwardErrorResponse_AppendsSSEAfterWritten(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "already written")
 	// 非 /responses 路径走 legacy event: error 分支。
 	assert.Contains(t, w.Body.String(), "event: error\n")
+	assert.Contains(t, w.Body.String(), `"type":"api_error"`)
 }
 
 // case B 回归测试：/responses 路径，Writer 已被写过（模拟 ping flushed），
@@ -197,8 +198,8 @@ func TestOpenAIEnsureForwardErrorResponse_ResponsesRouteAfterWrittenEmitsRespons
 	assert.Contains(t, body, ":\n\n", "earlier ping bytes preserved")
 	assert.Contains(t, body, "event: response.failed\n", "appended a Responses terminal event")
 	assert.Contains(t, body, `"type":"response.failed"`)
-	assert.Contains(t, body, `"code":"upstream_error"`)
-	assert.Contains(t, body, "Upstream request failed")
+	assert.Contains(t, body, `"code":"server_error"`)
+	assert.Contains(t, body, "Internal server error")
 }
 
 func TestShouldLogOpenAIForwardFailureAsWarn(t *testing.T) {
@@ -255,8 +256,6 @@ func TestOpenAIRecoverResponsesPanic_WritesFallbackResponse(t *testing.T) {
 
 	errorObj, ok := parsed["error"].(map[string]any)
 	require.True(t, ok)
-	// codex round 11am: customer-facing 中性化, "upstream_error" → "api_error",
-	// "Upstream request failed" → "Internal server error"
 	assert.Equal(t, "api_error", errorObj["type"])
 	assert.Equal(t, "Internal server error", errorObj["message"])
 }

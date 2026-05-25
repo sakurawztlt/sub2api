@@ -29,8 +29,8 @@ func TestGatewayEnsureForwardErrorResponse_WritesFallbackWhenNotWritten(t *testi
 	assert.Equal(t, "error", parsed["type"])
 	errorObj, ok := parsed["error"].(map[string]any)
 	require.True(t, ok)
-	// codex round 11am: customer-facing 中性化, "upstream_error" → "api_error",
-	// "Upstream request failed" → "Internal server error"
+	// Keep customer-facing fallback neutral while still emitting protocol-correct
+	// stream termination when headers have already been written.
 	assert.Equal(t, "api_error", errorObj["type"])
 	assert.Equal(t, "Internal server error", errorObj["message"])
 }
@@ -70,4 +70,5 @@ func TestGatewayEnsureForwardErrorResponse_ResponsesRouteAfterWrittenEmitsRespon
 	assert.Contains(t, body, ":\n\n")
 	assert.Contains(t, body, "event: response.failed\n")
 	assert.Contains(t, body, `"type":"response.failed"`)
+	assert.Contains(t, body, `"code":"server_error"`)
 }
