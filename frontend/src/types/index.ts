@@ -1763,7 +1763,6 @@ export interface UpdateScheduledTestPlanRequest {
 // Payment types
 export type { SubscriptionPlan, PaymentOrder, CheckoutInfoResponse } from './payment'
 
-
 // ==================== Batch Account Test Types ====================
 
 
@@ -1799,3 +1798,11 @@ export interface BatchAccountTestStreamEvent {
   results?: BatchAccountTestResult[]
   message?: string
 }
+
+export type {
+  PlatformQuotaItem,
+  PlatformQuotaUpdateItem,
+  PlatformQuotaPlatform,
+  PlatformQuotaWindow,
+  PlatformQuotasResponse,
+} from '@/api/admin/users'
