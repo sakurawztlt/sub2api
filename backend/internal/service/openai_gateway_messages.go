@@ -24,6 +24,11 @@ import (
 	"go.uber.org/zap"
 )
 
+var (
+	errOpenAICompatBufferedTotalTimeout           = errors.New("buffered total timeout")
+	errOpenAICompatBufferedFirstMeaningfulTimeout = errors.New("buffered first meaningful timeout")
+)
+
 // ForwardAsAnthropic accepts an Anthropic Messages request body, converts it
 // to OpenAI Responses API format, forwards to the OpenAI upstream, and converts
 // the response back to Anthropic Messages format. This enables Claude Code
@@ -576,18 +581,44 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 
 	finalResponse, usage, acc, err := s.readOpenAICompatBufferedTerminal(c.Request.Context(), resp, "openai messages buffered", requestID)
 	if err != nil {
-		// 5/10 codex audit: buffered path 网络层 stream 读取错误 (EOF/reset/
-		// TLS handshake/timeout) 在 !c.Writer.Written() 时 (buffered 路径
-		// 一定没写过 SSE) 返 BreakSticky failover 让 handler 重选账号 retry.
-		// 业务错误 (JSON parse / 4xx event 等) 走原 path 客户 502.
-		if IsUpstreamNetworkError(err) && !c.Writer.Written() {
-			return nil, &UpstreamFailoverError{
-				StatusCode:  http.StatusBadGateway,
-				BreakSticky: true,
-				Reason:      "buffered_stream_read_error",
+		if errors.Is(err, errOpenAICompatBufferedTotalTimeout) {
+			if acc != nil && acc.HasContent() {
+				finalResponse = &apicompat.ResponsesResponse{
+					Status: "incomplete",
+					Output: acc.BuildOutput(),
+				}
+				logger.L().Warn("openai messages buffered: synthesized terminal from accumulator (buffered total timeout)",
+					zap.String("request_id", requestID),
+				)
+			} else if !c.Writer.Written() {
+				return nil, &UpstreamFailoverError{
+					StatusCode:  http.StatusBadGateway,
+					BreakSticky: true,
+					Reason:      "buffered_total_timeout",
+				}
 			}
 		}
-		return nil, err
+		if finalResponse == nil {
+			if errors.Is(err, errOpenAICompatBufferedFirstMeaningfulTimeout) && !c.Writer.Written() {
+				return nil, &UpstreamFailoverError{
+					StatusCode:  http.StatusBadGateway,
+					BreakSticky: true,
+					Reason:      "first_meaningful_timeout",
+				}
+			}
+			// 5/10 codex audit: buffered path 网络层 stream 读取错误 (EOF/reset/
+			// TLS handshake/timeout) 在 !c.Writer.Written() 时 (buffered 路径
+			// 一定没写过 SSE) 返 BreakSticky failover 让 handler 重选账号 retry.
+			// 业务错误 (JSON parse / 4xx event 等) 走原 path 客户 502.
+			if IsUpstreamNetworkError(err) && !c.Writer.Written() {
+				return nil, &UpstreamFailoverError{
+					StatusCode:  http.StatusBadGateway,
+					BreakSticky: true,
+					Reason:      "buffered_stream_read_error",
+				}
+			}
+			return nil, err
+		}
 	}
 
 	// If the upstream closed the stream without emitting a terminal event
@@ -915,7 +946,7 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 				zap.String("request_id", requestID),
 				zap.Int("seconds", s.cfg.Gateway.BufferedTotalTimeout),
 			)
-			return nil, usage, acc, fmt.Errorf("buffered total timeout")
+			return nil, usage, acc, errOpenAICompatBufferedTotalTimeout
 
 		case <-firstMeaningCh:
 			if firstMeaningSeen {
@@ -926,7 +957,7 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 				zap.String("request_id", requestID),
 				zap.Int("seconds", s.cfg.Gateway.BufferedFirstMeaningfulTimeout),
 			)
-			return nil, usage, acc, fmt.Errorf("buffered first meaningful timeout")
+			return nil, usage, acc, errOpenAICompatBufferedFirstMeaningfulTimeout
 		}
 	}
 }

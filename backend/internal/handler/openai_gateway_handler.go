@@ -627,6 +627,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	perReasonSwitchCap := map[string]int{
 		"first_meaningful_timeout":     1,
 		"stream_data_interval_timeout": 1, // 5/10 R38: data interval 同样限 1 次防烧账号
+		"buffered_total_timeout":       1, // 5/25 v2: buffered 非流总超时可换一次账号, 避免直接 502
 	}
 	// 2026-05-15 codex round 11ai: large-context fail-fast. 大请求
 	// (msgs>100 或 body>800KB) 不让 first_meaningful_timeout retry,
@@ -641,6 +642,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			c.Request = c.Request.WithContext(service.WithLargeContextCtx(c.Request.Context()))
 			perReasonSwitchCap["first_meaningful_timeout"] = 0
 			perReasonSwitchCap["stream_data_interval_timeout"] = 0
+			perReasonSwitchCap["buffered_total_timeout"] = 0
 			reqLog = reqLog.With(zap.Bool("large_context_request", true))
 		}
 	}
@@ -1568,8 +1570,9 @@ func (h *OpenAIGatewayHandler) handleFailoverExhaustedSimple(c *gin.Context, sta
 // invalid_request_error / authentication_error / permission_error /
 // not_found_error / rate_limit_error / api_error / overloaded_error),
 // message 含 "Upstream" 暴露 fork 内部架构. 改:
-//   errType: upstream_error → api_error (Anthropic 通用 5xx)
-//   message: 去 "Upstream"/"please contact administrator" 中性化
+//
+//	errType: upstream_error → api_error (Anthropic 通用 5xx)
+//	message: 去 "Upstream"/"please contact administrator" 中性化
 func (h *OpenAIGatewayHandler) mapUpstreamError(statusCode int) (int, string, string) {
 	switch statusCode {
 	case 401:
