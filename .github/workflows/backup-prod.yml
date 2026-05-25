@@ -1,0 +1,62 @@
+name: backup-prod-sub2api
+
+on:
+  push:
+    branches:
+      - backup-prod
+  workflow_dispatch:
+
+concurrency:
+  group: backup-prod-sub2api
+  cancel-in-progress: false
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+      - name: Backend tests
+        working-directory: backend
+        run: go test ./...
+      - name: Docker build smoke
+        run: docker build -t sub2api-backup-prod:${{ github.sha }} .
+
+  deploy-backup:
+    needs: test-and-build
+    if: ${{ vars.BACKUP_DEPLOY_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pack source
+        run: |
+          COPYFILE_DISABLE=1 tar --exclude='.git' --exclude='._*' \
+            --exclude='frontend/node_modules' --exclude='frontend/dist' --exclude='backend/bin' \
+            -czf /tmp/sub2api-src.tgz .
+      - name: Install SSH key
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.BACKUP_JENKINS_SSH_KEY }}" > ~/.ssh/jenkins_key
+          chmod 600 ~/.ssh/jenkins_key
+      - name: Upload source and trigger Jenkins backup job
+        env:
+          JENKINS_HOST: ${{ vars.BACKUP_JENKINS_HOST || '51.75.130.36' }}
+          JENKINS_SSH_PORT: ${{ vars.BACKUP_JENKINS_SSH_PORT || '22' }}
+          JENKINS_SSH_USER: ${{ vars.BACKUP_JENKINS_SSH_USER || 'root' }}
+          JENKINS_USER: ${{ secrets.BACKUP_JENKINS_USER }}
+          JENKINS_TOKEN: ${{ secrets.BACKUP_JENKINS_TOKEN }}
+        run: |
+          set -euo pipefail
+          scp -P "$JENKINS_SSH_PORT" -i ~/.ssh/jenkins_key -o StrictHostKeyChecking=no \
+            /tmp/sub2api-src.tgz "$JENKINS_SSH_USER@$JENKINS_HOST:/opt/jenkins/srcache/sub2api-src.tgz"
+          ssh -p "$JENKINS_SSH_PORT" -i ~/.ssh/jenkins_key -o StrictHostKeyChecking=no \
+            "$JENKINS_SSH_USER@$JENKINS_HOST" '
+              set -euo pipefail
+              J=http://127.0.0.1:8080
+              AUTH="'"$JENKINS_USER:$JENKINS_TOKEN"'"
+              cookie=/tmp/jenkins_backup_sub2api.cookie
+              crumb=$(curl -fsS -c "$cookie" -u "$AUTH" "$J/crumbIssuer/api/xml?xpath=concat(//crumbRequestField,%22:%22,//crumb)")
+              curl -fsS -b "$cookie" -u "$AUTH" -H "$crumb" -X POST "$J/job/backup-k8s-sub2api/build"
+            '
