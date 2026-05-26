@@ -145,6 +145,26 @@
               </button>
             </div>
 
+            <div class="flex flex-col gap-2 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 dark:border-dark-700 dark:bg-dark-900/30 sm:flex-row sm:items-center sm:justify-between">
+              <div class="flex min-w-0 items-center gap-2 text-sm text-gray-700 dark:text-gray-200">
+                <Icon name="filter" size="sm" class="flex-shrink-0 text-gray-400" />
+                <span class="font-medium">{{ t('admin.riskControl.modelFilter') }}</span>
+                <span class="truncate text-gray-500 dark:text-gray-400">{{ modelFilterSummary }}</span>
+              </div>
+              <div v-if="modelFilterPreviewModels.length > 0" class="flex flex-wrap gap-1.5">
+                <span
+                  v-for="model in modelFilterPreviewModels"
+                  :key="model"
+                  class="inline-flex max-w-[180px] items-center truncate rounded-md bg-white px-2 py-1 font-mono text-xs text-gray-600 shadow-sm dark:bg-dark-800 dark:text-gray-300"
+                >
+                  {{ model }}
+                </span>
+                <span v-if="hiddenModelFilterModelCount > 0" class="inline-flex rounded-md bg-white px-2 py-1 text-xs text-gray-500 shadow-sm dark:bg-dark-800 dark:text-gray-400">
+                  +{{ hiddenModelFilterModelCount }}
+                </span>
+              </div>
+            </div>
+
             <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
               <Select v-model="filters.result" :options="resultOptions" @change="reloadLogsFromFirstPage" />
               <Select v-model="filters.group_id" :options="groupFilterOptions" @change="reloadLogsFromFirstPage" />
@@ -331,12 +351,12 @@
                   <button
                     type="button"
                     class="btn btn-secondary inline-flex items-center gap-2"
-                    :disabled="apiKeyTesting || !configForm.api_key_configured || configForm.clear_api_key"
-	                    @click="testApiKeys(false)"
-	                  >
-	                    <Icon name="shield" size="sm" />
-	                    {{ storedApiKeyTestButtonText }}
-	                  </button>
+                    :disabled="apiKeyTesting || effectiveStoredApiKeyCount === 0 || pendingDeletedApiKeyCount > 0 || configForm.clear_api_key || configForm.api_keys_mode === 'replace'"
+                    @click="testApiKeys(false)"
+                  >
+                    <Icon name="shield" size="sm" />
+                    {{ storedApiKeyTestButtonText }}
+                  </button>
                   <button
                     v-if="configForm.api_key_configured"
                     type="button"
@@ -351,10 +371,36 @@
 
               <div class="grid grid-cols-1 gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_minmax(360px,440px)]">
                 <div class="space-y-3">
+                  <div class="flex flex-col gap-2 rounded-lg border border-gray-100 bg-gray-50 p-2 dark:border-dark-700 dark:bg-dark-900/30 sm:flex-row sm:items-center sm:justify-between">
+                    <div class="text-xs leading-5 text-gray-500 dark:text-gray-400">
+                      <span class="font-medium text-gray-700 dark:text-gray-200">{{ t('admin.riskControl.apiKeysWriteMode') }}</span>
+                      <span class="ml-2">{{ apiKeysModeHint }}</span>
+                    </div>
+                    <div class="inline-flex rounded-lg bg-white p-1 shadow-sm dark:bg-dark-800">
+                      <button
+                        type="button"
+                        class="rounded-md px-3 py-1.5 text-xs font-medium transition-colors"
+                        :class="configForm.api_keys_mode === 'append' ? 'bg-primary-500 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700'"
+                        :disabled="configForm.clear_api_key"
+                        @click="setAPIKeysMode('append')"
+                      >
+                        {{ t('admin.riskControl.apiKeysModeAppend') }}
+                      </button>
+                      <button
+                        type="button"
+                        class="rounded-md px-3 py-1.5 text-xs font-medium transition-colors"
+                        :class="configForm.api_keys_mode === 'replace' ? 'bg-amber-500 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700'"
+                        :disabled="configForm.clear_api_key"
+                        @click="setAPIKeysMode('replace')"
+                      >
+                        {{ t('admin.riskControl.apiKeysModeReplace') }}
+                      </button>
+                    </div>
+                  </div>
                   <textarea
                     v-model="configForm.api_keys_text"
                     class="input min-h-44 resize-y font-mono text-sm"
-                    :placeholder="apiKeyPlaceholder"
+                    :placeholder="apiKeysPlaceholder"
                     autocomplete="new-password"
                     :disabled="configForm.clear_api_key"
                   ></textarea>
@@ -367,6 +413,12 @@
                     </span>
                     <span v-if="configForm.clear_api_key" class="inline-flex rounded-md bg-red-50 px-2 py-1 text-red-700 dark:bg-red-900/20 dark:text-red-300">
                       {{ t('admin.riskControl.apiKeyWillClear') }}
+                    </span>
+                    <span v-else-if="pendingDeletedApiKeyCount > 0" class="inline-flex rounded-md bg-amber-50 px-2 py-1 text-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+                      {{ t('admin.riskControl.apiKeyPendingDeleteCount', { count: pendingDeletedApiKeyCount }) }}
+                    </span>
+                    <span v-if="configForm.api_keys_mode === 'replace'" class="inline-flex rounded-md bg-amber-50 px-2 py-1 text-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+                      {{ t('admin.riskControl.apiKeysReplaceWarning') }}
                     </span>
                   </div>
 
@@ -431,12 +483,12 @@
                 </div>
 
                 <div class="rounded-lg border border-gray-100 bg-gray-50 p-3 dark:border-dark-700 dark:bg-dark-900/30">
-                  <div class="mb-3 flex items-center justify-between gap-3">
-                    <div>
+                  <div class="mb-3 flex items-start justify-between gap-3">
+                    <div class="min-w-0">
                       <p class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.riskControl.apiKeyHealth') }}</p>
                       <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.apiKeyFreezeRule') }}</p>
                     </div>
-                    <span class="inline-flex rounded-md bg-white px-2 py-1 text-xs font-medium text-gray-600 shadow-sm dark:bg-dark-800 dark:text-gray-300">
+                    <span class="inline-flex shrink-0 items-center whitespace-nowrap rounded-full bg-white px-2 py-0.5 text-[11px] font-medium leading-5 text-gray-600 shadow-sm dark:bg-dark-800 dark:text-gray-300">
                       {{ t('admin.riskControl.apiKeyRows', { count: apiKeyRows.length }) }}
                     </span>
                   </div>
@@ -446,33 +498,61 @@
                     <p class="mt-2 text-sm font-medium text-gray-700 dark:text-gray-200">{{ t('admin.riskControl.apiKeyHealthEmpty') }}</p>
                     <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.apiKeyHealthEmptyHint') }}</p>
                   </div>
-                  <div v-else class="max-h-72 space-y-2 overflow-y-auto pr-1">
-                    <div
-                      v-for="(row, index) in apiKeyRows"
-                      :key="apiKeyRowKey(row, index)"
-                      class="rounded-lg border border-gray-100 bg-white p-3 shadow-sm dark:border-dark-700 dark:bg-dark-800"
-                    >
-                      <div class="flex items-start justify-between gap-3">
-                        <div class="min-w-0">
-                          <div class="flex min-w-0 flex-wrap items-center gap-2">
-                            <span class="truncate font-mono text-sm font-semibold text-gray-900 dark:text-white">{{ row.masked || '-' }}</span>
-                            <span
-                              class="inline-flex rounded-md px-1.5 py-0.5 text-[11px] font-medium"
-                              :class="row.configured ? 'bg-primary-50 text-primary-700 dark:bg-primary-900/30 dark:text-primary-300' : 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300'"
-                            >
-                              {{ row.configured ? t('admin.riskControl.apiKeyConfigured') : t('admin.riskControl.apiKeyTemporary') }}
-                            </span>
+                  <div v-else class="space-y-2">
+                    <div class="space-y-2" :class="apiKeyRowsExpanded ? 'max-h-72 overflow-y-auto pr-1' : ''">
+                      <div
+                        v-for="(row, index) in visibleApiKeyRows"
+                        :key="apiKeyRowKey(row, index)"
+                        class="rounded-lg border bg-white p-2.5 shadow-sm dark:bg-dark-800"
+                        :class="isStoredApiKeyPendingDelete(row) ? 'border-amber-200 opacity-70 dark:border-amber-800/60' : 'border-gray-100 dark:border-dark-700'"
+                      >
+                        <div class="flex items-start justify-between gap-2">
+                          <div class="min-w-0">
+                            <div class="flex min-w-0 flex-wrap items-center gap-2">
+                              <span class="truncate font-mono text-sm font-semibold text-gray-900 dark:text-white">{{ row.masked || '-' }}</span>
+                              <span
+                                class="inline-flex rounded-md px-1.5 py-0.5 text-[11px] font-medium"
+                                :class="row.configured ? 'bg-primary-50 text-primary-700 dark:bg-primary-900/30 dark:text-primary-300' : 'bg-purple-50 text-purple-700 dark:bg-purple-900/30 dark:text-purple-300'"
+                              >
+                                {{ isStoredApiKeyPendingDelete(row) ? t('admin.riskControl.apiKeyPendingDelete') : row.configured ? t('admin.riskControl.apiKeyConfigured') : t('admin.riskControl.apiKeyTemporary') }}
+                              </span>
+                            </div>
+                            <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">{{ apiKeyStatusMeta(row) }}</p>
                           </div>
-                          <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">{{ apiKeyStatusMeta(row) }}</p>
+                          <div class="flex flex-shrink-0 items-center gap-1.5">
+                            <span class="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium" :class="apiKeyStatusBadgeClass(row.status)">
+                              <span class="h-1.5 w-1.5 rounded-full" :class="apiKeyStatusDotClass(row.status)"></span>
+                              {{ apiKeyStatusLabel(row.status) }}
+                            </span>
+                            <button
+                              v-if="row.configured && !configForm.clear_api_key"
+                              type="button"
+                              class="inline-flex h-7 w-7 items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-dark-700 dark:hover:text-gray-200"
+                              :title="isStoredApiKeyPendingDelete(row) ? t('admin.riskControl.undoDeleteApiKey') : t('admin.riskControl.deleteApiKey')"
+                              @click="toggleDeleteStoredApiKey(row)"
+                            >
+                              <Icon :name="isStoredApiKeyPendingDelete(row) ? 'refresh' : 'trash'" size="xs" />
+                            </button>
+                          </div>
                         </div>
-                        <span class="inline-flex flex-shrink-0 items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium" :class="apiKeyStatusBadgeClass(row.status)">
-                          <span class="h-1.5 w-1.5 rounded-full" :class="apiKeyStatusDotClass(row.status)"></span>
-                          {{ apiKeyStatusLabel(row.status) }}
-                        </span>
+                        <p v-if="row.last_error" class="mt-1.5 rounded-md bg-amber-50 px-2 py-1.5 text-xs leading-5 text-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+                          {{ row.last_error }}
+                        </p>
                       </div>
-                      <p v-if="row.last_error" class="mt-2 rounded-md bg-amber-50 px-2 py-1.5 text-xs leading-5 text-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
-                        {{ row.last_error }}
-                      </p>
+                    </div>
+
+                    <div v-if="canToggleApiKeyRows" class="flex items-center justify-between gap-3 rounded-lg border border-dashed border-gray-200 bg-white px-3 py-2 text-xs text-gray-500 dark:border-dark-700 dark:bg-dark-800 dark:text-gray-400">
+                      <span class="min-w-0 truncate">
+                        {{ apiKeyRowsExpanded ? t('admin.riskControl.apiKeyRowsExpanded', { count: apiKeyRows.length }) : t('admin.riskControl.apiKeyRowsCollapsed', { count: hiddenApiKeyRowCount }) }}
+                      </span>
+                      <button
+                        type="button"
+                        class="inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 font-medium text-primary-600 transition-colors hover:bg-primary-50 hover:text-primary-700 dark:text-primary-300 dark:hover:bg-primary-900/20"
+                        @click="apiKeyRowsExpanded = !apiKeyRowsExpanded"
+                      >
+                        <Icon :name="apiKeyRowsExpanded ? 'chevronUp' : 'chevronDown'" size="xs" />
+                        {{ apiKeyRowsExpanded ? t('admin.riskControl.collapseApiKeyRows') : t('admin.riskControl.expandApiKeyRows') }}
+                      </button>
                     </div>
                   </div>
 
@@ -566,6 +646,52 @@
                   </span>
                 </button>
                 <p v-if="filteredGroups.length === 0" class="text-sm text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.noGroups') }}</p>
+              </div>
+            </div>
+
+            <div class="space-y-4 rounded-lg border border-gray-100 p-4 dark:border-dark-700">
+              <div class="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.riskControl.modelFilter') }}</h3>
+                  <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.modelFilterHint') }}</p>
+                </div>
+                <span class="inline-flex w-fit rounded-md bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-600 dark:bg-dark-700 dark:text-gray-300">
+                  {{ modelFilterSummary }}
+                </span>
+              </div>
+
+              <div class="grid grid-cols-1 gap-2 md:grid-cols-3">
+                <button
+                  v-for="option in modelFilterOptions"
+                  :key="option.value"
+                  type="button"
+                  class="rounded-lg border p-3 text-left transition-colors"
+                  :class="configForm.model_filter_type === option.value
+                    ? 'border-primary-300 bg-primary-50 text-primary-900 shadow-sm dark:border-primary-700 dark:bg-primary-900/20 dark:text-primary-100'
+                    : 'border-gray-100 hover:bg-gray-50 dark:border-dark-700 dark:hover:bg-dark-700/60'"
+                  @click="setModelFilterType(option.value)"
+                >
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="text-sm font-semibold">{{ option.label }}</span>
+                    <span
+                      class="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full border"
+                      :class="configForm.model_filter_type === option.value
+                        ? 'border-primary-500 bg-primary-500 text-white'
+                        : 'border-gray-300 text-transparent dark:border-dark-500'"
+                    >
+                      <Icon name="check" size="xs" :stroke-width="2" />
+                    </span>
+                  </div>
+                  <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">{{ option.description }}</p>
+                </button>
+              </div>
+
+              <div v-if="configForm.model_filter_type !== 'all'" class="space-y-2">
+                <label class="input-label">{{ t('admin.riskControl.modelFilterModels') }}</label>
+                <ModelWhitelistSelector v-model="configForm.model_filter_models" />
+                <p class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ t('admin.riskControl.modelFilterModelCount', { count: modelFilterModelCount }) }}
+                </p>
               </div>
             </div>
           </div>
@@ -668,6 +794,127 @@
             </div>
           </div>
 
+          <div v-else-if="activeSettingsTab === 'riskThresholds'" class="space-y-5">
+            <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.riskControl.riskThresholds') }}</h3>
+                <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.riskThresholdsHint') }}</p>
+              </div>
+              <button
+                type="button"
+                class="btn btn-secondary inline-flex items-center justify-center gap-2"
+                @click="resetRiskThresholds"
+              >
+                <Icon name="refresh" size="sm" />
+                {{ t('admin.riskControl.riskThresholdReset') }}
+              </button>
+            </div>
+
+            <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+              <div
+                v-for="row in riskThresholdRows"
+                :key="row.category"
+                class="rounded-lg border border-gray-100 bg-gray-50 p-4 dark:border-dark-700 dark:bg-dark-900/30"
+              >
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <label class="block truncate text-sm font-semibold text-gray-900 dark:text-white" :for="`risk-threshold-${row.category}`">
+                      {{ row.category }}
+                    </label>
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      {{ t('admin.riskControl.riskThresholdDefault', { value: formatThresholdPercent(row.defaultValue) }) }}
+                    </p>
+                  </div>
+                  <span class="inline-flex shrink-0 rounded-md bg-white px-2 py-1 font-mono text-xs font-medium text-gray-600 shadow-sm dark:bg-dark-800 dark:text-gray-300">
+                    {{ formatThresholdPercent(row.value) }}
+                  </span>
+                </div>
+                <div class="mt-3">
+                  <label class="sr-only" :for="`risk-threshold-${row.category}`">
+                    {{ t('admin.riskControl.riskThresholdPercent') }}
+                  </label>
+                  <div class="relative">
+                    <input
+                      :id="`risk-threshold-${row.category}`"
+                      v-model.number="configForm.thresholds[row.category]"
+                      :data-test="`risk-threshold-${row.category}`"
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="0.1"
+                      class="input pr-8 font-mono"
+                    />
+                    <span class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">%</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-else-if="activeSettingsTab === 'keywords'" class="space-y-5">
+            <div
+              class="flex items-start gap-3 rounded-lg border p-4"
+              :class="keywordNotice.toneClass"
+            >
+              <Icon
+                :name="keywordNotice.icon"
+                size="md"
+                :class="keywordNotice.iconClass"
+              />
+              <div class="text-sm leading-6">
+                <p class="font-medium" :class="keywordNotice.titleClass">{{ keywordNotice.title }}</p>
+                <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ keywordNotice.description }}</p>
+              </div>
+            </div>
+
+            <div class="space-y-2">
+              <label class="input-label">{{ t('admin.riskControl.keywordBlockingMode') }}</label>
+              <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                <button
+                  v-for="option in keywordBlockingModeOptions"
+                  :key="option.value"
+                  type="button"
+                  class="rounded-lg border p-3 text-left transition-colors"
+                  :class="configForm.keyword_blocking_mode === option.value
+                    ? 'border-primary-300 bg-primary-50 text-primary-900 shadow-sm dark:border-primary-700 dark:bg-primary-900/20 dark:text-primary-100'
+                    : 'border-gray-100 hover:bg-gray-50 dark:border-dark-700 dark:hover:bg-dark-700/60'"
+                  @click="configForm.keyword_blocking_mode = option.value"
+                >
+                  <div class="flex items-center justify-between gap-2">
+                    <span class="text-sm font-semibold">{{ option.label }}</span>
+                    <span
+                      class="flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full border"
+                      :class="configForm.keyword_blocking_mode === option.value
+                        ? 'border-primary-500 bg-primary-500 text-white'
+                        : 'border-gray-300 text-transparent dark:border-dark-500'"
+                    >
+                      <Icon name="check" size="xs" :stroke-width="2" />
+                    </span>
+                  </div>
+                  <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">{{ option.description }}</p>
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <div class="mb-2 flex items-center justify-between">
+                <label class="input-label mb-0">{{ t('admin.riskControl.blockedKeywords') }}</label>
+                <span class="inline-flex rounded-md bg-gray-100 px-2 py-1 text-xs text-gray-500 dark:bg-dark-700 dark:text-gray-300">
+                  {{ t('admin.riskControl.blockedKeywordCount', { count: blockedKeywordCount }) }}
+                </span>
+              </div>
+              <textarea
+                v-model="configForm.blocked_keywords_text"
+                class="input min-h-52 resize-y font-mono text-sm"
+                :placeholder="t('admin.riskControl.blockedKeywordsPlaceholder')"
+                :disabled="configForm.keyword_blocking_mode === 'api_only'"
+              ></textarea>
+              <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.riskControl.blockedKeywordsLimit', { max: blockedKeywordMax }) }}
+              </p>
+            </div>
+          </div>
+
           <div v-else class="grid grid-cols-1 gap-5 lg:grid-cols-2">
             <div>
               <label class="input-label">{{ t('admin.riskControl.hitRetentionDays') }}</label>
@@ -763,13 +1010,17 @@ import Icon from '@/components/icons/Icon.vue'
 import Select from '@/components/common/Select.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import Pagination from '@/components/common/Pagination.vue'
+import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.vue'
 import { adminAPI } from '@/api/admin'
 import type {
   ContentModerationAPIKeyStatus,
   ContentModerationConfig,
   ContentModerationLog,
+  ContentModerationModelFilter,
+  ContentModerationModelFilterType,
   ContentModerationRuntimeStatus,
   ContentModerationTestAuditResult,
+  KeywordBlockingMode,
   ModerationMode,
   UpdateContentModerationConfig,
 } from '@/api/admin/riskControl'
@@ -778,8 +1029,9 @@ import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { formatDateTime as formatDateTimeValue } from '@/utils/format'
 
-type SettingsTab = 'basic' | 'scope' | 'runtime' | 'response' | 'retention'
+type SettingsTab = 'basic' | 'scope' | 'runtime' | 'response' | 'riskThresholds' | 'retention' | 'keywords'
 type WorkerSlotState = 'active' | 'idle' | 'disabled'
+type APIKeysWriteMode = 'append' | 'replace'
 type OverviewIcon = 'shield' | 'key' | 'users' | 'document'
 type OverviewItem = {
   key: string
@@ -797,9 +1049,32 @@ type ModerationScoreRow = {
   threshold: number
   hit: boolean
 }
+type RiskThresholdRow = {
+  category: string
+  value: number
+  defaultValue: number
+}
 
-const maxModerationTestImages = 4
+const maxModerationTestImages = 1
 const maxModerationTestImageSize = 8 * 1024 * 1024
+const maxVisibleApiKeyRows: number = 3
+const blockedKeywordMax = 10000
+const riskThresholdDefaults: Record<string, number> = {
+  harassment: 98,
+  'harassment/threatening': 90,
+  hate: 65,
+  'hate/threatening': 65,
+  illicit: 95,
+  'illicit/violent': 95,
+  'self-harm': 65,
+  'self-harm/intent': 85,
+  'self-harm/instructions': 65,
+  sexual: 65,
+  'sexual/minors': 65,
+  violence: 95,
+  'violence/graphic': 95,
+}
+const riskThresholdCategories = Object.keys(riskThresholdDefaults)
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -819,6 +1094,8 @@ const groups = ref<AdminGroup[]>([])
 const logs = ref<ContentModerationLog[]>([])
 const status = ref<ContentModerationRuntimeStatus | null>(null)
 const testedApiKeyStatuses = ref<ContentModerationAPIKeyStatus[]>([])
+const pendingDeleteApiKeyHashes = ref<string[]>([])
+const apiKeyRowsExpanded = ref<boolean>(false)
 const moderationTestPrompt = ref('')
 const moderationTestImages = ref<string[]>([])
 const moderationTestResult = ref<ContentModerationTestAuditResult | null>(null)
@@ -836,6 +1113,7 @@ const configForm = reactive({
   api_key_count: 0,
   api_key_masks: [] as string[],
   api_key_statuses: [] as ContentModerationAPIKeyStatus[],
+  api_keys_mode: 'append' as APIKeysWriteMode,
   clear_api_key: false,
   timeout_ms: 3000,
   retry_count: 2,
@@ -854,6 +1132,11 @@ const configForm = reactive({
   hit_retention_days: 180,
   non_hit_retention_days: 3,
   pre_hash_check_enabled: false,
+  thresholds: { ...riskThresholdDefaults } as Record<string, number>,
+  blocked_keywords_text: '',
+  keyword_blocking_mode: 'keyword_and_api' as KeywordBlockingMode,
+  model_filter_type: 'all' as ContentModerationModelFilterType,
+  model_filter_models: [] as string[],
 })
 
 const pagination = reactive({
@@ -877,6 +1160,8 @@ const settingsTabs = computed<Array<{ id: SettingsTab; label: string }>>(() => [
   { id: 'scope', label: t('admin.riskControl.tabs.scope') },
   { id: 'runtime', label: t('admin.riskControl.tabs.runtime') },
   { id: 'response', label: t('admin.riskControl.tabs.response') },
+  { id: 'riskThresholds', label: t('admin.riskControl.tabs.riskThresholds') },
+  { id: 'keywords', label: t('admin.riskControl.tabs.keywords') },
   { id: 'retention', label: t('admin.riskControl.tabs.retention') },
 ])
 
@@ -885,6 +1170,96 @@ const modeOptions = computed<SelectOption[]>(() => [
   { value: 'observe', label: t('admin.riskControl.modeObserve') },
   { value: 'off', label: t('admin.riskControl.modeOff') },
 ])
+
+const keywordBlockingModeOptions = computed<Array<{ value: KeywordBlockingMode; label: string; description: string }>>(() => [
+  {
+    value: 'keyword_and_api',
+    label: t('admin.riskControl.keywordModeKeywordAndApi'),
+    description: t('admin.riskControl.keywordModeKeywordAndApiDesc'),
+  },
+  {
+    value: 'keyword_only',
+    label: t('admin.riskControl.keywordModeKeywordOnly'),
+    description: t('admin.riskControl.keywordModeKeywordOnlyDesc'),
+  },
+  {
+    value: 'api_only',
+    label: t('admin.riskControl.keywordModeApiOnly'),
+    description: t('admin.riskControl.keywordModeApiOnlyDesc'),
+  },
+])
+
+const modelFilterOptions = computed<Array<{ value: ContentModerationModelFilterType; label: string; description: string }>>(() => [
+  {
+    value: 'all',
+    label: t('admin.riskControl.modelFilterAll'),
+    description: t('admin.riskControl.modelFilterAllDesc'),
+  },
+  {
+    value: 'include',
+    label: t('admin.riskControl.modelFilterInclude'),
+    description: t('admin.riskControl.modelFilterIncludeDesc'),
+  },
+  {
+    value: 'exclude',
+    label: t('admin.riskControl.modelFilterExclude'),
+    description: t('admin.riskControl.modelFilterExcludeDesc'),
+  },
+])
+
+type KeywordNoticeView = {
+  title: string
+  description: string
+  icon: 'infoCircle' | 'exclamationTriangle'
+  toneClass: string
+  iconClass: string
+  titleClass: string
+}
+
+const keywordNoticeTones = {
+  info: {
+    icon: 'infoCircle' as const,
+    toneClass: 'border-primary-100 bg-primary-50/60 dark:border-primary-900/40 dark:bg-primary-900/10',
+    iconClass: 'mt-0.5 flex-shrink-0 text-primary-500 dark:text-primary-300',
+    titleClass: 'text-primary-700 dark:text-primary-200',
+  },
+  warning: {
+    icon: 'exclamationTriangle' as const,
+    toneClass: 'border-amber-200 bg-amber-50 dark:border-amber-900/40 dark:bg-amber-900/20',
+    iconClass: 'mt-0.5 flex-shrink-0 text-amber-500 dark:text-amber-300',
+    titleClass: 'text-amber-700 dark:text-amber-200',
+  },
+}
+
+const keywordNotice = computed<KeywordNoticeView>(() => {
+  const strategy = configForm.keyword_blocking_mode
+  if (strategy === 'api_only') {
+    return {
+      ...keywordNoticeTones.info,
+      title: t('admin.riskControl.keywordModeApiOnlyNotice'),
+      description: t('admin.riskControl.keywordModeApiOnlyDesc'),
+    }
+  }
+  if (configForm.mode !== 'pre_block') {
+    return {
+      ...keywordNoticeTones.warning,
+      title: t('admin.riskControl.blockedKeywordsModeWarning', { mode: modeLabel(configForm.mode) }),
+      description: t('admin.riskControl.blockedKeywordsDescription'),
+    }
+  }
+  if (strategy === 'keyword_only') {
+    return {
+      ...keywordNoticeTones.info,
+      title: t('admin.riskControl.keywordModeKeywordOnlyNotice'),
+      description: t('admin.riskControl.keywordModeKeywordOnlyDesc'),
+    }
+  }
+  return {
+    ...keywordNoticeTones.info,
+    title: t('admin.riskControl.blockedKeywordsPreBlockHint'),
+    description: t('admin.riskControl.blockedKeywordsDescription'),
+  }
+})
 
 const resultOptions = computed<SelectOption[]>(() => [
   { value: '', label: t('admin.riskControl.result.all') },
@@ -914,6 +1289,22 @@ const groupFilterOptions = computed<SelectOption[]>(() => [
 
 const selectedGroupCount = computed(() => String(configForm.group_ids.length))
 
+const modelFilterModelCount = computed(() => configForm.model_filter_models.length)
+
+const modelFilterSummary = computed(() => {
+  if (configForm.model_filter_type === 'include') {
+    return t('admin.riskControl.modelFilterIncludeSummary', { count: modelFilterModelCount.value })
+  }
+  if (configForm.model_filter_type === 'exclude') {
+    return t('admin.riskControl.modelFilterExcludeSummary', { count: modelFilterModelCount.value })
+  }
+  return t('admin.riskControl.modelFilterAllSummary')
+})
+
+const modelFilterPreviewModels = computed(() => configForm.model_filter_models.slice(0, 6))
+
+const hiddenModelFilterModelCount = computed(() => Math.max(0, configForm.model_filter_models.length - modelFilterPreviewModels.value.length))
+
 const filteredGroups = computed(() => {
   const keyword = groupSearch.value.trim().toLowerCase()
   if (!keyword) return groups.value
@@ -922,13 +1313,27 @@ const filteredGroups = computed(() => {
   })
 })
 
-const apiKeyPlaceholder = computed(() => {
-  if (configForm.clear_api_key) return t('admin.riskControl.apiKeyWillClear')
-  if (configForm.api_key_configured) return t('admin.riskControl.apiKeysPlaceholderKeep')
-  return t('admin.riskControl.apiKeysPlaceholder')
-})
-
 const inputApiKeyCount = computed(() => parseApiKeys(configForm.api_keys_text).length)
+
+const blockedKeywordList = computed(() => parseBlockedKeywords(configForm.blocked_keywords_text))
+
+const blockedKeywordCount = computed(() => blockedKeywordList.value.length)
+
+const pendingDeletedApiKeyCount = computed(() => pendingDeleteApiKeyHashes.value.length)
+
+const effectiveStoredApiKeyCount = computed(() => Math.max(0, configForm.api_key_count - pendingDeletedApiKeyCount.value))
+
+const apiKeysPlaceholder = computed(() => (
+  configForm.api_keys_mode === 'replace'
+    ? t('admin.riskControl.apiKeysPlaceholderReplace')
+    : t('admin.riskControl.apiKeysPlaceholder')
+))
+
+const apiKeysModeHint = computed(() => (
+  configForm.api_keys_mode === 'replace'
+    ? t('admin.riskControl.apiKeysModeReplaceHint')
+    : t('admin.riskControl.apiKeysModeAppendHint')
+))
 
 const hasModerationAuditInput = computed(() => {
   return moderationTestPrompt.value.trim() !== '' || moderationTestImages.value.length > 0
@@ -954,6 +1359,19 @@ const apiKeyRows = computed<ContentModerationAPIKeyStatus[]>(() => [
   ...testedApiKeyStatuses.value,
 ])
 
+const visibleApiKeyRows = computed<ContentModerationAPIKeyStatus[]>(() => {
+  if (apiKeyRowsExpanded.value) return apiKeyRows.value
+  return apiKeyRows.value.slice(0, maxVisibleApiKeyRows)
+})
+
+const hiddenApiKeyRowCount = computed<number>(() => Math.max(0, apiKeyRows.value.length - visibleApiKeyRows.value.length))
+
+const canToggleApiKeyRows = computed<boolean>(() => apiKeyRows.value.length > maxVisibleApiKeyRows)
+
+const activeSavedApiKeyRows = computed<ContentModerationAPIKeyStatus[]>(() => (
+  savedApiKeyRows.value.filter((row) => !isStoredApiKeyPendingDelete(row))
+))
+
 const apiKeyHealthBadges = computed<Array<{ status: ContentModerationAPIKeyStatus['status']; count: number }>>(() => {
   const counts: Record<ContentModerationAPIKeyStatus['status'], number> = {
     ok: 0,
@@ -961,11 +1379,11 @@ const apiKeyHealthBadges = computed<Array<{ status: ContentModerationAPIKeyStatu
     frozen: 0,
     unknown: 0,
   }
-  for (const row of savedApiKeyRows.value) {
+  for (const row of activeSavedApiKeyRows.value) {
     counts[row.status] = (counts[row.status] ?? 0) + 1
   }
-  if (savedApiKeyRows.value.length === 0 && configForm.api_key_count > 0) {
-    counts.unknown = configForm.api_key_count
+  if (activeSavedApiKeyRows.value.length === 0 && effectiveStoredApiKeyCount.value > 0) {
+    counts.unknown = effectiveStoredApiKeyCount.value
   }
   return (['ok', 'frozen', 'error', 'unknown'] as Array<ContentModerationAPIKeyStatus['status']>)
     .map((item) => ({ status: item, count: counts[item] }))
@@ -1005,7 +1423,7 @@ const overviewItems = computed<OverviewItem[]>(() => [
     key: 'scope',
     label: t('admin.riskControl.overview.groupScope'),
     value: configForm.all_groups ? t('admin.riskControl.allGroups') : selectedGroupCount.value,
-    meta: configForm.all_groups ? t('admin.riskControl.allGroupsHint') : t('admin.riskControl.selectedGroupsHint'),
+    meta: modelFilterSummary.value,
     icon: 'users',
     iconClass: 'bg-violet-50 text-violet-600 dark:bg-violet-900/20 dark:text-violet-300',
   },
@@ -1034,6 +1452,14 @@ const moderationScoreRows = computed<ModerationScoreRow[]>(() => {
     })
     .sort((a, b) => b.score - a.score)
 })
+
+const riskThresholdRows = computed<RiskThresholdRow[]>(() => (
+  riskThresholdCategories.map((category) => ({
+    category,
+    value: configForm.thresholds[category] ?? riskThresholdDefaults[category],
+    defaultValue: riskThresholdDefaults[category],
+  }))
+))
 
 const inputDetailText = computed(() => {
   if (!inputDetailRow.value) return '-'
@@ -1085,8 +1511,11 @@ function applyConfig(config: ContentModerationConfig) {
   configForm.api_key_count = config.api_key_count || 0
   configForm.api_key_masks = Array.isArray(config.api_key_masks) ? [...config.api_key_masks] : []
   configForm.api_key_statuses = Array.isArray(config.api_key_statuses) ? [...config.api_key_statuses] : []
+  configForm.api_keys_mode = 'append'
   configForm.clear_api_key = false
+  pendingDeleteApiKeyHashes.value = []
   testedApiKeyStatuses.value = []
+  apiKeyRowsExpanded.value = false
   configForm.timeout_ms = config.timeout_ms || 3000
   configForm.retry_count = config.retry_count ?? 2
   configForm.sample_rate = config.sample_rate ?? 100
@@ -1104,6 +1533,12 @@ function applyConfig(config: ContentModerationConfig) {
   configForm.hit_retention_days = config.hit_retention_days || 180
   configForm.non_hit_retention_days = Math.min(Math.max(config.non_hit_retention_days || 3, 1), 3)
   configForm.pre_hash_check_enabled = config.pre_hash_check_enabled ?? false
+  configForm.thresholds = riskThresholdsFromConfig(config.thresholds)
+  configForm.blocked_keywords_text = Array.isArray(config.blocked_keywords) ? config.blocked_keywords.join('\n') : ''
+  configForm.keyword_blocking_mode = normalizeKeywordBlockingMode(config.keyword_blocking_mode)
+  const modelFilter = normalizeModelFilter(config.model_filter)
+  configForm.model_filter_type = modelFilter.type
+  configForm.model_filter_models = modelFilter.models
 }
 
 async function loadAll() {
@@ -1119,6 +1554,7 @@ async function loadAll() {
     status.value = runtimeStatus
     if (Array.isArray(runtimeStatus.api_key_statuses)) {
       configForm.api_key_statuses = [...runtimeStatus.api_key_statuses]
+      prunePendingDeleteAPIKeyHashes()
     }
     await loadLogs()
   } catch (err: unknown) {
@@ -1135,6 +1571,7 @@ async function loadStatus(silent = true) {
     status.value = runtimeStatus
     if (Array.isArray(runtimeStatus.api_key_statuses)) {
       configForm.api_key_statuses = [...runtimeStatus.api_key_statuses]
+      prunePendingDeleteAPIKeyHashes()
     }
   } catch (err: unknown) {
     if (!silent) {
@@ -1148,6 +1585,11 @@ async function loadStatus(silent = true) {
 async function saveConfig() {
   saving.value = true
   try {
+    const modelFilterPayload = buildModelFilterPayload()
+    if (modelFilterPayload.type !== 'all' && modelFilterPayload.models.length === 0) {
+      appStore.showError(t('admin.riskControl.modelFilterModelsRequired'))
+      return
+    }
     const payload: UpdateContentModerationConfig = {
       enabled: configForm.enabled,
       mode: configForm.mode,
@@ -1171,11 +1613,23 @@ async function saveConfig() {
       hit_retention_days: Number(configForm.hit_retention_days) || 180,
       non_hit_retention_days: Math.min(Math.max(Number(configForm.non_hit_retention_days) || 3, 1), 3),
       pre_hash_check_enabled: configForm.pre_hash_check_enabled,
+      thresholds: buildRiskThresholdPayload(),
+      blocked_keywords: blockedKeywordList.value,
+      keyword_blocking_mode: configForm.keyword_blocking_mode,
+      model_filter: modelFilterPayload,
     }
     const keys = parseApiKeys(configForm.api_keys_text)
+    if (!payload.clear_api_key && configForm.api_keys_mode === 'replace' && keys.length === 0) {
+      appStore.showError(t('admin.riskControl.apiKeysReplaceNoInput'))
+      return
+    }
     if (keys.length > 0) {
       payload.api_keys = keys
+      payload.api_keys_mode = configForm.api_keys_mode
       payload.clear_api_key = false
+    }
+    if (!payload.clear_api_key && configForm.api_keys_mode !== 'replace' && pendingDeleteApiKeyHashes.value.length > 0) {
+      payload.delete_api_key_hashes = [...pendingDeleteApiKeyHashes.value]
     }
 
     const updated = await adminAPI.riskControl.updateConfig(payload)
@@ -1305,7 +1759,23 @@ function toggleClearApiKey() {
   configForm.clear_api_key = !configForm.clear_api_key
   if (configForm.clear_api_key) {
     configForm.api_keys_text = ''
+    configForm.api_keys_mode = 'append'
     testedApiKeyStatuses.value = []
+    pendingDeleteApiKeyHashes.value = []
+  }
+}
+
+function setAPIKeysMode(mode: APIKeysWriteMode) {
+  configForm.api_keys_mode = mode
+  if (mode === 'replace') {
+    pendingDeleteApiKeyHashes.value = []
+  }
+}
+
+function setModelFilterType(type: ContentModerationModelFilterType) {
+  configForm.model_filter_type = type
+  if (type === 'all') {
+    configForm.model_filter_models = []
   }
 }
 
@@ -1348,6 +1818,25 @@ function mergeConfiguredAPIKeyStatuses(items: ContentModerationAPIKeyStatus[]) {
   }
   const updates = new Map(items.map((item) => [item.key_hash, item]))
   configForm.api_key_statuses = configForm.api_key_statuses.map((item) => updates.get(item.key_hash) ?? item)
+}
+
+function toggleDeleteStoredApiKey(row: ContentModerationAPIKeyStatus) {
+  if (!row.configured || !row.key_hash) return
+  const index = pendingDeleteApiKeyHashes.value.indexOf(row.key_hash)
+  if (index >= 0) {
+    pendingDeleteApiKeyHashes.value.splice(index, 1)
+    return
+  }
+  pendingDeleteApiKeyHashes.value.push(row.key_hash)
+}
+
+function isStoredApiKeyPendingDelete(row: ContentModerationAPIKeyStatus): boolean {
+  return row.configured && row.key_hash !== '' && pendingDeleteApiKeyHashes.value.includes(row.key_hash)
+}
+
+function prunePendingDeleteAPIKeyHashes() {
+  const currentHashes = new Set(savedApiKeyRows.value.map((row) => row.key_hash).filter(Boolean))
+  pendingDeleteApiKeyHashes.value = pendingDeleteApiKeyHashes.value.filter((hash) => currentHashes.has(hash))
 }
 
 function clearModerationTestInput() {
@@ -1434,6 +1923,7 @@ function modeDescription(mode: ModerationMode): string {
 }
 
 function resultLabel(row: ContentModerationLog): string {
+  if (row.action === 'keyword_block') return t('admin.riskControl.action.keywordBlock')
   if (row.action === 'block') return t('admin.riskControl.action.block')
   if (row.action === 'error' || row.error) return t('admin.riskControl.action.error')
   if (row.flagged) return t('admin.riskControl.result.hit')
@@ -1441,7 +1931,7 @@ function resultLabel(row: ContentModerationLog): string {
 }
 
 function resultBadgeClass(row: ContentModerationLog): string {
-  if (row.action === 'block') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
+  if (row.action === 'block' || row.action === 'keyword_block') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
   if (row.action === 'error' || row.error) return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
   if (row.flagged) return 'bg-pink-100 text-pink-700 dark:bg-pink-900/30 dark:text-pink-300'
   return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
@@ -1536,6 +2026,105 @@ function parseApiKeys(value: string): string[] {
     .split(/\r?\n/)
     .map((item) => item.trim())
     .filter((item, index, arr) => item && arr.indexOf(item) === index)
+}
+
+function normalizeKeywordBlockingMode(value: unknown): KeywordBlockingMode {
+  if (value === 'keyword_only' || value === 'api_only' || value === 'keyword_and_api') {
+    return value
+  }
+  return 'keyword_and_api'
+}
+
+function normalizeModelFilter(value: unknown): ContentModerationModelFilter {
+  if (!value || typeof value !== 'object') {
+    return { type: 'all', models: [] }
+  }
+  const raw = value as Partial<ContentModerationModelFilter>
+  const type = normalizeModelFilterType(raw.type)
+  const models = type === 'all' ? [] : normalizeModelNames(raw.models)
+  return { type, models }
+}
+
+function normalizeModelFilterType(value: unknown): ContentModerationModelFilterType {
+  if (value === 'include' || value === 'exclude' || value === 'all') {
+    return value
+  }
+  return 'all'
+}
+
+function normalizeModelNames(models: unknown): string[] {
+  if (!Array.isArray(models)) return []
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const item of models) {
+    const model = String(item ?? '').trim()
+    if (!model) continue
+    const key = model.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(model)
+  }
+  return out
+}
+
+function buildModelFilterPayload(): ContentModerationModelFilter {
+  const type = normalizeModelFilterType(configForm.model_filter_type)
+  if (type === 'all') {
+    return { type: 'all', models: [] }
+  }
+  return {
+    type,
+    models: normalizeModelNames(configForm.model_filter_models),
+  }
+}
+
+function riskThresholdsFromConfig(thresholds: Record<string, number> | null | undefined): Record<string, number> {
+  const out: Record<string, number> = { ...riskThresholdDefaults }
+  for (const category of riskThresholdCategories) {
+    const value = thresholds?.[category]
+    if (Number.isFinite(value)) {
+      out[category] = clampPercent(Number(value) * 100)
+    }
+  }
+  return out
+}
+
+function buildRiskThresholdPayload(): Record<string, number> {
+  const payload: Record<string, number> = {}
+  for (const category of riskThresholdCategories) {
+    payload[category] = Number((clampPercent(configForm.thresholds[category]) / 100).toFixed(4))
+  }
+  return payload
+}
+
+function resetRiskThresholds() {
+  configForm.thresholds = { ...riskThresholdDefaults }
+}
+
+function clampPercent(value: unknown): number {
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) {
+    return 0
+  }
+  return Math.min(100, Math.max(0, numeric))
+}
+
+function formatThresholdPercent(value: number): string {
+  return `${clampPercent(value).toFixed(1)}%`
+}
+
+function parseBlockedKeywords(value: string): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const line of value.split(/\r?\n/)) {
+    const kw = line.trim()
+    if (!kw) continue
+    const key = kw.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(kw)
+  }
+  return out
 }
 
 function violationCountText(row: ContentModerationLog): string {

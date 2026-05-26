@@ -187,6 +187,14 @@ func (r *contentModerationTestUserRepo) UpdateConcurrency(ctx context.Context, i
 	panic("unexpected UpdateConcurrency call")
 }
 
+func (r *contentModerationTestUserRepo) BatchSetConcurrency(ctx context.Context, userIDs []int64, value int) (int, error) {
+	panic("unexpected BatchSetConcurrency call")
+}
+
+func (r *contentModerationTestUserRepo) BatchAddConcurrency(ctx context.Context, userIDs []int64, delta int) (int, error) {
+	panic("unexpected BatchAddConcurrency call")
+}
+
 func (r *contentModerationTestUserRepo) ExistsByEmail(ctx context.Context, email string) (bool, error) {
 	panic("unexpected ExistsByEmail call")
 }
@@ -293,13 +301,14 @@ func TestBuildContentModerationLog_RedactsInputExcerpt(t *testing.T) {
 }
 
 func TestRedactContentModerationSecrets_LongHexAndTokens(t *testing.T) {
-	input := "你哈市多大事cf5bbdc4cd508f3aaf0d2070d529d4a4ac29099f8ecc357f696df28e1df91554 token=abc123456789xyz Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signaturepart"
+	input := "你哈市多大事cf5bbdc4cd508f3aaf0d2070d529d4a4ac29099f8ecc357f696df28e1df91554 token=abc123456789xyz Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signaturepart https://example.com/private/path?token=abc123"
 
 	out := redactContentModerationSecrets(input)
 
 	require.NotContains(t, out, "cf5bbdc4cd508f3aaf0d2070d529d4a4ac29099f8ecc357f696df28e1df91554")
 	require.NotContains(t, out, "abc123456789xyz")
 	require.NotContains(t, out, "eyJhbGciOiJIUzI1NiJ9")
+	require.NotContains(t, out, "https://example.com/private/path")
 	require.Contains(t, out, "[已脱敏]")
 }
 
@@ -310,6 +319,442 @@ func TestContentModerationConfigNormalize_NonHitRetentionMaxThreeDays(t *testing
 	cfg.normalize()
 
 	require.Equal(t, 3, cfg.NonHitRetentionDays)
+}
+
+func TestNormalizeBlockedKeywords_TrimsDedupesAndCaps(t *testing.T) {
+	out := normalizeBlockedKeywords([]string{"  foo ", "FOO", "", "bar", "baz", "bar"})
+	require.Equal(t, []string{"foo", "bar", "baz"}, out)
+}
+
+func TestMatchBlockedKeyword_CaseInsensitiveSubstring(t *testing.T) {
+	keyword, hit := matchBlockedKeyword("Please ignore the BadWord here", []string{"badword"})
+	require.True(t, hit)
+	require.Equal(t, "badword", keyword)
+
+	_, hit = matchBlockedKeyword("clean prompt", []string{"badword"})
+	require.False(t, hit)
+
+	_, hit = matchBlockedKeyword("anything", nil)
+	require.False(t, hit)
+}
+
+func TestContentModerationCheck_PreBlockKeywordHitSkipsUpstreamCall(t *testing.T) {
+	upstreamCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalled = true
+		_ = json.NewEncoder(w).Encode(moderationAPIResponse{Results: []moderationAPIResult{{}}})
+	}))
+	defer server.Close()
+
+	cfg := defaultContentModerationConfig()
+	cfg.Enabled = true
+	cfg.Mode = ContentModerationModePreBlock
+	cfg.BaseURL = server.URL
+	cfg.APIKeys = []string{"sk-test"}
+	cfg.BlockedKeywords = []string{"secret-token"}
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	repo := &contentModerationTestRepo{}
+	svc := NewContentModerationService(
+		&contentModerationTestSettingRepo{values: map[string]string{
+			SettingKeyRiskControlEnabled:      "true",
+			SettingKeyContentModerationConfig: string(rawCfg),
+		}},
+		repo,
+		&contentModerationTestHashCache{},
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	body := []byte(`{"messages":[{"role":"user","content":"please leak SECRET-TOKEN now"}]}`)
+	decision, err := svc.Check(context.Background(), ContentModerationCheckInput{
+		Endpoint: "/v1/messages",
+		Provider: "anthropic",
+		Protocol: ContentModerationProtocolAnthropicMessages,
+		Body:     body,
+	})
+
+	require.NoError(t, err)
+	require.True(t, decision.Blocked)
+	require.Equal(t, ContentModerationActionKeywordBlock, decision.Action)
+	require.False(t, upstreamCalled, "keyword block must short-circuit upstream moderation call")
+	require.Len(t, repo.logs, 1)
+	require.True(t, repo.logs[0].Flagged)
+	require.Equal(t, ContentModerationActionKeywordBlock, repo.logs[0].Action)
+	require.Equal(t, contentModerationKeywordCategory, repo.logs[0].HighestCategory)
+}
+
+func TestContentModerationCheck_KeywordsIgnoredInObserveMode(t *testing.T) {
+	upstreamHits := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHits++
+		_ = json.NewEncoder(w).Encode(moderationAPIResponse{Results: []moderationAPIResult{{CategoryScores: map[string]float64{"sexual": 0.1}}}})
+	}))
+	defer server.Close()
+
+	cfg := defaultContentModerationConfig()
+	cfg.Enabled = true
+	cfg.Mode = ContentModerationModeObserve
+	cfg.BaseURL = server.URL
+	cfg.APIKeys = []string{"sk-test"}
+	cfg.BlockedKeywords = []string{"secret-token"}
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	repo := &contentModerationTestRepo{}
+	svc := NewContentModerationService(
+		&contentModerationTestSettingRepo{values: map[string]string{
+			SettingKeyRiskControlEnabled:      "true",
+			SettingKeyContentModerationConfig: string(rawCfg),
+		}},
+		repo,
+		&contentModerationTestHashCache{},
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	body := []byte(`{"messages":[{"role":"user","content":"please leak SECRET-TOKEN now"}]}`)
+	decision, err := svc.Check(context.Background(), ContentModerationCheckInput{
+		Endpoint: "/v1/messages",
+		Provider: "anthropic",
+		Protocol: ContentModerationProtocolAnthropicMessages,
+		Body:     body,
+	})
+
+	require.NoError(t, err)
+	require.True(t, decision.Allowed, "observe mode must let the request through even on keyword hit")
+	require.Equal(t, ContentModerationActionAllow, decision.Action)
+}
+
+func TestContentModerationCheck_KeywordOnlyStrategySkipsAPIOnMiss(t *testing.T) {
+	upstreamCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalled = true
+		_ = json.NewEncoder(w).Encode(moderationAPIResponse{Results: []moderationAPIResult{{CategoryScores: map[string]float64{"sexual": 0.99}}}})
+	}))
+	defer server.Close()
+
+	cfg := defaultContentModerationConfig()
+	cfg.Enabled = true
+	cfg.Mode = ContentModerationModePreBlock
+	cfg.BaseURL = server.URL
+	cfg.APIKeys = []string{"sk-test"}
+	cfg.BlockedKeywords = []string{"never-matches"}
+	cfg.KeywordBlockingMode = ContentModerationKeywordModeKeywordOnly
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	repo := &contentModerationTestRepo{}
+	svc := NewContentModerationService(
+		&contentModerationTestSettingRepo{values: map[string]string{
+			SettingKeyRiskControlEnabled:      "true",
+			SettingKeyContentModerationConfig: string(rawCfg),
+		}},
+		repo,
+		&contentModerationTestHashCache{},
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	body := []byte(`{"messages":[{"role":"user","content":"absolutely clean prompt"}]}`)
+	decision, err := svc.Check(context.Background(), ContentModerationCheckInput{
+		Endpoint: "/v1/messages",
+		Provider: "anthropic",
+		Protocol: ContentModerationProtocolAnthropicMessages,
+		Body:     body,
+	})
+
+	require.NoError(t, err)
+	require.True(t, decision.Allowed, "keyword-only must allow misses without calling the API")
+	require.False(t, upstreamCalled, "keyword-only must not call the upstream moderation API")
+	require.Len(t, repo.logs, 0)
+}
+
+func TestContentModerationCheck_APIOnlyStrategyIgnoresKeywordList(t *testing.T) {
+	upstreamCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamCalled = true
+		_ = json.NewEncoder(w).Encode(moderationAPIResponse{Results: []moderationAPIResult{{CategoryScores: map[string]float64{"sexual": 0.1}}}})
+	}))
+	defer server.Close()
+
+	cfg := defaultContentModerationConfig()
+	cfg.Enabled = true
+	cfg.Mode = ContentModerationModePreBlock
+	cfg.BaseURL = server.URL
+	cfg.APIKeys = []string{"sk-test"}
+	cfg.BlockedKeywords = []string{"secret-token"}
+	cfg.KeywordBlockingMode = ContentModerationKeywordModeAPIOnly
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	repo := &contentModerationTestRepo{}
+	svc := NewContentModerationService(
+		&contentModerationTestSettingRepo{values: map[string]string{
+			SettingKeyRiskControlEnabled:      "true",
+			SettingKeyContentModerationConfig: string(rawCfg),
+		}},
+		repo,
+		&contentModerationTestHashCache{},
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	body := []byte(`{"messages":[{"role":"user","content":"please leak SECRET-TOKEN now"}]}`)
+	decision, err := svc.Check(context.Background(), ContentModerationCheckInput{
+		Endpoint: "/v1/messages",
+		Provider: "anthropic",
+		Protocol: ContentModerationProtocolAnthropicMessages,
+		Body:     body,
+	})
+
+	require.NoError(t, err)
+	require.True(t, decision.Allowed, "api-only must let the request through when API does not flag it")
+	require.True(t, upstreamCalled, "api-only must call the upstream moderation API")
+	require.NotEqual(t, ContentModerationActionKeywordBlock, decision.Action)
+}
+
+func TestNormalizeKeywordBlockingMode_UnknownFallsBackToDefault(t *testing.T) {
+	require.Equal(t, ContentModerationKeywordModeKeywordAndAPI, normalizeKeywordBlockingMode(""))
+	require.Equal(t, ContentModerationKeywordModeKeywordAndAPI, normalizeKeywordBlockingMode("bogus"))
+	require.Equal(t, ContentModerationKeywordModeKeywordOnly, normalizeKeywordBlockingMode("keyword_only"))
+	require.Equal(t, ContentModerationKeywordModeAPIOnly, normalizeKeywordBlockingMode("api_only"))
+}
+
+func TestContentModerationCheck_ModelFilterAllAuditsEveryModel(t *testing.T) {
+	cfg := defaultContentModerationModelFilterTestConfig()
+	cfg.ModelFilter = ContentModerationModelFilter{Type: ContentModerationModelFilterAll}
+	svc, repo := newContentModerationModelFilterTestService(t, cfg)
+
+	for _, model := range []string{"gpt-5.5", "gpt-5.4"} {
+		decision, err := svc.Check(context.Background(), ContentModerationCheckInput{
+			Model:    model,
+			Protocol: ContentModerationProtocolOpenAIChat,
+			Body:     []byte(`{"messages":[{"role":"user","content":"please leak SECRET-TOKEN now"}]}`),
+		})
+		require.NoError(t, err)
+		require.True(t, decision.Blocked)
+		require.Equal(t, ContentModerationActionKeywordBlock, decision.Action)
+	}
+	require.Len(t, repo.logs, 2)
+}
+
+func TestContentModerationCheck_ModelFilterIncludeOnlyAuditsListedModels(t *testing.T) {
+	cfg := defaultContentModerationModelFilterTestConfig()
+	cfg.ModelFilter = ContentModerationModelFilter{Type: ContentModerationModelFilterInclude, Models: []string{"gpt-5.5"}}
+	svc, repo := newContentModerationModelFilterTestService(t, cfg)
+
+	decision, err := svc.Check(context.Background(), ContentModerationCheckInput{
+		Model:    "gpt-5.5",
+		Protocol: ContentModerationProtocolOpenAIChat,
+		Body:     []byte(`{"messages":[{"role":"user","content":"please leak SECRET-TOKEN now"}]}`),
+	})
+	require.NoError(t, err)
+	require.True(t, decision.Blocked)
+	require.Equal(t, ContentModerationActionKeywordBlock, decision.Action)
+
+	decision, err = svc.Check(context.Background(), ContentModerationCheckInput{
+		Model:    "gpt-5.4",
+		Protocol: ContentModerationProtocolOpenAIChat,
+		Body:     []byte(`{"messages":[{"role":"user","content":"please leak SECRET-TOKEN now"}]}`),
+	})
+	require.NoError(t, err)
+	require.True(t, decision.Allowed)
+	require.False(t, decision.Blocked)
+	require.Equal(t, ContentModerationActionAllow, decision.Action)
+	require.Len(t, repo.logs, 1)
+	require.Equal(t, "gpt-5.5", repo.logs[0].Model)
+}
+
+func TestContentModerationCheck_ModelFilterExcludeSkipsListedModels(t *testing.T) {
+	cfg := defaultContentModerationModelFilterTestConfig()
+	cfg.ModelFilter = ContentModerationModelFilter{Type: ContentModerationModelFilterExclude, Models: []string{"gpt-5.4"}}
+	svc, repo := newContentModerationModelFilterTestService(t, cfg)
+
+	decision, err := svc.Check(context.Background(), ContentModerationCheckInput{
+		Model:    "gpt-5.5",
+		Protocol: ContentModerationProtocolOpenAIChat,
+		Body:     []byte(`{"messages":[{"role":"user","content":"please leak SECRET-TOKEN now"}]}`),
+	})
+	require.NoError(t, err)
+	require.True(t, decision.Blocked)
+	require.Equal(t, ContentModerationActionKeywordBlock, decision.Action)
+
+	decision, err = svc.Check(context.Background(), ContentModerationCheckInput{
+		Model:    "gpt-5.4",
+		Protocol: ContentModerationProtocolOpenAIChat,
+		Body:     []byte(`{"messages":[{"role":"user","content":"please leak SECRET-TOKEN now"}]}`),
+	})
+	require.NoError(t, err)
+	require.True(t, decision.Allowed)
+	require.False(t, decision.Blocked)
+	require.Equal(t, ContentModerationActionAllow, decision.Action)
+	require.Len(t, repo.logs, 1)
+	require.Equal(t, "gpt-5.5", repo.logs[0].Model)
+}
+
+func TestContentModerationLoadConfig_LegacyConfigDefaultsModelFilterToAll(t *testing.T) {
+	raw := `{"enabled":true,"mode":"pre_block","base_url":"https://api.openai.com","model":"omni-moderation-latest","blocked_keywords":["secret-token"]}`
+	svc := NewContentModerationService(
+		&contentModerationTestSettingRepo{values: map[string]string{
+			SettingKeyContentModerationConfig: raw,
+		}},
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+
+	cfg, err := svc.loadConfig(context.Background())
+
+	require.NoError(t, err)
+	require.Equal(t, ContentModerationModelFilterAll, cfg.ModelFilter.Type)
+	require.Empty(t, cfg.ModelFilter.Models)
+	require.True(t, cfg.includesModel("gpt-5.5"))
+	require.True(t, cfg.includesModel("gpt-5.4"))
+}
+
+func TestContentModerationCheck_ModelFilterUsesRequestedModelNotBodyModel(t *testing.T) {
+	cfg := defaultContentModerationModelFilterTestConfig()
+	cfg.ModelFilter = ContentModerationModelFilter{Type: ContentModerationModelFilterInclude, Models: []string{"gpt-5.5"}}
+	svc, repo := newContentModerationModelFilterTestService(t, cfg)
+
+	decision, err := svc.Check(context.Background(), ContentModerationCheckInput{
+		Model:    "gpt-5.5",
+		Protocol: ContentModerationProtocolOpenAIChat,
+		Body:     []byte(`{"model":"mapped-upstream-model","messages":[{"role":"user","content":"please leak SECRET-TOKEN now"}]}`),
+	})
+
+	require.NoError(t, err)
+	require.True(t, decision.Blocked)
+	require.Equal(t, ContentModerationActionKeywordBlock, decision.Action)
+	require.Len(t, repo.logs, 1)
+	require.Equal(t, "gpt-5.5", repo.logs[0].Model)
+}
+
+func defaultContentModerationModelFilterTestConfig() *ContentModerationConfig {
+	cfg := defaultContentModerationConfig()
+	cfg.Enabled = true
+	cfg.Mode = ContentModerationModePreBlock
+	cfg.BlockedKeywords = []string{"secret-token"}
+	return cfg
+}
+
+func newContentModerationModelFilterTestService(t *testing.T, cfg *ContentModerationConfig) (*ContentModerationService, *contentModerationTestRepo) {
+	t.Helper()
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	repo := &contentModerationTestRepo{}
+	svc := NewContentModerationService(
+		&contentModerationTestSettingRepo{values: map[string]string{
+			SettingKeyRiskControlEnabled:      "true",
+			SettingKeyContentModerationConfig: string(rawCfg),
+		}},
+		repo,
+		&contentModerationTestHashCache{},
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	return svc, repo
+}
+
+func TestContentModerationUpdateConfig_AppendsAndDeletesAPIKeys(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.APIKeys = []string{"sk-old-a", "sk-old-b"}
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	repo := &contentModerationTestSettingRepo{values: map[string]string{
+		SettingKeyContentModerationConfig: string(rawCfg),
+	}}
+	svc := NewContentModerationService(repo, nil, nil, nil, nil, nil, nil)
+	deleteHashes := []string{moderationAPIKeyHash("sk-old-a")}
+	addKeys := []string{"sk-new-c", "sk-old-b"}
+
+	view, err := svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
+		APIKeys:            &addKeys,
+		DeleteAPIKeyHashes: &deleteHashes,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 2, view.APIKeyCount)
+	require.Equal(t, []string{maskSecretTail("sk-old-b"), maskSecretTail("sk-new-c")}, view.APIKeyMasks)
+
+	var saved ContentModerationConfig
+	require.NoError(t, json.Unmarshal([]byte(repo.values[SettingKeyContentModerationConfig]), &saved))
+	require.Equal(t, []string{"sk-old-b", "sk-new-c"}, saved.apiKeys())
+}
+
+func TestContentModerationUpdateConfig_ReplacesAPIKeysWhenRequested(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	cfg.APIKeys = []string{"sk-old-a", "sk-old-b"}
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	repo := &contentModerationTestSettingRepo{values: map[string]string{
+		SettingKeyContentModerationConfig: string(rawCfg),
+	}}
+	svc := NewContentModerationService(repo, nil, nil, nil, nil, nil, nil)
+	deleteHashes := []string{moderationAPIKeyHash("sk-old-a")}
+	replaceKeys := []string{"sk-new-only"}
+
+	view, err := svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
+		APIKeys:            &replaceKeys,
+		APIKeysMode:        contentModerationAPIKeysModeReplace,
+		DeleteAPIKeyHashes: &deleteHashes,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, view.APIKeyCount)
+	require.Equal(t, []string{maskSecretTail("sk-new-only")}, view.APIKeyMasks)
+
+	var saved ContentModerationConfig
+	require.NoError(t, json.Unmarshal([]byte(repo.values[SettingKeyContentModerationConfig]), &saved))
+	require.Equal(t, []string{"sk-new-only"}, saved.apiKeys())
+}
+
+func TestContentModerationUpdateConfig_SavesCustomThresholds(t *testing.T) {
+	cfg := defaultContentModerationConfig()
+	rawCfg, err := json.Marshal(cfg)
+	require.NoError(t, err)
+
+	repo := &contentModerationTestSettingRepo{values: map[string]string{
+		SettingKeyContentModerationConfig: string(rawCfg),
+	}}
+	svc := NewContentModerationService(repo, nil, nil, nil, nil, nil, nil)
+	thresholds := map[string]float64{
+		"sexual":     0.72,
+		"harassment": 1.25,
+		"unknown":    0.01,
+	}
+
+	view, err := svc.UpdateConfig(context.Background(), UpdateContentModerationConfigInput{
+		Thresholds: &thresholds,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 0.72, view.Thresholds["sexual"])
+	require.Equal(t, 1.0, view.Thresholds["harassment"])
+	require.NotContains(t, view.Thresholds, "unknown")
+
+	var saved ContentModerationConfig
+	require.NoError(t, json.Unmarshal([]byte(repo.values[SettingKeyContentModerationConfig]), &saved))
+	require.Equal(t, 0.72, saved.Thresholds["sexual"])
+	require.Equal(t, 1.0, saved.Thresholds["harassment"])
+	require.NotContains(t, saved.Thresholds, "unknown")
 }
 
 func TestExtractContentModerationInput_AnthropicImageSourceOnlyParticipatesInMemory(t *testing.T) {
@@ -385,6 +830,38 @@ func TestExtractContentModerationInput_OpenAIImagesIncludesPromptAndImages(t *te
 
 	require.Equal(t, "replace background", input.Text)
 	require.Equal(t, []string{"https://example.com/source.png", "data:image/png;base64,aGVsbG8="}, input.Images)
+}
+
+func TestContentModerationInput_NormalizeKeepsImagesAndModerationInputSamplesOneImage(t *testing.T) {
+	images := []string{
+		"data:image/png;base64,Zmlyc3Q=",
+		"data:image/png;base64,c2Vjb25k",
+	}
+	input := ContentModerationInput{
+		Text:   "check image",
+		Images: append([]string(nil), images...),
+	}
+	input.Normalize()
+
+	require.Equal(t, images, input.Images)
+
+	parts, ok := input.ModerationInput().([]moderationAPIInputPart)
+	require.True(t, ok)
+	require.Len(t, parts, 2)
+	require.Equal(t, "text", parts[0].Type)
+	require.Equal(t, "image_url", parts[1].Type)
+	require.NotNil(t, parts[1].ImageURL)
+	require.Contains(t, images, parts[1].ImageURL.URL)
+}
+
+func TestBuildModerationTestInputRejectsMultipleImages(t *testing.T) {
+	_, _, err := buildModerationTestInput("check image", []string{
+		"data:image/png;base64,Zmlyc3Q=",
+		"data:image/png;base64,c2Vjb25k",
+	})
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "最多上传 1 张测试图片")
 }
 
 func TestExtractContentModerationInput_OpenAIResponsesCodexPayloadUsesLastUserMessage(t *testing.T) {
@@ -552,6 +1029,105 @@ func TestBuildContentModerationTestAuditResult_UsesConfiguredThresholdsOnly(t *t
 	require.Equal(t, 0.65, result.HighestScore)
 	require.Equal(t, 0.65, result.CompositeScore)
 	require.Equal(t, 0.98, result.Thresholds["harassment"])
+}
+
+func TestContentModerationCallModeration_400DoesNotFreezeAPIKey(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"Number of images (5) exceeds maximum of 1","type":"invalid_request_error","param":"input","code":"too_many_images"}}`))
+	}))
+	defer server.Close()
+
+	cfg := defaultContentModerationConfig()
+	cfg.BaseURL = server.URL
+	cfg.APIKeys = []string{"sk-test"}
+	cfg.RetryCount = 5
+	svc := NewContentModerationService(nil, nil, nil, nil, nil, nil, nil)
+
+	_, err := svc.callModeration(context.Background(), cfg, "hello")
+
+	require.Error(t, err)
+	require.Equal(t, 1, requestCount)
+	status := svc.apiKeyStatusForHash(0, moderationAPIKeyHash("sk-test"), maskSecretTail("sk-test"), true)
+	require.Equal(t, "error", status.Status)
+	require.Equal(t, http.StatusBadRequest, status.LastHTTPStatus)
+	require.Zero(t, status.FailureCount)
+	require.Nil(t, status.FrozenUntil)
+}
+
+func TestContentModerationCallModeration_FreezesByHTTPStatus(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		minFreeze  time.Duration
+		maxFreeze  time.Duration
+	}{
+		{name: "401 freezes ten minutes", statusCode: http.StatusUnauthorized, minFreeze: 9*time.Minute + 55*time.Second, maxFreeze: 10*time.Minute + time.Second},
+		{name: "403 freezes ten minutes", statusCode: http.StatusForbidden, minFreeze: 9*time.Minute + 55*time.Second, maxFreeze: 10*time.Minute + time.Second},
+		{name: "429 freezes one minute", statusCode: http.StatusTooManyRequests, minFreeze: 55 * time.Second, maxFreeze: time.Minute + time.Second},
+		{name: "529 freezes one minute", statusCode: 529, minFreeze: 55 * time.Second, maxFreeze: time.Minute + time.Second},
+		{name: "500 freezes ten seconds", statusCode: http.StatusInternalServerError, minFreeze: 5 * time.Second, maxFreeze: 11 * time.Second},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.statusCode)
+				_, _ = w.Write([]byte(`{"error":{"message":"upstream error"}}`))
+			}))
+			defer server.Close()
+
+			cfg := defaultContentModerationConfig()
+			cfg.BaseURL = server.URL
+			cfg.APIKeys = []string{"sk-test"}
+			cfg.RetryCount = 0
+			svc := NewContentModerationService(nil, nil, nil, nil, nil, nil, nil)
+
+			_, err := svc.callModeration(context.Background(), cfg, "hello")
+
+			require.Error(t, err)
+			status := svc.apiKeyStatusForHash(0, moderationAPIKeyHash("sk-test"), maskSecretTail("sk-test"), true)
+			require.Equal(t, "frozen", status.Status)
+			require.Equal(t, tt.statusCode, status.LastHTTPStatus)
+			require.Equal(t, 1, status.FailureCount)
+			require.NotNil(t, status.FrozenUntil)
+			remaining := time.Until(*status.FrozenUntil)
+			require.GreaterOrEqual(t, remaining, tt.minFreeze)
+			require.LessOrEqual(t, remaining, tt.maxFreeze)
+		})
+	}
+}
+
+func TestContentModerationTestAPIKeys_400DoesNotFreezeAPIKey(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"invalid moderation request"}}`))
+	}))
+	defer server.Close()
+
+	svc := NewContentModerationService(
+		&contentModerationTestSettingRepo{values: map[string]string{}},
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+	)
+	result, err := svc.TestAPIKeys(context.Background(), TestContentModerationAPIKeysInput{
+		APIKeys: []string{"sk-test"},
+		BaseURL: server.URL,
+		Prompt:  "hello",
+	})
+
+	require.NoError(t, err)
+	require.Len(t, result.Items, 1)
+	require.Equal(t, "error", result.Items[0].Status)
+	require.Equal(t, http.StatusBadRequest, result.Items[0].LastHTTPStatus)
+	require.Zero(t, result.Items[0].FailureCount)
+	require.Nil(t, result.Items[0].FrozenUntil)
 }
 
 func TestContentModerationCheck_PreHashUsesRedisHashCache(t *testing.T) {
