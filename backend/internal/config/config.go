@@ -1802,6 +1802,10 @@ func setDefaults() {
 	// thinking_delta 被误伤. 改 120s 给慢请求空间, 同时仍能在 ~3min 范围
 	// 内 catch 真空流 (vs 旧版 180s 慢请求).
 	viper.SetDefault("gateway.first_meaningful_event_timeout_seconds", 120)
+	// Enable two-stage metadata flush for large/tool-heavy stream requests by
+	// default. The runtime gate is still narrow (X-GCR-Early-Flush or body
+	// >64KB), so ordinary small streams keep the clean failover window.
+	viper.SetDefault("gateway.early_meta_flush_after_ms", 2000)
 	// 30s 太严, 客户断开后 thinking 模型 30s 内可能没新 token. 改 90s.
 	viper.SetDefault("gateway.drain_after_client_disconnect_max_seconds", 90)
 	viper.SetDefault("gateway.scheduling.sticky_session_max_waiting", 3)

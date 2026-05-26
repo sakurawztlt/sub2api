@@ -1312,27 +1312,33 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		// 说明上游实际没复用上下文 — codex 警告"296k 读缓存只是账面数字". 配合
 		// firstMeaningfulMs 一起诊断深上下文的真实性能.
 		ctxFinal := c.Request.Context()
-		if IsLargeContextCtx(ctxFinal) {
-			cliReqIDFinal, _ := ctxFinal.Value(ctxkey.ClientRequestID).(string)
-			ftMsFinal := 0
-			if firstTokenMs != nil {
-				ftMsFinal = *firstTokenMs
-			}
-			fmMsFinal := 0
-			if firstMeaningfulMs != nil {
-				fmMsFinal = *firstMeaningfulMs
-			}
-			accIDFinal := int64(0)
-			accNameFinal := ""
-			accPlatFinal := ""
-			accTypeFinal := ""
-			if meta.Account != nil {
-				accIDFinal = meta.Account.ID
-				accNameFinal = meta.Account.Name
-				accPlatFinal = meta.Account.Platform
-				accTypeFinal = string(meta.Account.Type)
-			}
-			logger.L().Info("openai messages stream: large_context_request summary",
+		cliReqIDFinal, _ := ctxFinal.Value(ctxkey.ClientRequestID).(string)
+		ftMsFinal := 0
+		if firstTokenMs != nil {
+			ftMsFinal = *firstTokenMs
+		}
+		fmMsFinal := 0
+		if firstMeaningfulMs != nil {
+			fmMsFinal = *firstMeaningfulMs
+		}
+		accIDFinal := int64(0)
+		accNameFinal := ""
+		accPlatFinal := ""
+		accTypeFinal := ""
+		if meta.Account != nil {
+			accIDFinal = meta.Account.ID
+			accNameFinal = meta.Account.Name
+			accPlatFinal = meta.Account.Platform
+			accTypeFinal = string(meta.Account.Type)
+		}
+		durationFinal := time.Since(startTime)
+		isLargeContextFinal := IsLargeContextCtx(ctxFinal)
+		summaryMsg := "openai messages stream: large_context_request summary"
+		if !isLargeContextFinal {
+			summaryMsg = "openai messages stream: slow_stream_request summary"
+		}
+		if isLargeContextFinal || durationFinal >= 10*time.Second || fmMsFinal >= 5000 {
+			logger.L().Info(summaryMsg,
 				zap.String("request_id", requestID),
 				zap.String("client_request_id", cliReqIDFinal),
 				zap.String("gcr_request_id", c.Request.Header.Get("X-GCR-Request-Id")),
@@ -1340,13 +1346,14 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				zap.String("oneapi_request_id", c.Request.Header.Get("X-Oneapi-Request-Id")),
 				zap.String("model", originalModel),
 				zap.Int("inbound_body_len", inboundBodyLen),
+				zap.Bool("large_context_request", isLargeContextFinal),
 				zap.String("gcr_depth_bucket", c.Request.Header.Get("X-GCR-Depth-Bucket")),
 				zap.String("gcr_estimated_tokens", c.Request.Header.Get("X-GCR-Estimated-Tokens")),
 				zap.Int("first_token_ms", ftMsFinal),
 				zap.Int("first_meaningful_ms", fmMsFinal),
 				zap.Int("upstream_cached_input_tokens", state.RawCachedInputTokens),
 				zap.Int("upstream_total_input_tokens", state.RawTotalInputTokens),
-				zap.Duration("total_duration", time.Since(startTime)),
+				zap.Duration("total_duration", durationFinal),
 				// 11al: account / proxy / continuation state
 				zap.Int64("account_id", accIDFinal),
 				zap.String("account_name", accNameFinal),
@@ -1396,7 +1403,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			// a distinct log line. The Info above stays as the base
 			// summary; this Warn surfaces only the mismatch case so
 			// ops grep `book_cache_hit_upstream_miss` directly.
-			if state.RawCachedInputTokens == 0 {
+			if isLargeContextFinal && state.RawCachedInputTokens == 0 {
 				logger.L().Warn("openai messages stream: book_cache_hit_upstream_miss (账面缓存命中但上游未命中)",
 					zap.String("request_id", requestID),
 					zap.String("client_request_id", cliReqIDFinal),
@@ -1411,7 +1418,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 					zap.Bool("has_previous_response_id", meta.HasPreviousResponseID),
 					zap.Bool("has_turn_state", meta.HasTurnState),
 					zap.Int("messages_count", meta.MessagesCount),
-					zap.Duration("total_duration", time.Since(startTime)),
+					zap.Duration("total_duration", durationFinal),
 				)
 			}
 		}

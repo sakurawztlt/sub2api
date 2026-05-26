@@ -78,6 +78,19 @@ func TestLoadDefaultSchedulingConfig(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultEarlyMetaFlush(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Gateway.EarlyMetaFlushAfterMs != 2000 {
+		t.Fatalf("EarlyMetaFlushAfterMs = %d, want 2000", cfg.Gateway.EarlyMetaFlushAfterMs)
+	}
+}
+
 func TestLoadDefaultOpenAIWSConfig(t *testing.T) {
 	resetViperWithJWTSecret(t)
 
