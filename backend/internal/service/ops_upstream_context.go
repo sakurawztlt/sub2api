@@ -72,6 +72,16 @@ const (
 	// while backup-only traffic_capture may intentionally retain the full
 	// upstream body when SUB2API_TRAFFIC_CAPTURE_ENABLED is on.
 	TrafficCaptureUpstreamRequestBodyKey = "traffic_capture_upstream_request_body"
+
+	// Client-side configuration denials should remain visible in ops_error_logs,
+	// but should be excluded from SLA/error-rate calculations.
+	OpsClientBusinessLimitedKey                          = "ops_client_business_limited"
+	OpsClientBusinessLimitedReasonKey                    = "ops_client_business_limited_reason"
+	OpsClientBusinessLimitedReasonIPRestriction          = "api_key_ip_restriction"
+	OpsClientBusinessLimitedReasonAPIKeyGroupUnavailable = "api_key_group_unavailable"
+	OpsClientBusinessLimitedReasonAPIKeyGroupUnassigned  = "api_key_group_unassigned"
+	OpsClientBusinessLimitedReasonLocalFeatureGate       = "local_feature_gate"
+	OpsClientBusinessLimitedReasonLocalPolicyDenied      = "local_policy_denied"
 )
 
 func setOpsUpstreamRequestBody(c *gin.Context, body []byte) {
@@ -242,6 +252,28 @@ func SetOpsLatencyMs(c *gin.Context, key string, value int64) {
 		return
 	}
 	c.Set(key, value)
+}
+
+func MarkOpsClientBusinessLimited(c *gin.Context, reason string) {
+	if c == nil {
+		return
+	}
+	c.Set(OpsClientBusinessLimitedKey, true)
+	if reason = strings.TrimSpace(reason); reason != "" {
+		c.Set(OpsClientBusinessLimitedReasonKey, reason)
+	}
+}
+
+func HasOpsClientBusinessLimited(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	v, ok := c.Get(OpsClientBusinessLimitedKey)
+	if !ok {
+		return false
+	}
+	marked, _ := v.(bool)
+	return marked
 }
 
 // SetOpsUpstreamError is the exported wrapper for setOpsUpstreamError, used by
