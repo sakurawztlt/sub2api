@@ -873,6 +873,16 @@ func resToAnthHandleCompleted(evt *ResponsesStreamEvent, state *ResponsesEventTo
 	events = append(events, closeCurrentBlock(state)...)
 
 	stopReason := "end_turn"
+	if evt.Usage != nil {
+		state.RawTotalInputTokens = evt.Usage.InputTokens
+		state.RawOutputTokens = evt.Usage.OutputTokens
+		if evt.Usage.InputTokensDetails != nil {
+			state.RawCachedInputTokens = evt.Usage.InputTokensDetails.CachedTokens
+		}
+		if evt.Usage.OutputTokensDetails != nil {
+			state.RawReasoningTokens = evt.Usage.OutputTokensDetails.ReasoningTokens
+		}
+	}
 	if evt.Response != nil {
 		if evt.Response.Usage != nil {
 			state.RawTotalInputTokens = evt.Response.Usage.InputTokens

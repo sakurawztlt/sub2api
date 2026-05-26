@@ -852,6 +852,12 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 			}
 		}
 		if isOpenAICompatResponsesTerminalEvent(event.Type) && event.Response != nil {
+			if event.Usage != nil {
+				usage = copyOpenAIUsageFromResponsesUsage(event.Usage)
+				if event.Response.Usage == nil {
+					event.Response.Usage = event.Usage
+				}
+			}
 			if event.Response.Usage != nil {
 				usage = copyOpenAIUsageFromResponsesUsage(event.Response.Usage)
 			}
@@ -926,6 +932,12 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 			}
 
 			if isOpenAICompatResponsesTerminalEvent(event.Type) && event.Response != nil {
+				if event.Usage != nil {
+					usage = copyOpenAIUsageFromResponsesUsage(event.Usage)
+					if event.Response.Usage == nil {
+						event.Response.Usage = event.Usage
+					}
+				}
 				if event.Response.Usage != nil {
 					usage = copyOpenAIUsageFromResponsesUsage(event.Response.Usage)
 				}
@@ -1170,18 +1182,22 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			return false
 		}
 
-		// 仅按兼容转换器支持的终止事件提取 usage，避免无意扩大事件语义。
 		isTerminalEvent := isOpenAICompatResponsesTerminalEvent(event.Type)
-		if isTerminalEvent && event.Response != nil {
-			// 058 step 2: capture upstream response id (resp_xxx) so the
-			// continuation chain can attach it as previous_response_id on
-			// the next turn. Anthropic-facing id stays synthesised — only
-			// internal binding sees the upstream value.
-			if id := strings.TrimSpace(event.Response.ID); id != "" {
-				responseID = id
+		if isTerminalEvent {
+			if event.Response != nil {
+				// 058 step 2: capture upstream response id (resp_xxx) so the
+				// continuation chain can attach it as previous_response_id on
+				// the next turn. Anthropic-facing id stays synthesised — only
+				// internal binding sees the upstream value.
+				if id := strings.TrimSpace(event.Response.ID); id != "" {
+					responseID = id
+				}
+				if event.Response.Usage != nil {
+					usage = copyOpenAIUsageFromResponsesUsage(event.Response.Usage)
+				}
 			}
-			if event.Response.Usage != nil {
-				usage = copyOpenAIUsageFromResponsesUsage(event.Response.Usage)
+			if event.Usage != nil {
+				usage = copyOpenAIUsageFromResponsesUsage(event.Usage)
 			}
 		}
 
