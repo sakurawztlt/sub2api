@@ -266,13 +266,6 @@ func (r *redeemCodeRepository) batchUpdate(ctx context.Context, client *dbent.Cl
 	if fields.Notes != nil {
 		up.SetNotes(*fields.Notes)
 	}
-	if fields.ExpiresAt.Set {
-		if fields.ExpiresAt.Value != nil {
-			up.SetExpiresAt(*fields.ExpiresAt.Value)
-		} else {
-			up.ClearExpiresAt()
-		}
-	}
 	if fields.GroupID.Set {
 		if fields.GroupID.Value != nil {
 			up.SetGroupID(*fields.GroupID.Value)

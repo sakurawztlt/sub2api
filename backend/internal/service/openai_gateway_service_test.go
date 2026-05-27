@@ -2106,6 +2106,44 @@ func TestOpenAIBuildUpstreamRequestCompactForcesJSONAcceptForOAuth(t *testing.T)
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(req.Context()))
 }
 
+func TestOpenAIBuildUpstreamRequestOAuthBrowserUAFallsBackToCodexCLI(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader([]byte(`{"model":"gpt-5"}`)))
+	c.Request.Header.Set("User-Agent", "Mozilla/5.0 Chrome/125.0")
+
+	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}}}
+	account := &Account{
+		Type:        AccountTypeOAuth,
+		Credentials: map[string]any{"chatgpt_account_id": "chatgpt-acc"},
+	}
+
+	req, err := svc.buildUpstreamRequest(c.Request.Context(), c, account, []byte(`{"model":"gpt-5"}`), "token", false, "", false)
+	require.NoError(t, err)
+	require.Equal(t, codexCLIUserAgent, req.Header.Get("User-Agent"))
+}
+
+func TestApplyOpenAIOAuthCodexUserAgentFallback(t *testing.T) {
+	t.Run("oauth browser UA falls back", func(t *testing.T) {
+		headers := http.Header{"User-Agent": []string{"Mozilla/5.0"}}
+		applyOpenAIOAuthCodexUserAgentFallback(headers, &Account{Type: AccountTypeOAuth})
+		require.Equal(t, codexCLIUserAgent, headers.Get("User-Agent"))
+	})
+
+	t.Run("oauth codex UA preserved", func(t *testing.T) {
+		headers := http.Header{"User-Agent": []string{"codex_cli_rs/0.126.0"}}
+		applyOpenAIOAuthCodexUserAgentFallback(headers, &Account{Type: AccountTypeOAuth})
+		require.Equal(t, "codex_cli_rs/0.126.0", headers.Get("User-Agent"))
+	})
+
+	t.Run("api key browser UA preserved", func(t *testing.T) {
+		headers := http.Header{"User-Agent": []string{"Mozilla/5.0"}}
+		applyOpenAIOAuthCodexUserAgentFallback(headers, &Account{Type: AccountTypeAPIKey})
+		require.Equal(t, "Mozilla/5.0", headers.Get("User-Agent"))
+	})
+}
+
 func TestOpenAIBuildUpstreamRequestCompactUsesXSessionAffinityFallback(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()

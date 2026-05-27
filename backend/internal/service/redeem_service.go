@@ -72,21 +72,15 @@ type RedeemCodeResponse struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-type NullableTimeUpdate struct {
-	Set   bool
-	Value *time.Time
-}
-
 type NullableInt64Update struct {
 	Set   bool
 	Value *int64
 }
 
 type RedeemCodeBatchUpdateFields struct {
-	Status    *string
-	ExpiresAt NullableTimeUpdate
-	Notes     *string
-	GroupID   NullableInt64Update
+	Status  *string
+	Notes   *string
+	GroupID NullableInt64Update
 
 	// Core fields are intentionally modeled only so service validation can
 	// reject payloads that try to mutate redemption value semantics in bulk.
@@ -96,7 +90,6 @@ type RedeemCodeBatchUpdateFields struct {
 
 func (f RedeemCodeBatchUpdateFields) HasChanges() bool {
 	return f.Status != nil ||
-		f.ExpiresAt.Set ||
 		f.Notes != nil ||
 		f.GroupID.Set ||
 		f.Type != nil ||
@@ -108,7 +101,7 @@ func (f RedeemCodeBatchUpdateFields) HasCoreFieldChanges() bool {
 }
 
 func (f RedeemCodeBatchUpdateFields) TouchesUsedSensitiveFields() bool {
-	return f.Status != nil || f.ExpiresAt.Set || f.GroupID.Set
+	return f.Status != nil || f.GroupID.Set
 }
 
 type RedeemCodeBatchUpdateInput struct {
@@ -286,13 +279,6 @@ func (s *RedeemService) BatchUpdate(ctx context.Context, input *RedeemCodeBatchU
 		default:
 			return nil, infraerrors.BadRequest("REDEEM_CODE_STATUS_INVALID", "status must be unused or disabled")
 		}
-	}
-	if input.Fields.ExpiresAt.Set && input.Fields.ExpiresAt.Value != nil {
-		expiresAt := input.Fields.ExpiresAt.Value.UTC()
-		if !expiresAt.After(time.Now().UTC()) {
-			return nil, infraerrors.BadRequest("REDEEM_CODE_EXPIRES_AT_INVALID", "expires_at must be in the future")
-		}
-		input.Fields.ExpiresAt.Value = &expiresAt
 	}
 	if input.Fields.GroupID.Set && input.Fields.GroupID.Value != nil && *input.Fields.GroupID.Value <= 0 {
 		return nil, infraerrors.BadRequest("REDEEM_CODE_GROUP_ID_INVALID", "group_id must be positive")

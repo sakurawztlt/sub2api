@@ -406,26 +406,6 @@
             <div class="space-y-2">
               <label class="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
                 <input
-                  v-model="batchUpdateForm.update_expires_at"
-                  type="checkbox"
-                  class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                />
-                {{ t('admin.redeem.batchFields.expiresAt') }}
-              </label>
-              <template v-if="batchUpdateForm.update_expires_at">
-                <Select v-model="batchUpdateForm.expires_mode" :options="batchExpiryModeOptions" />
-                <input
-                  v-if="batchUpdateForm.expires_mode === 'custom'"
-                  v-model="batchUpdateForm.expires_at_local"
-                  type="datetime-local"
-                  class="input"
-                />
-              </template>
-            </div>
-
-            <div class="space-y-2">
-              <label class="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
-                <input
                   data-test="batch-field-notes"
                   v-model="batchUpdateForm.update_notes"
                   type="checkbox"
@@ -716,11 +696,6 @@ const batchStatusOptions = computed(() => [
   { value: 'disabled', label: t('admin.redeem.status.disabled') }
 ])
 
-const batchExpiryModeOptions = computed(() => [
-  { value: 'clear', label: t('admin.redeem.neverExpires') },
-  { value: 'custom', label: t('admin.redeem.customExpiry') }
-])
-
 const codes = ref<RedeemCode[]>([])
 const loading = ref(false)
 const generating = ref(false)
@@ -765,9 +740,6 @@ const {
 const batchUpdateForm = reactive({
   update_status: false,
   status: 'disabled' as 'unused' | 'disabled',
-  update_expires_at: false,
-  expires_mode: 'clear' as 'clear' | 'custom',
-  expires_at_local: '',
   update_notes: false,
   notes: '',
   update_group_id: false,
@@ -883,21 +855,9 @@ const toggleSelectAllVisible = (event: Event) => {
   toggleVisible(target.checked)
 }
 
-const toDatetimeLocalInputValue = (date: Date) => {
-  const pad = (value: number) => String(value).padStart(2, '0')
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(
-    date.getHours()
-  )}:${pad(date.getMinutes())}`
-}
-
 const resetBatchUpdateForm = () => {
   batchUpdateForm.update_status = false
   batchUpdateForm.status = 'disabled'
-  batchUpdateForm.update_expires_at = false
-  batchUpdateForm.expires_mode = 'clear'
-  batchUpdateForm.expires_at_local = toDatetimeLocalInputValue(
-    new Date(Date.now() + 24 * 60 * 60 * 1000)
-  )
   batchUpdateForm.update_notes = false
   batchUpdateForm.notes = ''
   batchUpdateForm.update_group_id = false
@@ -922,18 +882,6 @@ const buildBatchUpdateFields = (): BatchUpdateRedeemCodeFields | null => {
 
   if (batchUpdateForm.update_status) {
     fields.status = batchUpdateForm.status
-  }
-  if (batchUpdateForm.update_expires_at) {
-    if (batchUpdateForm.expires_mode === 'clear') {
-      fields.expires_at = null
-    } else {
-      const expiresAt = new Date(batchUpdateForm.expires_at_local)
-      if (!batchUpdateForm.expires_at_local || Number.isNaN(expiresAt.getTime())) {
-        appStore.showError(t('admin.redeem.expiryDaysRequired'))
-        return null
-      }
-      fields.expires_at = expiresAt.toISOString()
-    }
   }
   if (batchUpdateForm.update_notes) {
     fields.notes = batchUpdateForm.notes
@@ -1059,7 +1007,6 @@ const handleBatchUpdate = async () => {
 
   const hasSelectedFields =
     batchUpdateForm.update_status ||
-    batchUpdateForm.update_expires_at ||
     batchUpdateForm.update_notes ||
     batchUpdateForm.update_group_id
   if (!hasSelectedFields) {

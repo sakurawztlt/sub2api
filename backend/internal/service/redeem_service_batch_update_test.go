@@ -5,7 +5,6 @@ package service
 import (
 	"context"
 	"testing"
-	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
@@ -14,16 +13,14 @@ import (
 func TestRedeemService_BatchUpdate_PartialFields(t *testing.T) {
 	status := StatusDisabled
 	notes := "maintenance window"
-	expiresAt := time.Now().UTC().Add(24 * time.Hour)
 	repo := &redeemRepoStub{}
 	svc := &RedeemService{redeemRepo: repo}
 
 	result, err := svc.BatchUpdate(context.Background(), &RedeemCodeBatchUpdateInput{
 		IDs: []int64{1, 2, 2},
 		Fields: RedeemCodeBatchUpdateFields{
-			Status:    &status,
-			ExpiresAt: NullableTimeUpdate{Set: true, Value: &expiresAt},
-			Notes:     &notes,
+			Status: &status,
+			Notes:  &notes,
 		},
 	})
 
@@ -32,8 +29,6 @@ func TestRedeemService_BatchUpdate_PartialFields(t *testing.T) {
 	require.True(t, repo.batchUpdateCalled)
 	require.Equal(t, []int64{1, 2}, repo.batchUpdateIDs)
 	require.Equal(t, &status, repo.batchUpdateFields.Status)
-	require.True(t, repo.batchUpdateFields.ExpiresAt.Set)
-	require.WithinDuration(t, expiresAt, *repo.batchUpdateFields.ExpiresAt.Value, time.Second)
 	require.Equal(t, &notes, repo.batchUpdateFields.Notes)
 	require.False(t, repo.batchUpdateFields.GroupID.Set)
 	require.Nil(t, repo.batchUpdateFields.Type)

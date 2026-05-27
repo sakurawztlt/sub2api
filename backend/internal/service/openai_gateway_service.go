@@ -62,6 +62,15 @@ const (
 	openAICodexRecoverySnapshotMaxSkew    = 2 * time.Minute
 )
 
+func applyOpenAIOAuthCodexUserAgentFallback(headers http.Header, account *Account) {
+	if account == nil || account.Type != AccountTypeOAuth {
+		return
+	}
+	if !openai.IsCodexCLIRequest(headers.Get("user-agent")) {
+		headers.Set("user-agent", codexCLIUserAgent)
+	}
+}
+
 // OpenAI allowed headers whitelist (for non-passthrough).
 var openaiAllowedHeaders = map[string]bool{
 	"accept-language":       true,
@@ -3708,9 +3717,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 		req.Header.Set("user-agent", codexCLIUserAgent)
 	}
 	// OAuth 安全透传：对非 Codex UA 统一兜底，降低被上游风控拦截概率。
-	if account.Type == AccountTypeOAuth && !openai.IsCodexCLIRequest(req.Header.Get("user-agent")) {
-		req.Header.Set("user-agent", codexCLIUserAgent)
-	}
+	applyOpenAIOAuthCodexUserAgentFallback(req.Header, account)
 
 	if req.Header.Get("content-type") == "" {
 		req.Header.Set("content-type", "application/json")
@@ -4464,6 +4471,8 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	if s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
 		req.Header.Set("user-agent", codexCLIUserAgent)
 	}
+	// OAuth 安全兜底：浏览器/未知 UA 容易触发上游风控，统一改成 Codex CLI UA。
+	applyOpenAIOAuthCodexUserAgentFallback(req.Header, account)
 
 	// Ensure required headers exist
 	if req.Header.Get("content-type") == "" {

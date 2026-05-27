@@ -454,7 +454,6 @@ var bedrockSupportedBetaTokens = map[string]bool{
 	"computer-use-2025-01-24":         true,
 	"computer-use-2025-11-24":         true,
 	"context-1m-2025-08-07":           true,
-	"context-management-2025-06-27":   true,
 	"compact-2026-01-12":              true,
 	"interleaved-thinking-2025-05-14": true,
 	"tool-search-tool-2025-10-19":     true,

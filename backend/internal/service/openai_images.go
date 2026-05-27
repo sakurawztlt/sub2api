@@ -780,6 +780,7 @@ func (s *OpenAIGatewayService) buildOpenAIImagesRequest(
 	if customUA != "" {
 		req.Header.Set("User-Agent", customUA)
 	}
+	applyOpenAIOAuthCodexUserAgentFallback(req.Header, account)
 	if strings.TrimSpace(contentType) != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
