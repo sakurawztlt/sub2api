@@ -185,12 +185,20 @@ func TestEstimateAnthropicCacheUsageForModel_UsesClaudeCacheFloors(t *testing.T)
 		wantCreation int
 	}{
 		{
-			name:         "sonnet_4_6_allows_1024_floor",
+			name:         "sonnet_4_6_requires_2048_floor",
 			model:        "claude-sonnet-4-6",
 			total:        1200,
 			external:     1200,
+			wantInput:    1200,
+			wantCreation: 0,
+		},
+		{
+			name:         "sonnet_4_6_writes_above_2048_floor",
+			model:        "claude-sonnet-4-6",
+			total:        2200,
+			external:     2200,
 			wantInput:    0,
-			wantCreation: 1200,
+			wantCreation: 2200,
 		},
 		{
 			name:         "opus_4_6_requires_4096_floor",

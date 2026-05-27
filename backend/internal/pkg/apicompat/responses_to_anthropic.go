@@ -240,6 +240,8 @@ func anthropicCacheMinTokensForModel(model string) int {
 		strings.Contains(m, "opus-4-5"),
 		strings.Contains(m, "haiku-4-5"):
 		return 4096
+	case strings.Contains(m, "sonnet-4-6"):
+		return 2048
 	default:
 		return anthropicDefaultCacheMinTokens
 	}
