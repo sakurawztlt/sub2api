@@ -1162,8 +1162,7 @@ func classifyOpsPhase(errType, message, code string) string {
 	if isOpsClientAuthError(code, msg) {
 		return "auth"
 	}
-	switch strings.TrimSpace(code) {
-	case opsCodeInsufficientBalance, opsCodeUsageLimitExceeded, opsCodeSubscriptionNotFound, opsCodeSubscriptionInvalid:
+	if isOpsLocalBusinessLimitError(code, msg) {
 		return "request"
 	}
 
