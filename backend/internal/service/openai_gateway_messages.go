@@ -501,7 +501,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	} else {
 		// Client wants JSON but upstream is streaming or ignored stream=false:
 		// buffer the streaming response and assemble a JSON reply.
-		result, handleErr = s.handleAnthropicBufferedStreamingResponse(resp, c, originalModel, billingModel, upstreamModel, startTime)
+		result, handleErr = s.handleAnthropicBufferedStreamingResponse(resp, c, originalModel, billingModel, upstreamModel, startTime, len(body))
 	}
 
 	// Propagate ServiceTier and ReasoningEffort to result for billing
@@ -579,10 +579,11 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	billingModel string,
 	upstreamModel string,
 	startTime time.Time,
+	inboundBodyLen int,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 
-	finalResponse, usage, acc, err := s.readOpenAICompatBufferedTerminal(c.Request.Context(), resp, "openai messages buffered", requestID)
+	finalResponse, usage, acc, err := s.readOpenAICompatBufferedTerminal(c.Request.Context(), resp, "openai messages buffered", requestID, inboundBodyLen)
 	if err != nil {
 		if errors.Is(err, errOpenAICompatBufferedTotalTimeout) {
 			if acc != nil && acc.HasContent() {
@@ -773,6 +774,22 @@ func (s *OpenAIGatewayService) handleAnthropicJSONResponse(
 	}, nil
 }
 
+const (
+	openAICompatLargeBufferedBodyBytes           = 64 * 1024
+	openAICompatLargeBufferedTotalTimeoutSeconds = 360
+)
+
+func effectiveOpenAICompatBufferedTotalTimeoutSeconds(configuredSeconds int, inboundBodyLen int) int {
+	if configuredSeconds <= 0 {
+		return configuredSeconds
+	}
+	if inboundBodyLen >= openAICompatLargeBufferedBodyBytes &&
+		configuredSeconds < openAICompatLargeBufferedTotalTimeoutSeconds {
+		return openAICompatLargeBufferedTotalTimeoutSeconds
+	}
+	return configuredSeconds
+}
+
 func isOpenAICompatResponsesTerminalEvent(eventType string) bool {
 	switch strings.TrimSpace(eventType) {
 	case "response.completed", "response.done", "response.incomplete", "response.failed":
@@ -884,6 +901,7 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 	resp *http.Response,
 	logPrefix string,
 	requestID string,
+	inboundBodyLen int,
 ) (*apicompat.ResponsesResponse, OpenAIUsage, *apicompat.BufferedResponseAccumulator, error) {
 	acc := apicompat.NewBufferedResponseAccumulator()
 	var usage OpenAIUsage
@@ -950,8 +968,12 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 		firstMeaningCh    <-chan time.Time
 		firstMeaningSeen  bool
 	)
-	if s.cfg != nil && s.cfg.Gateway.BufferedTotalTimeout > 0 {
-		totalTimeoutTimer = time.NewTimer(time.Duration(s.cfg.Gateway.BufferedTotalTimeout) * time.Second)
+	bufferedTotalTimeoutSec := 0
+	if s.cfg != nil {
+		bufferedTotalTimeoutSec = effectiveOpenAICompatBufferedTotalTimeoutSeconds(s.cfg.Gateway.BufferedTotalTimeout, inboundBodyLen)
+	}
+	if bufferedTotalTimeoutSec > 0 {
+		totalTimeoutTimer = time.NewTimer(time.Duration(bufferedTotalTimeoutSec) * time.Second)
 		totalTimeoutCh = totalTimeoutTimer.C
 		defer totalTimeoutTimer.Stop()
 	}
@@ -1127,7 +1149,8 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 			_ = resp.Body.Close()
 			logger.L().Warn(logPrefix+": buffered total timeout (codex round 11i)",
 				zap.String("request_id", requestID),
-				zap.Int("seconds", s.cfg.Gateway.BufferedTotalTimeout),
+				zap.Int("seconds", bufferedTotalTimeoutSec),
+				zap.Int("inbound_body_len", inboundBodyLen),
 			)
 			return nil, usage, acc, errOpenAICompatBufferedTotalTimeout
 

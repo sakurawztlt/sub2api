@@ -685,6 +685,13 @@ func TestForwardAsAnthropic_APIKeyNonStreamUsesResponsesJSON(t *testing.T) {
 	require.Contains(t, rec.Body.String(), `"type":"message"`)
 }
 
+func TestEffectiveOpenAICompatBufferedTotalTimeoutSeconds(t *testing.T) {
+	require.Equal(t, 0, effectiveOpenAICompatBufferedTotalTimeoutSeconds(0, 128*1024))
+	require.Equal(t, 100, effectiveOpenAICompatBufferedTotalTimeoutSeconds(100, 8*1024))
+	require.Equal(t, 360, effectiveOpenAICompatBufferedTotalTimeoutSeconds(100, 128*1024))
+	require.Equal(t, 420, effectiveOpenAICompatBufferedTotalTimeoutSeconds(420, 128*1024))
+}
+
 func TestForwardAsAnthropic_BufferedCreatedOnlyTriggersFirstMeaningfulTimeout(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
