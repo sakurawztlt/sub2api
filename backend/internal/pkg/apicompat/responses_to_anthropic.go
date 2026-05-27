@@ -200,9 +200,10 @@ const openaiPrefixCacheMinTokens = anthropicDefaultCacheMinTokens
 //   - input + creation + read == total
 //   - creation > 0 implies input == 0 (new portion fully attributed to write)
 //   - creation == 0 for total < openaiPrefixCacheMinTokens
-//   - read always equals cached (exact, not an estimate)
-//   - cached > total (rare upstream accounting drift) clamps read to total,
-//     input/creation to 0
+//   - reads are reported only when the customer-visible/cacheable prefix meets
+//     Claude's model-specific minimum
+//   - cached > total (rare upstream accounting drift) clamps read to total only
+//     after the request is large enough to be cacheable
 func estimateAnthropicCacheUsage(total, cached int) (input, creation, read int) {
 	return estimateAnthropicCacheUsageForModel(total, cached, "", AnthropicUsageEstimationOptions{})
 }
@@ -214,22 +215,26 @@ func estimateAnthropicCacheUsageForModel(total, cached int, model string, opts A
 	if cached < 0 {
 		cached = 0
 	}
+	threshold := anthropicCacheMinTokensForModel(model)
+	eligibleTokens := total
+	if opts.ExternalInputTokens > 0 {
+		eligibleTokens = opts.ExternalInputTokens
+	}
+	if eligibleTokens < threshold {
+		return total, 0, 0
+	}
 	if cached > total {
 		// Upstream drift: cached reported greater than total. Trust the
 		// smaller of the two (total) for read so the three counters still
 		// sum consistently, and zero the rest.
 		return 0, 0, total
 	}
+	if cached > 0 && cached < threshold {
+		cached = 0
+	}
 	newPortion := total - cached
 
-	eligibleTokens := newPortion
-	if opts.ExternalInputTokens > 0 {
-		eligibleTokens = opts.ExternalInputTokens
-	}
-	if eligibleTokens >= anthropicCacheMinTokensForModel(model) {
-		return 0, newPortion, cached
-	}
-	return newPortion, 0, cached
+	return 0, newPortion, cached
 }
 
 func anthropicCacheMinTokensForModel(model string) int {
@@ -241,7 +246,7 @@ func anthropicCacheMinTokensForModel(model string) int {
 		strings.Contains(m, "haiku-4-5"):
 		return 4096
 	case strings.Contains(m, "sonnet-4-6"):
-		return 2048
+		return 1024
 	default:
 		return anthropicDefaultCacheMinTokens
 	}

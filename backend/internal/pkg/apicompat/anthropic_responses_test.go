@@ -294,10 +294,10 @@ func TestResponsesToAnthropic_CachedTokensClampInputTokens(t *testing.T) {
 	}
 
 	anth := ResponsesToAnthropic(resp, "claude-sonnet-4-5-20250929")
-	// Fork ledger v1: cached > total drift → clamp read to total so the three
-	// disjoint counters still sum consistently. Prevents NewAPI over-billing.
-	assert.Equal(t, 0, anth.Usage.InputTokens)
-	assert.Equal(t, 100, anth.Usage.CacheReadInputTokens)
+	// Below Claude's cache floor, cached-token drift should not surface as a
+	// cache_read. Treat it as ordinary input instead.
+	assert.Equal(t, 100, anth.Usage.InputTokens)
+	assert.Equal(t, 0, anth.Usage.CacheReadInputTokens)
 	assert.Equal(t, 5, anth.Usage.OutputTokens)
 }
 
@@ -586,8 +586,8 @@ func TestResponsesEventToAnthropicEvents_TopLevelTerminalUsage(t *testing.T) {
 	require.Len(t, events, 2)
 	assert.Equal(t, "message_delta", events[0].Type)
 	require.NotNil(t, events[0].Usage)
-	assert.Equal(t, 15, events[0].Usage.InputTokens)
-	assert.Equal(t, 5, events[0].Usage.CacheReadInputTokens)
+	assert.Equal(t, 20, events[0].Usage.InputTokens)
+	assert.Equal(t, 0, events[0].Usage.CacheReadInputTokens)
 	assert.Equal(t, 6, events[0].Usage.OutputTokens)
 	assert.Equal(t, "message_stop", events[1].Type)
 }

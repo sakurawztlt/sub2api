@@ -51,8 +51,8 @@ func TestEstimateAnthropicCacheUsage(t *testing.T) {
 		},
 		{
 			name:  "short_with_partial_cache_still_below_threshold",
-			total: 800, cached: 200, // newPortion 600 < 1024
-			wantInput: 600, wantCreation: 0, wantRead: 200,
+			total: 800, cached: 200,
+			wantInput: 800, wantCreation: 0, wantRead: 0,
 		},
 		{
 			name:  "exactly_one_below_threshold",
@@ -69,8 +69,8 @@ func TestEstimateAnthropicCacheUsage(t *testing.T) {
 		},
 		{
 			name:  "exactly_at_threshold_with_some_cache",
-			total: threshold + 100, cached: 100, // newPortion = 1024
-			wantInput: 0, wantCreation: threshold, wantRead: 100,
+			total: threshold + 100, cached: 100,
+			wantInput: 0, wantCreation: threshold + 100, wantRead: 0,
 		},
 
 		// ---- Long request (above threshold, cache write happens) ----
@@ -87,9 +87,9 @@ func TestEstimateAnthropicCacheUsage(t *testing.T) {
 		{
 			name:  "long_small_new_portion_below_threshold",
 			total: 20000, cached: 19500, // newPortion 500 < threshold
-			// even though total is huge, the "new" portion is too small to
-			// write a new cache slot — plain input_tokens
-			wantInput: 500, wantCreation: 0, wantRead: 19500,
+			// Claude can charge a small cache_creation delta when it
+			// extends an already-large cached prefix.
+			wantInput: 0, wantCreation: 500, wantRead: 19500,
 		},
 
 		// ---- Full cache hit / no new input ----
@@ -101,16 +101,16 @@ func TestEstimateAnthropicCacheUsage(t *testing.T) {
 		{
 			name:  "full_cache_hit_small",
 			total: 50, cached: 50,
-			wantInput: 0, wantCreation: 0, wantRead: 50,
+			wantInput: 50, wantCreation: 0, wantRead: 0,
 		},
 
 		// ---- Anomalous upstream accounting ----
 		{
 			name:  "cached_exceeds_total_clamp",
 			total: 100, cached: 150,
-			// Upstream drift: trust the smaller (total) for read; the three
-			// counters still sum to a consistent value.
-			wantInput: 0, wantCreation: 0, wantRead: 100,
+			// Below Claude's cache floor, even drifted cached_tokens should
+			// not surface as cache_read.
+			wantInput: 100, wantCreation: 0, wantRead: 0,
 		},
 
 		// ---- Realistic big-request baselines ----
@@ -128,7 +128,7 @@ func TestEstimateAnthropicCacheUsage(t *testing.T) {
 		{
 			name:  "typical_claude_code_turn_2",
 			total: 8500, cached: 7500, // newPortion 1000 < threshold
-			wantInput: 1000, wantCreation: 0, wantRead: 7500,
+			wantInput: 0, wantCreation: 1000, wantRead: 7500,
 		},
 		{
 			name:  "typical_claude_code_turn_3_bigger_newdelta",
@@ -165,11 +165,10 @@ func TestEstimateAnthropicCacheUsage(t *testing.T) {
 			if creation > 0 && input > 0 {
 				t.Errorf("creation=%d and input=%d both nonzero — would double-count", creation, input)
 			}
-			// read always equals cached (clamped). Non-negative. Never > total.
-			if tt.cached >= 0 && tt.cached <= tt.total {
-				if read != tt.cached {
-					t.Errorf("read=%d must equal cached=%d when cached in range", read, tt.cached)
-				}
+			// Claude cache reads are valid only when both the whole
+			// cacheable prefix and the cached prefix meet the model floor.
+			if read > 0 && read < threshold {
+				t.Errorf("read=%d below threshold=%d must not surface as cache_read", read, threshold)
 			}
 		})
 	}
@@ -180,25 +179,27 @@ func TestEstimateAnthropicCacheUsageForModel_UsesClaudeCacheFloors(t *testing.T)
 		name         string
 		model        string
 		total        int
+		cached       int
 		external     int
 		wantInput    int
 		wantCreation int
+		wantRead     int
 	}{
 		{
-			name:         "sonnet_4_6_requires_2048_floor",
+			name:         "sonnet_4_6_requires_1024_floor",
 			model:        "claude-sonnet-4-6",
-			total:        1200,
-			external:     1200,
-			wantInput:    1200,
+			total:        900,
+			external:     900,
+			wantInput:    900,
 			wantCreation: 0,
 		},
 		{
-			name:         "sonnet_4_6_writes_above_2048_floor",
+			name:         "sonnet_4_6_writes_above_1024_floor",
 			model:        "claude-sonnet-4-6",
-			total:        2200,
-			external:     2200,
+			total:        1200,
+			external:     1200,
 			wantInput:    0,
-			wantCreation: 2200,
+			wantCreation: 1200,
 		},
 		{
 			name:         "opus_4_6_requires_4096_floor",
@@ -217,6 +218,36 @@ func TestEstimateAnthropicCacheUsageForModel_UsesClaudeCacheFloors(t *testing.T)
 			wantCreation: 0,
 		},
 		{
+			name:         "short_external_prompt_suppresses_cache_read_too",
+			model:        "claude-opus-4-7",
+			total:        19,
+			cached:       19,
+			external:     19,
+			wantInput:    19,
+			wantCreation: 0,
+			wantRead:     0,
+		},
+		{
+			name:         "small_cached_noise_becomes_write_when_prefix_is_cacheable",
+			model:        "claude-opus-4-7",
+			total:        5000,
+			cached:       19,
+			external:     5000,
+			wantInput:    0,
+			wantCreation: 5000,
+			wantRead:     0,
+		},
+		{
+			name:         "large_cached_prefix_keeps_cache_read",
+			model:        "claude-opus-4-7",
+			total:        9000,
+			cached:       5000,
+			external:     9000,
+			wantInput:    0,
+			wantCreation: 4000,
+			wantRead:     5000,
+		},
+		{
 			name:         "large_external_prompt_keeps_cache_write",
 			model:        "claude-opus-4-7",
 			total:        20000,
@@ -228,15 +259,15 @@ func TestEstimateAnthropicCacheUsageForModel_UsesClaudeCacheFloors(t *testing.T)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			input, creation, _ := estimateAnthropicCacheUsageForModel(
+			input, creation, read := estimateAnthropicCacheUsageForModel(
 				tt.total,
-				0,
+				tt.cached,
 				tt.model,
 				AnthropicUsageEstimationOptions{ExternalInputTokens: tt.external},
 			)
-			if input != tt.wantInput || creation != tt.wantCreation {
-				t.Fatalf("got input=%d creation=%d, want input=%d creation=%d",
-					input, creation, tt.wantInput, tt.wantCreation)
+			if input != tt.wantInput || creation != tt.wantCreation || read != tt.wantRead {
+				t.Fatalf("got input=%d creation=%d read=%d, want input=%d creation=%d read=%d",
+					input, creation, read, tt.wantInput, tt.wantCreation, tt.wantRead)
 			}
 		})
 	}
@@ -408,7 +439,7 @@ func TestResponsesToAnthropic_CacheEstimation(t *testing.T) {
 		{"nonstream_long_no_cache", 5000, 0, 0, 5000, 0},
 		{"nonstream_long_partial_cache", 20000, 15000, 0, 5000, 15000},
 		{"nonstream_long_full_cache", 20000, 20000, 0, 0, 20000},
-		{"nonstream_long_small_new_below_threshold", 10000, 9500, 500, 0, 9500},
+		{"nonstream_long_small_new_below_threshold", 10000, 9500, 0, 500, 9500},
 		{"nonstream_375k_no_cache", 375848, 0, 0, 375848, 0},
 	}
 
@@ -498,7 +529,7 @@ func TestStreamingCacheEstimation_Completed(t *testing.T) {
 		{"stream_long_no_cache", 5000, 0, 0, 5000, 0},
 		{"stream_long_partial_cache", 30000, 20000, 0, 10000, 20000},
 		{"stream_long_full_cache", 20000, 20000, 0, 0, 20000},
-		{"stream_long_small_newdelta", 10000, 9700, 300, 0, 9700},
+		{"stream_long_small_newdelta", 10000, 9700, 0, 300, 9700},
 	}
 
 	for _, tt := range cases {
@@ -710,15 +741,16 @@ func TestStreamingCacheEstimation_Finalize(t *testing.T) {
 	if deltaEvent == nil || deltaEvent.Usage == nil {
 		t.Fatal("Finalize did not emit message_delta with usage")
 	}
-	// newPortion = 4000 >= threshold → cache_creation
+	// cached=1000 is below the default Claude floor, so it is treated as
+	// upstream cached-token noise and the whole cacheable prefix is written.
 	if deltaEvent.Usage.InputTokens != 0 {
 		t.Errorf("finalize InputTokens = %d, want 0", deltaEvent.Usage.InputTokens)
 	}
-	if deltaEvent.Usage.CacheCreationInputTokens != 4000 {
-		t.Errorf("finalize CacheCreationInputTokens = %d, want 4000", deltaEvent.Usage.CacheCreationInputTokens)
+	if deltaEvent.Usage.CacheCreationInputTokens != 5000 {
+		t.Errorf("finalize CacheCreationInputTokens = %d, want 5000", deltaEvent.Usage.CacheCreationInputTokens)
 	}
-	if deltaEvent.Usage.CacheReadInputTokens != 1000 {
-		t.Errorf("finalize CacheReadInputTokens = %d, want 1000", deltaEvent.Usage.CacheReadInputTokens)
+	if deltaEvent.Usage.CacheReadInputTokens != 0 {
+		t.Errorf("finalize CacheReadInputTokens = %d, want 0", deltaEvent.Usage.CacheReadInputTokens)
 	}
 }
 
