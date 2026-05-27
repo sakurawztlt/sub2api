@@ -692,6 +692,61 @@ func TestForwardAsAnthropic_BufferedCreatedOnlyTriggersFirstMeaningfulTimeout(t 
 	require.Empty(t, rec.Body.String())
 }
 
+func TestForwardAsAnthropic_BufferedReasoningItemProgressPreventsFirstMeaningfulTimeout(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"gpt-5.4","max_tokens":16,"messages":[{"role":"user","content":"hello"}],"stream":false}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	pr, pw := io.Pipe()
+	defer func() {
+		_ = pr.Close()
+	}()
+	go func() {
+		defer func() {
+			_ = pw.Close()
+		}()
+		_, _ = io.WriteString(pw, `data: {"type":"response.created","response":{"id":"resp_reasoning_progress","object":"response","model":"gpt-5.4","status":"in_progress"}}`+"\n\n")
+		_, _ = io.WriteString(pw, `data: {"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs_1"}}`+"\n\n")
+		time.Sleep(1200 * time.Millisecond)
+		_, _ = io.WriteString(pw, `data: {"type":"response.output_text.delta","output_index":1,"content_index":0,"delta":"final answer"}`+"\n\n")
+		_, _ = io.WriteString(pw, `data: {"type":"response.completed","response":{"id":"resp_reasoning_progress","object":"response","model":"gpt-5.4","status":"completed","output":[],"usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}}`+"\n\n")
+	}()
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_buffered_reasoning_progress"}},
+		Body:       pr,
+	}}
+
+	svc := &OpenAIGatewayService{
+		httpUpstream: upstream,
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			BufferedFirstMeaningfulTimeout: 1,
+			BufferedTotalTimeout:           4,
+		}},
+	}
+	account := &Account{
+		ID:          1,
+		Name:        "openai-oauth",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token":       "oauth-token",
+			"chatgpt_account_id": "chatgpt-acc",
+		},
+	}
+
+	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "gpt-5.1")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, rec.Body.String(), "final answer")
+}
+
 func TestForwardAsAnthropic_BufferedTotalTimeoutWithContentSynthesizesResponse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

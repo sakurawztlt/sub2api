@@ -708,6 +708,25 @@ func isOpenAICompatResponsesTerminalEvent(eventType string) bool {
 	}
 }
 
+func isOpenAICompatBufferedProgressEvent(event *apicompat.ResponsesStreamEvent) bool {
+	if event == nil {
+		return false
+	}
+	eventType := strings.TrimSpace(event.Type)
+	if event.Item != nil && strings.TrimSpace(event.Item.Type) != "" {
+		switch eventType {
+		case "response.output_item.added", "response.output_item.in_progress", "response.output_item.done":
+			return true
+		}
+	}
+	if strings.HasPrefix(eventType, "response.content_part.") ||
+		strings.HasPrefix(eventType, "response.reasoning_summary_part.") ||
+		strings.HasPrefix(eventType, "response.web_search_call.") {
+		return true
+	}
+	return false
+}
+
 func isMeaningfulOpenAICompatBufferedEvent(event *apicompat.ResponsesStreamEvent, acc *apicompat.BufferedResponseAccumulator) bool {
 	if event == nil {
 		return false
@@ -716,6 +735,9 @@ func isMeaningfulOpenAICompatBufferedEvent(event *apicompat.ResponsesStreamEvent
 		return true
 	}
 	if event.Type == "error" {
+		return true
+	}
+	if isOpenAICompatBufferedProgressEvent(event) {
 		return true
 	}
 	if event.Usage != nil {
