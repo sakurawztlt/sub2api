@@ -661,6 +661,20 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	// When the terminal event has an empty output array, reconstruct from
 	// accumulated delta events so the client receives the full content.
 	acc.SupplementResponseOutput(finalResponse)
+	if !responsesResponseHasVisibleOutput(finalResponse) {
+		logger.L().Warn("openai messages buffered: terminal response without visible output",
+			zap.String("request_id", requestID),
+		)
+		if !c.Writer.Written() {
+			return nil, &UpstreamFailoverError{
+				StatusCode:  http.StatusBadGateway,
+				BreakSticky: true,
+				Reason:      "buffered_empty_output",
+			}
+		}
+		writeAnthropicError(c, http.StatusBadGateway, "api_error", "Internal server error")
+		return nil, fmt.Errorf("upstream terminal response had no visible output")
+	}
 
 	anthropicResp := apicompat.ResponsesToAnthropic(finalResponse, originalModel)
 
@@ -692,6 +706,69 @@ func isOpenAICompatResponsesTerminalEvent(eventType string) bool {
 	default:
 		return false
 	}
+}
+
+func isMeaningfulOpenAICompatBufferedEvent(event *apicompat.ResponsesStreamEvent, acc *apicompat.BufferedResponseAccumulator) bool {
+	if event == nil {
+		return false
+	}
+	if acc != nil && acc.HasContent() {
+		return true
+	}
+	if event.Type == "error" {
+		return true
+	}
+	if event.Usage != nil {
+		return true
+	}
+	if event.Response != nil {
+		if event.Response.Usage != nil {
+			return true
+		}
+		if isOpenAICompatResponsesTerminalEvent(event.Type) {
+			return true
+		}
+	}
+	return false
+}
+
+func responsesResponseHasVisibleOutput(resp *apicompat.ResponsesResponse) bool {
+	if resp == nil {
+		return false
+	}
+	for _, item := range resp.Output {
+		switch item.Type {
+		case "message":
+			for _, part := range item.Content {
+				if strings.TrimSpace(part.Text) != "" ||
+					strings.TrimSpace(part.ImageURL) != "" ||
+					strings.TrimSpace(part.FileData) != "" ||
+					strings.TrimSpace(part.FileURL) != "" ||
+					strings.TrimSpace(part.FileID) != "" {
+					return true
+				}
+			}
+		case "reasoning":
+			for _, summary := range item.Summary {
+				if strings.TrimSpace(summary.Text) != "" {
+					return true
+				}
+			}
+		case "function_call":
+			if strings.TrimSpace(item.CallID) != "" ||
+				strings.TrimSpace(item.Name) != "" ||
+				strings.TrimSpace(item.Arguments) != "" {
+				return true
+			}
+		case "web_search_call":
+			if item.Action != nil {
+				return true
+			}
+		default:
+			return true
+		}
+	}
+	return false
 }
 
 func isOpenAICompatDoneSentinelLine(line string) bool {
@@ -767,8 +844,9 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 	//
 	// total: 整请求硬上限. 启用后无论上游发什么 (terminal / 心跳 / 数据), 到
 	//        时立刻 close + return error 让 caller failover or 504.
-	// first_meaningful: 首个**非心跳事件** (terminal 或业务事件) 未达到时
-	//                   超时. 心跳事件不算 (会被 ProcessEvent 忽略).
+	// first_meaningful: 首个可见内容 / 工具调用 / terminal / usage 未达到时
+	//                   超时. response.created/in_progress 这类元数据不算,
+	//                   否则高 reasoning 请求会一直拖到 total timeout.
 	var (
 		totalTimeoutCh    <-chan time.Time
 		totalTimeoutTimer *time.Timer
@@ -841,7 +919,7 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 			return false, nil, nil
 		}
 		acc.ProcessEvent(&event)
-		if !firstMeaningSeen && firstMeaningTimer != nil {
+		if !firstMeaningSeen && firstMeaningTimer != nil && isMeaningfulOpenAICompatBufferedEvent(&event, acc) {
 			firstMeaningSeen = true
 			if !firstMeaningTimer.Stop() {
 				select {
@@ -913,14 +991,12 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 
 			acc.ProcessEvent(&event)
 
-			// 2026-05-13 codex round 11i: any business event (not just terminal)
-			// counts as "first meaningful" — stop the first-meaningful timer.
-			// Heartbeat events parse as ResponsesStreamEvent but have no
-			// terminal Type; an arbitrary processed event still satisfies
-			// "upstream is doing real work". Conservative interpretation:
-			// the timer is for catching "upstream silent / heartbeat-only"
-			// scenarios, so we trip it OFF on any successfully-parsed event.
-			if !firstMeaningSeen && firstMeaningTimer != nil {
+			// 2026-05-27: only visible output/tool/terminal/usage counts
+			// as meaningful for buffered non-stream. response.created and
+			// response.in_progress prove the socket is alive but still give
+			// clients no usable response; letting them stop this timer caused
+			// 100s buffered_total_timeout and repeated NewAPI 502 retries.
+			if !firstMeaningSeen && firstMeaningTimer != nil && isMeaningfulOpenAICompatBufferedEvent(&event, acc) {
 				firstMeaningSeen = true
 				if !firstMeaningTimer.Stop() {
 					select {
@@ -966,7 +1042,7 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 			_ = resp.Body.Close()
 			logger.L().Warn(logPrefix+": buffered first meaningful event timeout (codex round 11i)",
 				zap.String("request_id", requestID),
-				zap.Int("seconds", s.cfg.Gateway.BufferedFirstMeaningfulTimeout),
+				zap.Int("seconds", firstMeaningfulTimeoutSec),
 			)
 			return nil, usage, acc, errOpenAICompatBufferedFirstMeaningfulTimeout
 		}

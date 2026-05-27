@@ -636,6 +636,62 @@ func TestForwardAsAnthropic_BufferedTotalTimeoutNoContentReturnsFailover(t *test
 	require.Empty(t, rec.Body.String())
 }
 
+func TestForwardAsAnthropic_BufferedCreatedOnlyTriggersFirstMeaningfulTimeout(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"gpt-5.4","max_tokens":16,"messages":[{"role":"user","content":"hello"}],"stream":false}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstreamBody := []byte(strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_meta_only","object":"response","model":"gpt-5.4","status":"in_progress"}}`,
+		"",
+		"",
+	}, "\n"))
+	upstreamStream := newOpenAICompatBlockingReadCloser(upstreamBody)
+	defer func() {
+		require.NoError(t, upstreamStream.Close())
+	}()
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_buffered_created_only"}},
+		Body:       upstreamStream,
+	}}
+
+	svc := &OpenAIGatewayService{
+		httpUpstream: upstream,
+		cfg: &config.Config{Gateway: config.GatewayConfig{
+			BufferedFirstMeaningfulTimeout: 1,
+			BufferedTotalTimeout:           2,
+		}},
+	}
+	account := &Account{
+		ID:          1,
+		Name:        "openai-oauth",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token":       "oauth-token",
+			"chatgpt_account_id": "chatgpt-acc",
+		},
+	}
+
+	started := time.Now()
+	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "gpt-5.1")
+	require.Less(t, time.Since(started), 1500*time.Millisecond, "metadata-only streams must fail on first-meaningful timeout, not total timeout")
+	require.Nil(t, result)
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.True(t, errors.As(err, &failoverErr), "created-only stream should return failover, got %T: %v", err, err)
+	require.True(t, failoverErr.BreakSticky)
+	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.Equal(t, "first_meaningful_timeout", failoverErr.Reason)
+	require.Empty(t, rec.Body.String())
+}
+
 func TestForwardAsAnthropic_BufferedTotalTimeoutWithContentSynthesizesResponse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -681,6 +737,46 @@ func TestForwardAsAnthropic_BufferedTotalTimeoutWithContentSynthesizesResponse(t
 	require.NotNil(t, result)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Contains(t, rec.Body.String(), "partial answer")
+}
+
+func TestForwardAsAnthropic_BufferedTerminalEmptyOutputReturnsFailover(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"gpt-5.4","max_tokens":16,"messages":[{"role":"user","content":"hello"}],"stream":false}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstreamBody := []byte(`data: {"type":"response.completed","response":{"id":"resp_empty","object":"response","model":"gpt-5.4","status":"completed","output":[],"usage":{"input_tokens":100,"output_tokens":0,"total_tokens":100,"input_tokens_details":{"cached_tokens":99}}}}` + "\n\n")
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_buffered_empty_output"}},
+		Body:       io.NopCloser(bytes.NewReader(upstreamBody)),
+	}}
+
+	svc := &OpenAIGatewayService{httpUpstream: upstream}
+	account := &Account{
+		ID:          1,
+		Name:        "openai-oauth",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token":       "oauth-token",
+			"chatgpt_account_id": "chatgpt-acc",
+		},
+	}
+
+	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "gpt-5.1")
+	require.Nil(t, result)
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.True(t, errors.As(err, &failoverErr), "empty terminal output should return failover, got %T: %v", err, err)
+	require.True(t, failoverErr.BreakSticky)
+	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.Equal(t, "buffered_empty_output", failoverErr.Reason)
+	require.Empty(t, rec.Body.String())
 }
 
 func TestForwardAsAnthropic_DoneSentinelWithoutTerminalReturnsError(t *testing.T) {

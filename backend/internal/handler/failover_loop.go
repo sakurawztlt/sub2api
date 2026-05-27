@@ -69,6 +69,7 @@ var gatewayHandlerPerReasonCap = map[string]int{
 	"buffered_total_timeout":       1,
 	"buffered_stream_read_error":   1,
 	"buffered_empty_stream":        1,
+	"buffered_empty_output":        1,
 }
 
 // NewFailoverState 创建 failover 状态
