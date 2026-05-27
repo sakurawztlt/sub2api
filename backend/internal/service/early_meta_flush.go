@@ -2,6 +2,8 @@ package service
 
 import (
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 )
@@ -39,12 +41,15 @@ import (
 //   - X-GCR-Early-Flush: 1 header (gcr-side opt-in marker)
 //   - tools_count >= 20 (cctest / large agent shapes)
 //   - body > 64KB (large prompts / multimodal)
+//   - X-GCR-Estimated-Tokens >= 8K (medium academic/code-writing prompts that
+//     can spend 60s+ in hidden reasoning even when the raw JSON body is <64KB)
 //
 // Stream=true is enforced by the caller (only stream paths reach this
 // timer). Default disabled if EarlyMetaFlushAfterMs==0.
 
 const (
-	earlyFlushBodyThreshold = 64 * 1024
+	earlyFlushBodyThreshold            = 64 * 1024
+	earlyFlushEstimatedTokensThreshold = 8000
 )
 
 // isEarlyFlushEligible reports whether this request's shape qualifies
@@ -56,9 +61,17 @@ const (
 //     probe-overlay matches + tools_count>=20 requests so sub2api doesn't
 //     need to re-parse the body)
 //   - inbound body > 64KB (catches large-prompt / multimodal that gcr didn't mark)
+//   - X-GCR-Estimated-Tokens >= 8K (captures token-dense prompts below 64KB)
 func isEarlyFlushEligible(httpReq *http.Request, bodyLen int) bool {
-	if httpReq != nil && httpReq.Header.Get("X-GCR-Early-Flush") == "1" {
-		return true
+	if httpReq != nil {
+		if httpReq.Header.Get("X-GCR-Early-Flush") == "1" {
+			return true
+		}
+		if estimated := strings.TrimSpace(httpReq.Header.Get("X-GCR-Estimated-Tokens")); estimated != "" {
+			if tokens, err := strconv.Atoi(estimated); err == nil && tokens >= earlyFlushEstimatedTokensThreshold {
+				return true
+			}
+		}
 	}
 	if bodyLen > earlyFlushBodyThreshold {
 		return true

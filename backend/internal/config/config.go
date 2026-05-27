@@ -715,6 +715,7 @@ type GatewayConfig struct {
 	//       * gcr 内部 header `X-GCR-Early-Flush: 1`
 	//       * tools_count >= 20
 	//       * 请求 body > 64KB
+	//       * gcr 估算输入 token >= 8K
 	//
 	// 0 = 全局禁用 (回到 fu69 行为, 必须等 meaningful). 默认 2000ms.
 	// 推荐 1500-3000ms; 建议留 < FirstMeaningfulEventTimeoutSeconds 至少

@@ -32,6 +32,30 @@ func TestIsEarlyFlushEligible_LargeBody_Accepted(t *testing.T) {
 	}
 }
 
+func TestIsEarlyFlushEligible_EstimatedTokensAccepted(t *testing.T) {
+	req, _ := http.NewRequest(http.MethodPost, "/v1/messages", nil)
+	req.Header.Set("X-GCR-Estimated-Tokens", "10609")
+	if !isEarlyFlushEligible(req, 42*1024) {
+		t.Errorf("10.6K estimated tokens must be eligible even when body is below 64KB")
+	}
+}
+
+func TestIsEarlyFlushEligible_EstimatedTokensBelowThresholdRejected(t *testing.T) {
+	req, _ := http.NewRequest(http.MethodPost, "/v1/messages", nil)
+	req.Header.Set("X-GCR-Estimated-Tokens", "7999")
+	if isEarlyFlushEligible(req, 42*1024) {
+		t.Errorf("estimated tokens below threshold must not be eligible by itself")
+	}
+}
+
+func TestIsEarlyFlushEligible_EstimatedTokensMalformedIgnored(t *testing.T) {
+	req, _ := http.NewRequest(http.MethodPost, "/v1/messages", nil)
+	req.Header.Set("X-GCR-Estimated-Tokens", "unknown")
+	if isEarlyFlushEligible(req, 42*1024) {
+		t.Errorf("malformed estimated tokens header must be ignored")
+	}
+}
+
 func TestIsEarlyFlushEligible_AtBoundary(t *testing.T) {
 	req, _ := http.NewRequest(http.MethodPost, "/v1/messages", nil)
 	if isEarlyFlushEligible(req, earlyFlushBodyThreshold) {
