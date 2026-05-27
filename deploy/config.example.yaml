@@ -134,6 +134,11 @@ security:
     # Allow skipping TLS verification for proxy probe (debug only)
     # 允许代理探测时跳过 TLS 证书验证（仅用于调试）
     insecure_skip_verify: false
+  # Trust forwarded headers (CF-Connecting-IP / X-Real-IP / X-Forwarded-For)
+  # when applying API key IP whitelist/blacklist. Keep disabled unless the
+  # service is behind a trusted reverse proxy that strips spoofed headers.
+  # API Key IP 白/黑名单是否信任反代转发的真实客户端 IP。只有在可信反代会清理伪造头时才开启。
+  trust_forwarded_ip_for_api_key_acl: false
   proxy_fallback:
     # Allow auxiliary services (update check, pricing data) to fallback to direct
     # connection when proxy initialization fails. Does NOT affect AI gateway connections.
