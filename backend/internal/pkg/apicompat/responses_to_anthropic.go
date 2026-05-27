@@ -34,10 +34,24 @@ func generateAnthropicMessageID() string {
 // Non-streaming: ResponsesResponse → AnthropicResponse
 // ---------------------------------------------------------------------------
 
+// AnthropicUsageEstimationOptions carries request-side hints that are not
+// present in OpenAI's terminal usage payload. In particular, OpenAI input usage
+// includes relay-injected style/context text, while Claude cache write
+// eligibility is judged against the customer-visible cacheable prompt.
+type AnthropicUsageEstimationOptions struct {
+	ExternalInputTokens int
+}
+
 // ResponsesToAnthropic converts a Responses API response directly into an
 // Anthropic Messages response. Reasoning output items are mapped to thinking
 // blocks; function_call items become tool_use blocks.
 func ResponsesToAnthropic(resp *ResponsesResponse, model string) *AnthropicResponse {
+	return ResponsesToAnthropicWithUsageOptions(resp, model, AnthropicUsageEstimationOptions{})
+}
+
+// ResponsesToAnthropicWithUsageOptions is ResponsesToAnthropic plus
+// request-side usage hints used by the Claude-compatible cache ledger.
+func ResponsesToAnthropicWithUsageOptions(resp *ResponsesResponse, model string, opts AnthropicUsageEstimationOptions) *AnthropicResponse {
 	out := &AnthropicResponse{
 		ID:    generateAnthropicMessageID(),
 		Type:  "message",
@@ -123,7 +137,7 @@ func ResponsesToAnthropic(resp *ResponsesResponse, model string) *AnthropicRespo
 		if resp.Usage.OutputTokensDetails != nil {
 			reasoning = resp.Usage.OutputTokensDetails.ReasoningTokens
 		}
-		input, creation, read := estimateAnthropicCacheUsage(resp.Usage.InputTokens, cached)
+		input, creation, read := estimateAnthropicCacheUsageForModel(resp.Usage.InputTokens, cached, model, opts)
 		out.Usage = AnthropicUsage{
 			InputTokens:              input,
 			OutputTokens:             visibleOutputTokens(resp.Usage.OutputTokens, reasoning),
@@ -160,12 +174,13 @@ func visibleOutputTokens(total, reasoning int) int {
 	return v
 }
 
-// openaiPrefixCacheMinTokens is the minimum input-token size at which OpenAI's
-// Responses API starts writing entries into its prefix cache. Below this, no
-// cache slot is allocated and the "new" portion of input never becomes a
-// future cache_read hit. Attributing short-request input to cache_creation
-// would over-count both the field and (via NewAPI's 1.25x multiplier) billing.
-const openaiPrefixCacheMinTokens = 1024
+// anthropicDefaultCacheMinTokens is the smallest Claude cacheable prefix among
+// the active models we mimic. Some models use a larger floor.
+const anthropicDefaultCacheMinTokens = 1024
+
+// Backwards-compatible name for older unit tests and comments. The actual
+// Claude-compatible path may use a higher model-specific threshold.
+const openaiPrefixCacheMinTokens = anthropicDefaultCacheMinTokens
 
 // estimateAnthropicCacheUsage maps OpenAI Responses API usage to the three
 // disjoint Anthropic counters (input_tokens, cache_creation, cache_read).
@@ -189,6 +204,10 @@ const openaiPrefixCacheMinTokens = 1024
 //   - cached > total (rare upstream accounting drift) clamps read to total,
 //     input/creation to 0
 func estimateAnthropicCacheUsage(total, cached int) (input, creation, read int) {
+	return estimateAnthropicCacheUsageForModel(total, cached, "", AnthropicUsageEstimationOptions{})
+}
+
+func estimateAnthropicCacheUsageForModel(total, cached int, model string, opts AnthropicUsageEstimationOptions) (input, creation, read int) {
 	if total <= 0 {
 		return 0, 0, 0
 	}
@@ -202,10 +221,28 @@ func estimateAnthropicCacheUsage(total, cached int) (input, creation, read int) 
 		return 0, 0, total
 	}
 	newPortion := total - cached
-	if newPortion >= openaiPrefixCacheMinTokens {
+
+	eligibleTokens := newPortion
+	if opts.ExternalInputTokens > 0 {
+		eligibleTokens = opts.ExternalInputTokens
+	}
+	if eligibleTokens >= anthropicCacheMinTokensForModel(model) {
 		return 0, newPortion, cached
 	}
 	return newPortion, 0, cached
+}
+
+func anthropicCacheMinTokensForModel(model string) int {
+	m := strings.ToLower(strings.TrimSpace(model))
+	switch {
+	case strings.Contains(m, "opus-4-7"),
+		strings.Contains(m, "opus-4-6"),
+		strings.Contains(m, "opus-4-5"),
+		strings.Contains(m, "haiku-4-5"):
+		return 4096
+	default:
+		return anthropicDefaultCacheMinTokens
+	}
 }
 
 func responsesStatusToAnthropicStopReason(status string, details *ResponsesIncompleteDetails, blocks []AnthropicContentBlock) string {
@@ -296,6 +333,7 @@ type ResponsesEventToAnthropicState struct {
 	RawCachedInputTokens int
 	RawOutputTokens      int
 	RawReasoningTokens   int
+	ExternalInputTokens  int
 
 	ResponseID string
 	Model      string
@@ -329,6 +367,17 @@ type ResponsesEventToAnthropicState struct {
 	// web_search_call output_item.done with status=completed bumps the
 	// counter, message_delta forwards it on the way out.
 	WebSearchRequestCount int
+}
+
+// SetExternalInputTokenEstimate records the customer-visible prompt estimate
+// from gcr's X-GCR-Estimated-Tokens header. It is used only for deciding
+// whether the request is large enough to report a Claude-style cache write.
+func (s *ResponsesEventToAnthropicState) SetExternalInputTokenEstimate(tokens int) {
+	if tokens <= 0 {
+		s.ExternalInputTokens = 0
+		return
+	}
+	s.ExternalInputTokens = tokens
 }
 
 // SetPreflightInputEstimate — 2026-05-12 cctest profile 项 5. caller 在 stream
@@ -410,7 +459,12 @@ func FinalizeResponsesAnthropicStream(state *ResponsesEventToAnthropicState) []A
 	var events []AnthropicStreamEvent
 	events = append(events, closeCurrentBlock(state)...)
 
-	input, creation, read := estimateAnthropicCacheUsage(state.RawTotalInputTokens, state.RawCachedInputTokens)
+	input, creation, read := estimateAnthropicCacheUsageForModel(
+		state.RawTotalInputTokens,
+		state.RawCachedInputTokens,
+		state.Model,
+		AnthropicUsageEstimationOptions{ExternalInputTokens: state.ExternalInputTokens},
+	)
 	outputTokens := visibleOutputTokens(state.RawOutputTokens, state.RawReasoningTokens)
 
 	// Detect "no real output" — both no visible output tokens AND no
@@ -908,7 +962,12 @@ func resToAnthHandleCompleted(evt *ResponsesStreamEvent, state *ResponsesEventTo
 		}
 	}
 
-	input, creation, read := estimateAnthropicCacheUsage(state.RawTotalInputTokens, state.RawCachedInputTokens)
+	input, creation, read := estimateAnthropicCacheUsageForModel(
+		state.RawTotalInputTokens,
+		state.RawCachedInputTokens,
+		state.Model,
+		AnthropicUsageEstimationOptions{ExternalInputTokens: state.ExternalInputTokens},
+	)
 	outputTokens := visibleOutputTokens(state.RawOutputTokens, state.RawReasoningTokens)
 
 	usage := &AnthropicUsage{

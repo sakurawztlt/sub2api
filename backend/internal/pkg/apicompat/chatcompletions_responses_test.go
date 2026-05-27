@@ -1359,6 +1359,7 @@ func TestBufferedResponseAccumulator_TextOnly(t *testing.T) {
 	acc.ProcessEvent(&ResponsesStreamEvent{Type: "response.output_text.delta", Delta: ", world!"})
 
 	assert.True(t, acc.HasContent())
+	assert.Greater(t, acc.EstimatedOutputTokens(), 0)
 
 	output := acc.BuildOutput()
 	require.Len(t, output, 1)

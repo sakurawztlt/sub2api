@@ -692,6 +692,11 @@ func TestEffectiveOpenAICompatBufferedTotalTimeoutSeconds(t *testing.T) {
 	require.Equal(t, 420, effectiveOpenAICompatBufferedTotalTimeoutSeconds(420, 128*1024))
 }
 
+func TestEffectiveOpenAICompatBufferedPostContentIdleSeconds(t *testing.T) {
+	require.Equal(t, 0, effectiveOpenAICompatBufferedPostContentIdleSeconds(8*1024))
+	require.Equal(t, 45, effectiveOpenAICompatBufferedPostContentIdleSeconds(128*1024))
+}
+
 func TestForwardAsAnthropic_BufferedCreatedOnlyTriggersFirstMeaningfulTimeout(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -811,6 +816,7 @@ func TestForwardAsAnthropic_BufferedTotalTimeoutWithContentSynthesizesResponse(t
 	body := []byte(`{"model":"gpt-5.4","max_tokens":16,"messages":[{"role":"user","content":"hello"}],"stream":false}`)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("X-GCR-Estimated-Tokens", "12")
 
 	upstreamBody := []byte(strings.Join([]string{
 		`data: {"type":"response.output_text.delta","delta":"partial answer"}`,
@@ -847,7 +853,10 @@ func TestForwardAsAnthropic_BufferedTotalTimeoutWithContentSynthesizesResponse(t
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, 12, result.Usage.InputTokens)
+	require.Greater(t, result.Usage.OutputTokens, 0)
 	require.Contains(t, rec.Body.String(), "partial answer")
+	require.Contains(t, rec.Body.String(), `"input_tokens":12`)
 }
 
 func TestForwardAsAnthropic_BufferedTerminalEmptyOutputReturnsFailover(t *testing.T) {

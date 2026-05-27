@@ -175,6 +175,65 @@ func TestEstimateAnthropicCacheUsage(t *testing.T) {
 	}
 }
 
+func TestEstimateAnthropicCacheUsageForModel_UsesClaudeCacheFloors(t *testing.T) {
+	tests := []struct {
+		name         string
+		model        string
+		total        int
+		external     int
+		wantInput    int
+		wantCreation int
+	}{
+		{
+			name:         "sonnet_4_6_allows_1024_floor",
+			model:        "claude-sonnet-4-6",
+			total:        1200,
+			external:     1200,
+			wantInput:    0,
+			wantCreation: 1200,
+		},
+		{
+			name:         "opus_4_6_requires_4096_floor",
+			model:        "claude-opus-4-6",
+			total:        3000,
+			external:     3000,
+			wantInput:    3000,
+			wantCreation: 0,
+		},
+		{
+			name:         "short_external_prompt_suppresses_injected_prompt_cache_write",
+			model:        "claude-haiku-4-5-20251001",
+			total:        3436,
+			external:     14,
+			wantInput:    3436,
+			wantCreation: 0,
+		},
+		{
+			name:         "large_external_prompt_keeps_cache_write",
+			model:        "claude-opus-4-7",
+			total:        20000,
+			external:     9000,
+			wantInput:    0,
+			wantCreation: 20000,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input, creation, _ := estimateAnthropicCacheUsageForModel(
+				tt.total,
+				0,
+				tt.model,
+				AnthropicUsageEstimationOptions{ExternalInputTokens: tt.external},
+			)
+			if input != tt.wantInput || creation != tt.wantCreation {
+				t.Fatalf("got input=%d creation=%d, want input=%d creation=%d",
+					input, creation, tt.wantInput, tt.wantCreation)
+			}
+		})
+	}
+}
+
 // TestVisibleOutputTokens covers the pure helper that subtracts OpenAI's
 // hidden chain-of-thought (reasoning_tokens) from the total output_tokens
 // counter to match what the Anthropic client actually sees in the response.
@@ -652,5 +711,33 @@ func TestStreamingCacheEstimation_Finalize(t *testing.T) {
 	}
 	if deltaEvent.Usage.CacheReadInputTokens != 1000 {
 		t.Errorf("finalize CacheReadInputTokens = %d, want 1000", deltaEvent.Usage.CacheReadInputTokens)
+	}
+}
+
+func TestStreamingCacheEstimation_ExternalShortPromptSuppressesCacheCreation(t *testing.T) {
+	state := NewResponsesEventToAnthropicState()
+	state.MessageStartSent = true
+	state.Model = "claude-haiku-4-5-20251001"
+	state.SetExternalInputTokenEstimate(14)
+	state.RawTotalInputTokens = 3436
+	state.RawOutputTokens = 20
+	state.ContentBlockIndex = 1
+
+	events := FinalizeResponsesAnthropicStream(state)
+	var deltaEvent *AnthropicStreamEvent
+	for i := range events {
+		if events[i].Type == "message_delta" {
+			deltaEvent = &events[i]
+			break
+		}
+	}
+	if deltaEvent == nil || deltaEvent.Usage == nil {
+		t.Fatal("Finalize did not emit message_delta with usage")
+	}
+	if deltaEvent.Usage.CacheCreationInputTokens != 0 {
+		t.Fatalf("CacheCreationInputTokens = %d, want 0", deltaEvent.Usage.CacheCreationInputTokens)
+	}
+	if deltaEvent.Usage.InputTokens != 3436 {
+		t.Fatalf("InputTokens = %d, want 3436", deltaEvent.Usage.InputTokens)
 	}
 }

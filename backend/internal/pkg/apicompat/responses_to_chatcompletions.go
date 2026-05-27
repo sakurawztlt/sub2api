@@ -523,6 +523,22 @@ func (a *BufferedResponseAccumulator) HasContent() bool {
 	return a.text.Len() > 0 || len(a.funcCalls) > 0 || a.reasoning.Len() > 0
 }
 
+// EstimatedOutputTokens returns a conservative token estimate for accumulated
+// partial output when upstream never sends a terminal usage payload.
+func (a *BufferedResponseAccumulator) EstimatedOutputTokens() int {
+	if a == nil {
+		return 0
+	}
+	n := a.text.Len() + a.reasoning.Len()
+	for i := range a.funcCalls {
+		n += len(a.funcCalls[i].CallID) + len(a.funcCalls[i].Name) + a.funcCalls[i].Args.Len()
+	}
+	if n <= 0 {
+		return 0
+	}
+	return (n + 3) / 4
+}
+
 // BuildOutput constructs a []ResponsesOutput from the accumulated delta
 // content. The order matches what ResponsesToChatCompletions expects:
 // reasoning → message → function_calls.

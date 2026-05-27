@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -27,6 +28,7 @@ import (
 var (
 	errOpenAICompatBufferedTotalTimeout           = errors.New("buffered total timeout")
 	errOpenAICompatBufferedFirstMeaningfulTimeout = errors.New("buffered first meaningful timeout")
+	errOpenAICompatBufferedPostContentIdleTimeout = errors.New("buffered post-content idle timeout")
 )
 
 // ForwardAsAnthropic accepts an Anthropic Messages request body, converts it
@@ -582,10 +584,13 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	inboundBodyLen int,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
+	usageOpts := apicompat.AnthropicUsageEstimationOptions{
+		ExternalInputTokens: positiveIntHeader(c.Request, "X-GCR-Estimated-Tokens"),
+	}
 
 	finalResponse, usage, acc, err := s.readOpenAICompatBufferedTerminal(c.Request.Context(), resp, "openai messages buffered", requestID, inboundBodyLen)
 	if err != nil {
-		if errors.Is(err, errOpenAICompatBufferedTotalTimeout) {
+		if errors.Is(err, errOpenAICompatBufferedTotalTimeout) || errors.Is(err, errOpenAICompatBufferedPostContentIdleTimeout) {
 			if acc != nil && acc.HasContent() {
 				finalResponse = &apicompat.ResponsesResponse{
 					Status: "incomplete",
@@ -593,6 +598,7 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 				}
 				logger.L().Warn("openai messages buffered: synthesized terminal from accumulator (buffered total timeout)",
 					zap.String("request_id", requestID),
+					zap.Error(err),
 				)
 			} else if !c.Writer.Written() {
 				return nil, &UpstreamFailoverError{
@@ -666,6 +672,16 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	// When the terminal event has an empty output array, reconstruct from
 	// accumulated delta events so the client receives the full content.
 	acc.SupplementResponseOutput(finalResponse)
+	if finalResponse.Usage == nil {
+		finalResponse.Usage = synthesizeResponsesUsageForBufferedFallback(c.Request, inboundBodyLen, acc)
+		usage = copyOpenAIUsageFromResponsesUsage(finalResponse.Usage)
+		logger.L().Warn("openai messages buffered: synthesized usage from accumulator",
+			zap.String("request_id", requestID),
+			zap.Int("input_tokens", finalResponse.Usage.InputTokens),
+			zap.Int("output_tokens", finalResponse.Usage.OutputTokens),
+			zap.Int("gcr_estimated_tokens", usageOpts.ExternalInputTokens),
+		)
+	}
 	if !responsesResponseHasVisibleOutput(finalResponse) {
 		logger.L().Warn("openai messages buffered: terminal response without visible output",
 			zap.String("request_id", requestID),
@@ -681,7 +697,7 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 		return nil, fmt.Errorf("upstream terminal response had no visible output")
 	}
 
-	anthropicResp := apicompat.ResponsesToAnthropic(finalResponse, originalModel)
+	anthropicResp := apicompat.ResponsesToAnthropicWithUsageOptions(finalResponse, originalModel, usageOpts)
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -713,6 +729,9 @@ func (s *OpenAIGatewayService) handleAnthropicJSONResponse(
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
+	usageOpts := apicompat.AnthropicUsageEstimationOptions{
+		ExternalInputTokens: positiveIntHeader(c.Request, "X-GCR-Estimated-Tokens"),
+	}
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -755,7 +774,7 @@ func (s *OpenAIGatewayService) handleAnthropicJSONResponse(
 	}
 
 	usage := copyOpenAIUsageFromResponsesUsage(finalResponse.Usage)
-	anthropicResp := apicompat.ResponsesToAnthropic(&finalResponse, originalModel)
+	anthropicResp := apicompat.ResponsesToAnthropicWithUsageOptions(&finalResponse, originalModel, usageOpts)
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -777,6 +796,7 @@ func (s *OpenAIGatewayService) handleAnthropicJSONResponse(
 const (
 	openAICompatLargeBufferedBodyBytes           = 64 * 1024
 	openAICompatLargeBufferedTotalTimeoutSeconds = 360
+	openAICompatLargeBufferedPostContentIdleSec  = 45
 )
 
 func effectiveOpenAICompatBufferedTotalTimeoutSeconds(configuredSeconds int, inboundBodyLen int) int {
@@ -788,6 +808,52 @@ func effectiveOpenAICompatBufferedTotalTimeoutSeconds(configuredSeconds int, inb
 		return openAICompatLargeBufferedTotalTimeoutSeconds
 	}
 	return configuredSeconds
+}
+
+func effectiveOpenAICompatBufferedPostContentIdleSeconds(inboundBodyLen int) int {
+	if inboundBodyLen >= openAICompatLargeBufferedBodyBytes {
+		return openAICompatLargeBufferedPostContentIdleSec
+	}
+	return 0
+}
+
+func positiveIntHeader(req *http.Request, name string) int {
+	if req == nil {
+		return 0
+	}
+	raw := strings.TrimSpace(req.Header.Get(name))
+	if raw == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
+func synthesizeResponsesUsageForBufferedFallback(req *http.Request, inboundBodyLen int, acc *apicompat.BufferedResponseAccumulator) *apicompat.ResponsesUsage {
+	inputTokens := positiveIntHeader(req, "X-GCR-Estimated-Tokens")
+	if inputTokens <= 0 && inboundBodyLen > 0 {
+		inputTokens = (inboundBodyLen + 3) / 4
+	}
+	if inputTokens <= 0 {
+		inputTokens = 1
+	}
+
+	outputTokens := 0
+	if acc != nil {
+		outputTokens = acc.EstimatedOutputTokens()
+	}
+	if outputTokens <= 0 && acc != nil && acc.HasContent() {
+		outputTokens = 1
+	}
+
+	return &apicompat.ResponsesUsage{
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		TotalTokens:  inputTokens + outputTokens,
+	}
 }
 
 func isOpenAICompatResponsesTerminalEvent(eventType string) bool {
@@ -967,6 +1033,8 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 		firstMeaningTimer *time.Timer
 		firstMeaningCh    <-chan time.Time
 		firstMeaningSeen  bool
+		postContentTimer  *time.Timer
+		postContentCh     <-chan time.Time
 	)
 	bufferedTotalTimeoutSec := 0
 	if s.cfg != nil {
@@ -992,6 +1060,30 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 		firstMeaningCh = firstMeaningTimer.C
 		defer firstMeaningTimer.Stop()
 	}
+	postContentIdleSec := effectiveOpenAICompatBufferedPostContentIdleSeconds(inboundBodyLen)
+	resetPostContentIdle := func() {
+		if postContentIdleSec <= 0 || acc == nil || !acc.HasContent() {
+			return
+		}
+		d := time.Duration(postContentIdleSec) * time.Second
+		if postContentTimer == nil {
+			postContentTimer = time.NewTimer(d)
+			postContentCh = postContentTimer.C
+			return
+		}
+		if !postContentTimer.Stop() {
+			select {
+			case <-postContentTimer.C:
+			default:
+			}
+		}
+		postContentTimer.Reset(d)
+	}
+	defer func() {
+		if postContentTimer != nil {
+			postContentTimer.Stop()
+		}
+	}()
 
 	type scanEvent struct {
 		line string
@@ -1045,6 +1137,9 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 				default:
 				}
 			}
+		}
+		if isMeaningfulOpenAICompatBufferedEvent(&event, acc) {
+			resetPostContentIdle()
 		}
 		if isOpenAICompatResponsesTerminalEvent(event.Type) && event.Response != nil {
 			if event.Usage != nil {
@@ -1123,6 +1218,9 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 					}
 				}
 			}
+			if isMeaningfulOpenAICompatBufferedEvent(&event, acc) {
+				resetPostContentIdle()
+			}
 
 			if isOpenAICompatResponsesTerminalEvent(event.Type) && event.Response != nil {
 				if event.Usage != nil {
@@ -1153,6 +1251,15 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 				zap.Int("inbound_body_len", inboundBodyLen),
 			)
 			return nil, usage, acc, errOpenAICompatBufferedTotalTimeout
+
+		case <-postContentCh:
+			_ = resp.Body.Close()
+			logger.L().Warn(logPrefix+": buffered post-content idle timeout",
+				zap.String("request_id", requestID),
+				zap.Int("seconds", postContentIdleSec),
+				zap.Int("inbound_body_len", inboundBodyLen),
+			)
+			return nil, usage, acc, errOpenAICompatBufferedPostContentIdleTimeout
 
 		case <-firstMeaningCh:
 			if firstMeaningSeen {
@@ -1207,6 +1314,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 
 	state := apicompat.NewResponsesEventToAnthropicState()
 	state.Model = originalModel
+	state.SetExternalInputTokenEstimate(positiveIntHeader(c.Request, "X-GCR-Estimated-Tokens"))
 	// 2026-05-12 cctest profile 项 5 (codex audit): message_start.usage.input_tokens
 	// 不能是 0, 用客户请求 body 长度粗估 token (bytes/4). 真 Claude 这里报
 	// 5K-11K (cctest system prompt 估算) 不报 0.
