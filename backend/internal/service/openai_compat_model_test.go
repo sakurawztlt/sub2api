@@ -685,56 +685,6 @@ func TestForwardAsAnthropic_APIKeyNonStreamUsesResponsesJSON(t *testing.T) {
 	require.Contains(t, rec.Body.String(), `"type":"message"`)
 }
 
-func TestForwardAsAnthropic_OAuthNonStreamUsesResponsesJSON(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	body := []byte(`{"model":"claude-opus-4-7","max_tokens":16,"messages":[{"role":"user","content":"hello"}],"stream":false}`)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
-	c.Request.Header.Set("Content-Type", "application/json")
-
-	upstreamBody := []byte(`{
-		"id":"resp_oauth_json",
-		"object":"response",
-		"model":"gpt-5.4",
-		"status":"completed",
-		"output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"oauth json answer"}]}],
-		"usage":{"input_tokens":21,"output_tokens":4,"total_tokens":25,"input_tokens_details":{"cached_tokens":5}}
-	}`)
-	upstream := &httpUpstreamRecorder{resp: &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid_oauth_json_nonstream"}},
-		Body:       io.NopCloser(bytes.NewReader(upstreamBody)),
-	}}
-
-	svc := &OpenAIGatewayService{
-		httpUpstream: upstream,
-		cfg:          &config.Config{},
-	}
-	account := &Account{
-		ID:          172,
-		Name:        "openai-oauth",
-		Platform:    PlatformOpenAI,
-		Type:        AccountTypeOAuth,
-		Concurrency: 1,
-		Credentials: map[string]any{
-			"access_token":       "oauth-token",
-			"chatgpt_account_id": "chatgpt-acc",
-		},
-	}
-
-	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "gpt-5.4")
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.Equal(t, 21, result.Usage.InputTokens)
-	require.Equal(t, 4, result.Usage.OutputTokens)
-	require.Equal(t, 5, result.Usage.CacheReadInputTokens)
-	require.False(t, gjson.GetBytes(upstream.lastBody, "stream").Bool(), "OAuth non-stream Anthropic bridge should not force upstream SSE")
-	require.Equal(t, "application/json", upstream.lastReq.Header.Get("accept"))
-	require.Contains(t, rec.Body.String(), `"text":"oauth json answer"`)
-}
-
 func TestForwardAsAnthropic_BufferedCreatedOnlyTriggersFirstMeaningfulTimeout(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

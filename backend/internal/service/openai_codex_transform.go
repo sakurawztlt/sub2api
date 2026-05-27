@@ -76,7 +76,6 @@ type codexOAuthTransformOptions struct {
 	StoreEnabled            bool
 	SkipDefaultInstructions bool
 	PreserveToolCallIDs     bool
-	PreserveStream          bool
 }
 
 type codexTransformResult struct {
@@ -208,12 +207,7 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 				result.Modified = true
 			}
 		}
-		if !opts.PreserveStream {
-			if v, ok := reqBody["stream"].(bool); !ok || !v {
-				reqBody["stream"] = true
-				result.Modified = true
-			}
-		} else if _, ok := reqBody["stream"].(bool); !ok {
+		if v, ok := reqBody["stream"].(bool); !ok || !v {
 			reqBody["stream"] = true
 			result.Modified = true
 		}
