@@ -636,6 +636,55 @@ func TestForwardAsAnthropic_BufferedTotalTimeoutNoContentReturnsFailover(t *test
 	require.Empty(t, rec.Body.String())
 }
 
+func TestForwardAsAnthropic_APIKeyNonStreamUsesResponsesJSON(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"gpt-5.4","max_tokens":16,"messages":[{"role":"user","content":"hello"}],"stream":false}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstreamBody := []byte(`{
+		"id":"resp_json",
+		"object":"response",
+		"model":"gpt-5.4",
+		"status":"completed",
+		"output":[{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"json answer"}]}],
+		"usage":{"input_tokens":12,"output_tokens":3,"total_tokens":15,"input_tokens_details":{"cached_tokens":4}}
+	}`)
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid_json_nonstream"}},
+		Body:       io.NopCloser(bytes.NewReader(upstreamBody)),
+	}}
+
+	svc := &OpenAIGatewayService{
+		httpUpstream: upstream,
+		cfg:          &config.Config{},
+	}
+	account := &Account{
+		ID:          1,
+		Name:        "openai-apikey",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key": "sk-test",
+		},
+	}
+
+	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "gpt-5.4")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, 12, result.Usage.InputTokens)
+	require.Equal(t, 3, result.Usage.OutputTokens)
+	require.Equal(t, 4, result.Usage.CacheReadInputTokens)
+	require.False(t, gjson.GetBytes(upstream.lastBody, "stream").Bool(), "API-key non-stream Anthropic bridge should not force upstream SSE")
+	require.Contains(t, rec.Body.String(), `"text":"json answer"`)
+	require.Contains(t, rec.Body.String(), `"type":"message"`)
+}
+
 func TestForwardAsAnthropic_BufferedCreatedOnlyTriggersFirstMeaningfulTimeout(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

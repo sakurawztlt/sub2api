@@ -687,7 +687,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	perReasonSwitchCap := map[string]int{
 		"first_meaningful_timeout":     1,
 		"stream_data_interval_timeout": 1, // 5/10 R38: data interval 同样限 1 次防烧账号
-		"buffered_total_timeout":       1, // 5/25 v2: buffered 非流总超时可换一次账号, 避免直接 502
+		"buffered_total_timeout":       0, // 5/27 v0.5: 100s buffered 总超时不再换号重试, 避免 202/405s 放大
 		"buffered_empty_output":        1, // terminal 200 但无可见输出, 换号一次后放弃
 	}
 	// 2026-05-15 codex round 11ai: large-context fail-fast. 大请求

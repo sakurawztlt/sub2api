@@ -126,10 +126,12 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		return nil, fmt.Errorf("convert anthropic to responses: %w", err)
 	}
 
-	// Upstream always uses streaming (upstream may not support sync mode).
-	// The client's original preference determines the response format.
-	responsesReq.Stream = true
-	isStream := true
+	// API-key Responses supports non-streaming JSON. Preserve the client's
+	// stream=false preference there so long buffered non-stream requests do not
+	// sit behind SSE terminal-event timers. OAuth/Codex internal bridge remains
+	// streaming because that path relies on SSE-only continuation metadata.
+	responsesReq.Stream = clientStream || account.Type == AccountTypeOAuth
+	isStream := responsesReq.Stream
 
 	// 3b. Handle BetaFastMode → service_tier: "priority"
 	if containsBetaToken(c.GetHeader("anthropic-beta"), claude.BetaFastMode) {
@@ -472,8 +474,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		s.bindOpenAICompatSessionTurnState(ctx, c, account, promptCacheKey, upstreamTurnState)
 	}
 
-	// 9. Handle normal response
-	// Upstream is always streaming; choose response format based on client preference.
+	// 9. Handle normal response.
 	var result *OpenAIForwardResult
 	var handleErr error
 	// codex round 11al: 装入 forensics meta 一次性传给 streaming/buffered
@@ -495,8 +496,11 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	streamMeta.UpstreamTurnStateReturned = upstreamTurnState != ""
 	if clientStream {
 		result, handleErr = s.handleAnthropicStreamingResponse(resp, c, originalModel, billingModel, upstreamModel, startTime, len(body), streamMeta)
+	} else if !isStream && !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+		result, handleErr = s.handleAnthropicJSONResponse(resp, c, originalModel, billingModel, upstreamModel, startTime)
 	} else {
-		// Client wants JSON: buffer the streaming response and assemble a JSON reply.
+		// Client wants JSON but upstream is streaming or ignored stream=false:
+		// buffer the streaming response and assemble a JSON reply.
 		result, handleErr = s.handleAnthropicBufferedStreamingResponse(resp, c, originalModel, billingModel, upstreamModel, startTime)
 	}
 
@@ -690,6 +694,76 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	return &OpenAIForwardResult{
 		RequestID:     requestID,
 		ResponseID:    responseID,
+		Usage:         usage,
+		Model:         originalModel,
+		BillingModel:  billingModel,
+		UpstreamModel: upstreamModel,
+		Stream:        false,
+		Duration:      time.Since(startTime),
+	}, nil
+}
+
+func (s *OpenAIGatewayService) handleAnthropicJSONResponse(
+	resp *http.Response,
+	c *gin.Context,
+	originalModel string,
+	billingModel string,
+	upstreamModel string,
+	startTime time.Time,
+) (*OpenAIForwardResult, error) {
+	requestID := resp.Header.Get("x-request-id")
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		if !c.Writer.Written() && IsUpstreamNetworkError(err) {
+			return nil, &UpstreamFailoverError{
+				StatusCode:  http.StatusBadGateway,
+				BreakSticky: true,
+				Reason:      "json_body_read_error",
+			}
+		}
+		return nil, fmt.Errorf("read responses json body: %w", err)
+	}
+
+	var finalResponse apicompat.ResponsesResponse
+	if err := json.Unmarshal(respBody, &finalResponse); err != nil {
+		logger.L().Warn("openai messages json: failed to parse response",
+			zap.String("request_id", requestID),
+			zap.Error(err),
+		)
+		if !c.Writer.Written() {
+			writeAnthropicError(c, http.StatusBadGateway, "api_error", "Internal server error")
+		}
+		return nil, fmt.Errorf("parse responses json body: %w", err)
+	}
+
+	if !responsesResponseHasVisibleOutput(&finalResponse) {
+		logger.L().Warn("openai messages json: terminal response without visible output",
+			zap.String("request_id", requestID),
+			zap.String("status", finalResponse.Status),
+		)
+		if !c.Writer.Written() {
+			return nil, &UpstreamFailoverError{
+				StatusCode:  http.StatusBadGateway,
+				BreakSticky: true,
+				Reason:      "json_empty_output",
+			}
+		}
+		writeAnthropicError(c, http.StatusBadGateway, "api_error", "Internal server error")
+		return nil, fmt.Errorf("upstream json response had no visible output")
+	}
+
+	usage := copyOpenAIUsageFromResponsesUsage(finalResponse.Usage)
+	anthropicResp := apicompat.ResponsesToAnthropic(&finalResponse, originalModel)
+
+	if s.responseHeaderFilter != nil {
+		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	}
+	c.JSON(http.StatusOK, anthropicResp)
+
+	return &OpenAIForwardResult{
+		RequestID:     requestID,
+		ResponseID:    strings.TrimSpace(finalResponse.ID),
 		Usage:         usage,
 		Model:         originalModel,
 		BillingModel:  billingModel,

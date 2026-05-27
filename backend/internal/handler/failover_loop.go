@@ -66,7 +66,7 @@ type FailoverState struct {
 var gatewayHandlerPerReasonCap = map[string]int{
 	"first_meaningful_timeout":     1,
 	"stream_data_interval_timeout": 1,
-	"buffered_total_timeout":       1,
+	"buffered_total_timeout":       0,
 	"buffered_stream_read_error":   1,
 	"buffered_empty_stream":        1,
 	"buffered_empty_output":        1,
