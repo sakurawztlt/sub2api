@@ -4441,7 +4441,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 		if clientConversationID == "" {
 			clientConversationID = extractOpenAIStickySessionSignal(c, body)
 		}
-		if isOpenAIResponsesCompactPath(c) {
+		if isOpenAIResponsesCompactPath(c) || !isStream {
 			req.Header.Set("accept", "application/json")
 			if req.Header.Get("version") == "" {
 				req.Header.Set("version", codexCLIVersion)

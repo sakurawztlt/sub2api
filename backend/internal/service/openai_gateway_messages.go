@@ -126,11 +126,11 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		return nil, fmt.Errorf("convert anthropic to responses: %w", err)
 	}
 
-	// API-key Responses supports non-streaming JSON. Preserve the client's
-	// stream=false preference there so long buffered non-stream requests do not
-	// sit behind SSE terminal-event timers. OAuth/Codex internal bridge remains
-	// streaming because that path relies on SSE-only continuation metadata.
-	responsesReq.Stream = clientStream || account.Type == AccountTypeOAuth
+	// Preserve the client's stream=false preference before account-specific
+	// normalization. The OAuth/Codex legacy transform may still force streaming
+	// for native Responses paths, but the Anthropic Messages bridge can use
+	// JSON non-streaming upstream for client non-stream requests.
+	responsesReq.Stream = clientStream
 	isStream := responsesReq.Stream
 
 	// 3b. Handle BetaFastMode → service_tier: "priority"
@@ -211,12 +211,14 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		if err := json.Unmarshal(responsesBody, &reqBody); err != nil {
 			return nil, fmt.Errorf("unmarshal for codex transform: %w", err)
 		}
+		reqBody["stream"] = clientStream
 		// 058 step 2: messages bridge skips the default "helpful coding assistant"
 		// instructions (the developer-message shape is authoritative) and keeps
 		// Anthropic tool ids verbatim through the call_id round trip.
 		codexResult := applyCodexOAuthTransformWithOptions(reqBody, codexOAuthTransformOptions{
 			SkipDefaultInstructions: true,
 			PreserveToolCallIDs:     true,
+			PreserveStream:          !clientStream,
 		})
 		forcedTemplateText := ""
 		if s.cfg != nil {
@@ -267,9 +269,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		} else {
 			responsesReq.ServiceTier = ""
 		}
-		// OAuth codex transform forces stream=true upstream, so always use
-		// the streaming response handler regardless of what the client asked.
-		isStream = true
+		if streamValue, ok := reqBody["stream"].(bool); ok {
+			isStream = streamValue
+		}
 		responsesBody, err = json.Marshal(reqBody)
 		if err != nil {
 			return nil, fmt.Errorf("remarshal after codex transform: %w", err)
