@@ -547,13 +547,41 @@ func normalizeOpenAIImageSizeTier(size, quality string) string {
 		return "4K"
 	}
 	switch strings.ToLower(strings.TrimSpace(size)) {
-	case "1024x1024":
+	case "1k", "1024x1024":
 		return "1K"
-	case "1536x1024", "1024x1536", "1792x1024", "1024x1792", "", "auto":
+	case "2k", "1536x1024", "1024x1536", "1792x1024", "1024x1792", "2048x2048", "2048x1152", "", "auto":
 		return "2K"
-	default:
+	case "4k", "3840x2160", "2160x3840":
+		return "4K"
+	}
+	width, height, ok := parseOpenAIImageSizeDimensions(size)
+	if !ok {
 		return "2K"
 	}
+	maxEdge, minEdge := width, height
+	if height > width {
+		maxEdge, minEdge = height, width
+	}
+	if maxEdge >= 3840 || minEdge > 1536 {
+		return "4K"
+	}
+	return "2K"
+}
+
+func parseOpenAIImageSizeDimensions(size string) (int, int, bool) {
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(size)), "x")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	width, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	if err != nil || width <= 0 {
+		return 0, 0, false
+	}
+	height, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if err != nil || height <= 0 {
+		return 0, 0, false
+	}
+	return width, height, true
 }
 
 func (s *OpenAIGatewayService) ForwardImages(

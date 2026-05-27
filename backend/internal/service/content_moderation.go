@@ -177,6 +177,7 @@ type ContentModerationConfigView struct {
 	AllGroups            bool                            `json:"all_groups"`
 	GroupIDs             []int64                         `json:"group_ids"`
 	RecordNonHits        bool                            `json:"record_non_hits"`
+	Thresholds           map[string]float64              `json:"thresholds"`
 	WorkerCount          int                             `json:"worker_count"`
 	QueueSize            int                             `json:"queue_size"`
 	BlockStatus          int                             `json:"block_status"`
@@ -249,6 +250,7 @@ type UpdateContentModerationConfigInput struct {
 	AllGroups            *bool                         `json:"all_groups"`
 	GroupIDs             *[]int64                      `json:"group_ids"`
 	RecordNonHits        *bool                         `json:"record_non_hits"`
+	Thresholds           *map[string]float64           `json:"thresholds"`
 	WorkerCount          *int                          `json:"worker_count"`
 	QueueSize            *int                          `json:"queue_size"`
 	BlockStatus          *int                          `json:"block_status"`
@@ -606,6 +608,9 @@ func (s *ContentModerationService) UpdateConfig(ctx context.Context, input Updat
 	}
 	if input.RecordNonHits != nil {
 		cfg.RecordNonHits = *input.RecordNonHits
+	}
+	if input.Thresholds != nil {
+		cfg.Thresholds = mergeContentModerationThresholds(ContentModerationDefaultThresholds(), *input.Thresholds)
 	}
 	if input.ClearAPIKey {
 		cfg.APIKey = ""
@@ -1503,24 +1508,6 @@ func (s *ContentModerationService) applyFlaggedSideEffects(ctx context.Context, 
 
 func (s *ContentModerationService) sendViolationEmail(ctx context.Context, cfg *ContentModerationConfig, log *ContentModerationLog) error {
 	siteName := s.siteName(ctx)
-	if s.emailService.notificationEmailService != nil {
-		if err := s.emailService.notificationEmailService.Send(ctx, NotificationEmailSendInput{
-			Event:          NotificationEmailEventContentModerationViolation,
-			RecipientEmail: log.UserEmail,
-			RecipientName:  emailRecipientName(log.UserEmail),
-			UserID:         contentModerationEmailUserID(log),
-			SourceType:     "content_moderation",
-			SourceID:       contentModerationEmailSourceID(log),
-			Variables:      contentModerationEmailVariables(log, cfg),
-		}); err == nil {
-			return nil
-		} else {
-			if !shouldFallbackNotificationEmail(err) {
-				return err
-			}
-			slog.Warn("template content moderation violation email failed; falling back to built-in body", "log_id", log.ID, "recipient_hash", notificationEmailHash(log.UserEmail), "err", err.Error())
-		}
-	}
 	subject := fmt.Sprintf("[%s] 账户风控提醒 / Risk Control Notice", sanitizeEmailHeader(siteName))
 	body := buildContentModerationViolationEmailBody(siteName, log, cfg)
 	return s.emailService.SendEmail(ctx, log.UserEmail, subject, body)
@@ -1528,24 +1515,6 @@ func (s *ContentModerationService) sendViolationEmail(ctx context.Context, cfg *
 
 func (s *ContentModerationService) sendAccountDisabledEmail(ctx context.Context, cfg *ContentModerationConfig, log *ContentModerationLog) error {
 	siteName := s.siteName(ctx)
-	if s.emailService.notificationEmailService != nil {
-		if err := s.emailService.notificationEmailService.Send(ctx, NotificationEmailSendInput{
-			Event:          NotificationEmailEventContentModerationDisabled,
-			RecipientEmail: log.UserEmail,
-			RecipientName:  emailRecipientName(log.UserEmail),
-			UserID:         contentModerationEmailUserID(log),
-			SourceType:     "content_moderation",
-			SourceID:       contentModerationEmailSourceID(log),
-			Variables:      contentModerationEmailVariables(log, cfg),
-		}); err == nil {
-			return nil
-		} else {
-			if !shouldFallbackNotificationEmail(err) {
-				return err
-			}
-			slog.Warn("template content moderation disabled email failed; falling back to built-in body", "log_id", log.ID, "recipient_hash", notificationEmailHash(log.UserEmail), "err", err.Error())
-		}
-	}
 	subject := fmt.Sprintf("[%s] 账户已被禁用 / Account Disabled", sanitizeEmailHeader(siteName))
 	body := buildContentModerationAccountDisabledEmailBody(siteName, log, cfg)
 	return s.emailService.SendEmail(ctx, log.UserEmail, subject, body)
@@ -1894,6 +1863,7 @@ func (s *ContentModerationService) configView(cfg *ContentModerationConfig) *Con
 		AllGroups:            cfg.AllGroups,
 		GroupIDs:             append([]int64(nil), cfg.GroupIDs...),
 		RecordNonHits:        cfg.RecordNonHits,
+		Thresholds:           cloneFloatMap(cfg.Thresholds),
 		WorkerCount:          cfg.WorkerCount,
 		QueueSize:            cfg.QueueSize,
 		BlockStatus:          cfg.BlockStatus,

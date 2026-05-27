@@ -16,12 +16,14 @@ var contentModerationSecretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`),
 }
 
+var contentModerationSensitiveURLPattern = regexp.MustCompile(`(?i)https?://[^\s"'<>]+[?&](?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token|id[_-]?token|session[_-]?token|token|client[_-]?secret|secret|key)=[^\s"'<>]+`)
+
 func redactContentModerationSecrets(text string) string {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return ""
 	}
-	out := text
+	out := contentModerationSensitiveURLPattern.ReplaceAllString(text, "[已脱敏]")
 	for idx, pattern := range contentModerationSecretPatterns {
 		switch idx {
 		case 0:
