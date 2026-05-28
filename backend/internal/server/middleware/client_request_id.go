@@ -11,6 +11,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const clientRequestIDHeader = "X-Client-Request-ID"
+
 // upstreamRequestIDHeaders lists the headers we honor as a client-supplied
 // correlation id, in priority order. NewAPI sets X-Newapi-Request-Id;
 // generic upstreams use X-Request-Id / X-Correlation-Id. First non-empty
@@ -56,7 +58,8 @@ func ClientRequestID() gin.HandlerFunc {
 			return
 		}
 
-		if v := c.Request.Context().Value(ctxkey.ClientRequestID); v != nil {
+		if v, _ := c.Request.Context().Value(ctxkey.ClientRequestID).(string); strings.TrimSpace(v) != "" {
+			c.Header(clientRequestIDHeader, strings.TrimSpace(v))
 			c.Next()
 			return
 		}
@@ -73,7 +76,7 @@ func ClientRequestID() gin.HandlerFunc {
 		if id == "" {
 			id = uuid.New().String()
 		}
-
+		c.Header(clientRequestIDHeader, id)
 		ctx := context.WithValue(c.Request.Context(), ctxkey.ClientRequestID, id)
 		requestLogger := logger.FromContext(ctx).With(
 			zap.String("client_request_id", strings.TrimSpace(id)),

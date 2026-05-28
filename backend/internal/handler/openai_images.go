@@ -287,7 +287,11 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 			requestPayloadHash = service.HashUsageRequestPayload([]byte(parsed.StickySessionSeed()))
 		}
 
-		h.submitUsageRecordTask(func(ctx context.Context) {
+		upstreamModel := ""
+		if result != nil {
+			upstreamModel = result.UpstreamModel
+		}
+		h.submitMandatoryUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
 			if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
 				Result:             result,
 				APIKey:             apiKey,
