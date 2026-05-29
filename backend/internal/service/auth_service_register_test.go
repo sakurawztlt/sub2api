@@ -73,6 +73,42 @@ type defaultSubscriptionAssignerStub struct {
 
 type refreshTokenCacheStub struct{}
 
+type userPlatformQuotaRepoStub struct {
+	bulkInsertCalls [][]UserPlatformQuotaRecord
+	bulkInsertErr   error
+}
+
+func (s *userPlatformQuotaRepoStub) BulkInsertInitial(_ context.Context, records []UserPlatformQuotaRecord) error {
+	cloned := make([]UserPlatformQuotaRecord, len(records))
+	copy(cloned, records)
+	s.bulkInsertCalls = append(s.bulkInsertCalls, cloned)
+	return s.bulkInsertErr
+}
+
+func (s *userPlatformQuotaRepoStub) GetByUserPlatform(context.Context, int64, string) (*UserPlatformQuotaRecord, error) {
+	panic("unexpected GetByUserPlatform call")
+}
+
+func (s *userPlatformQuotaRepoStub) ListByUser(context.Context, int64) ([]UserPlatformQuotaRecord, error) {
+	panic("unexpected ListByUser call")
+}
+
+func (s *userPlatformQuotaRepoStub) IncrementUsageWithReset(context.Context, int64, string, float64, time.Time) error {
+	panic("unexpected IncrementUsageWithReset call")
+}
+
+func (s *userPlatformQuotaRepoStub) UpsertForUser(context.Context, int64, []UserPlatformQuotaRecord) error {
+	panic("unexpected UpsertForUser call")
+}
+
+func (s *userPlatformQuotaRepoStub) ResetExpiredWindow(context.Context, int64, string, string, time.Time) error {
+	panic("unexpected ResetExpiredWindow call")
+}
+
+func (s *userPlatformQuotaRepoStub) BatchSnapshotUsage(_ context.Context, _ []UserPlatformQuotaSnapshot, _ time.Time) error {
+	return nil
+}
+
 func (s *defaultSubscriptionAssignerStub) AssignOrExtendSubscription(_ context.Context, input *AssignSubscriptionInput) (*UserSubscription, bool, error) {
 	if input != nil {
 		s.calls = append(s.calls, *input)
@@ -178,7 +214,7 @@ func (s *emailCacheStub) IncrNotifyCodeUserRate(ctx context.Context, userID int6
 	return 0, nil
 }
 
-func newAuthService(repo *userRepoStub, settings map[string]string, emailCache EmailCache) *AuthService {
+func newAuthService(repo *userRepoStub, settings map[string]string, emailCache EmailCache, quotaRepos ...UserPlatformQuotaRepository) *AuthService {
 	cfg := &config.Config{
 		JWT: config.JWTConfig{
 			Secret:     "test-secret",
@@ -200,6 +236,11 @@ func newAuthService(repo *userRepoStub, settings map[string]string, emailCache E
 		emailService = NewEmailService(&settingRepoStub{values: settings}, emailCache)
 	}
 
+	var quotaRepo UserPlatformQuotaRepository
+	if len(quotaRepos) > 0 {
+		quotaRepo = quotaRepos[0]
+	}
+
 	return NewAuthService(
 		nil, // entClient
 		repo,
@@ -213,6 +254,7 @@ func newAuthService(repo *userRepoStub, settings map[string]string, emailCache E
 		nil, // promoService
 		nil, // defaultSubAssigner
 		nil, // affiliateService
+		quotaRepo,
 	)
 }
 
