@@ -36,6 +36,13 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
+// openAIParsedRequestBodyCache 绑定 body 指纹，避免 handler 预解析的旧 body 污染后续 forwardBody。
+type openAIParsedRequestBodyCache struct {
+	bodyHash uint64
+	bodyLen  int
+	reqBody  map[string]any
+}
+
 const (
 	// ChatGPT internal API for OAuth accounts
 	chatgptCodexURL = "https://chatgpt.com/backend-api/codex/responses"
@@ -2711,6 +2718,20 @@ func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponseForAccount(st
 	return false
 }
 
+func marshalOpenAIUpstreamJSON(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	out := buf.Bytes()
+	if len(out) > 0 && out[len(out)-1] == '\n' {
+		out = out[:len(out)-1]
+	}
+	return out, nil
+}
+
 func (s *OpenAIGatewayService) handleFailoverSideEffects(ctx context.Context, resp *http.Response, account *Account, requestedModel ...string) {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	if len(requestedModel) > 0 {
@@ -2989,7 +3010,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		// 确保高版本模型向低版本模型映射不报错
 		if !SupportsVerbosity(upstreamModel) {
 			if text, ok := reqBody["text"].(map[string]any); ok {
-				delete(text, "verbosity")
+				if _, exists := text["verbosity"]; exists {
+					delete(text, "verbosity")
+					bodyModified = true
+					markPatchDelete("text.verbosity")
+				}
 			}
 		}
 
@@ -3227,7 +3252,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 		if !serializedByPatch {
 			var marshalErr error
-			body, marshalErr = json.Marshal(reqBody)
+			body, marshalErr = marshalOpenAIUpstreamJSON(reqBody)
 			if marshalErr != nil {
 				return nil, fmt.Errorf("serialize request body: %w", marshalErr)
 			}
@@ -3512,7 +3537,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			upstreamCode := extractUpstreamErrorCode(respBody)
 			if !httpInvalidEncryptedContentRetryTried && resp.StatusCode == http.StatusBadRequest && upstreamCode == "invalid_encrypted_content" {
 				if trimOpenAIEncryptedReasoningItems(reqBody) {
-					body, err = json.Marshal(reqBody)
+					body, err = marshalOpenAIUpstreamJSON(reqBody)
 					if err != nil {
 						return nil, fmt.Errorf("serialize invalid_encrypted_content retry body: %w", err)
 					}
@@ -3544,6 +3569,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				})
 
 				s.handleFailoverSideEffects(ctx, resp, account, upstreamModel)
+				// reqBody 会被本次账号尝试原地修改，failover 前必须释放，避免下一账号复用脏 map。
+				releaseOpenAIParsedRequestBody(c)
 				return nil, &UpstreamFailoverError{
 					StatusCode:             resp.StatusCode,
 					ResponseBody:           respBody,
@@ -7437,7 +7464,7 @@ func sanitizeEmptyBase64InputImagesInOpenAIBody(body []byte) ([]byte, bool, erro
 	if !sanitizeEmptyBase64InputImagesInOpenAIRequestBodyMap(reqBody) {
 		return body, false, nil
 	}
-	normalized, err := json.Marshal(reqBody)
+	normalized, err := marshalOpenAIUpstreamJSON(reqBody)
 	if err != nil {
 		return body, false, fmt.Errorf("serialize sanitized request body: %w", err)
 	}
@@ -7543,14 +7570,57 @@ func isEmptyBase64DataURI(raw string) bool {
 }
 
 func getOpenAIRequestBodyMap(c *gin.Context, body []byte) (map[string]any, error) {
+	// 同一个 gin.Context 内 failover/渠道映射可能传入新 body，缓存必须先校验 body 指纹。
+	bodyHash := xxhash.Sum64(body)
+	bodyLen := len(body)
+	if c != nil {
+		if cached, ok := c.Get(OpenAIParsedRequestBodyKey); ok {
+			if cache, ok := cached.(openAIParsedRequestBodyCache); ok && cache.reqBody != nil && cache.bodyLen == bodyLen && cache.bodyHash == bodyHash {
+				return cache.reqBody, nil
+			}
+		}
+	}
+
 	var reqBody map[string]any
 	if err := json.Unmarshal(body, &reqBody); err != nil {
 		return nil, fmt.Errorf("parse request: %w", err)
 	}
 	if c != nil {
-		c.Set(OpenAIParsedRequestBodyKey, reqBody)
+		c.Set(OpenAIParsedRequestBodyKey, openAIParsedRequestBodyCache{bodyHash: bodyHash, bodyLen: bodyLen, reqBody: reqBody})
 	}
 	return reqBody, nil
+}
+
+// CacheOpenAIParsedRequestBody 仅缓存与当前 body 绑定的解析结果。
+func CacheOpenAIParsedRequestBody(c *gin.Context, body []byte, reqBody map[string]any) {
+	if c == nil || reqBody == nil {
+		return
+	}
+	c.Set(OpenAIParsedRequestBodyKey, openAIParsedRequestBodyCache{
+		bodyHash: xxhash.Sum64(body),
+		bodyLen:  len(body),
+		reqBody:  reqBody,
+	})
+}
+
+// CachedOpenAIParsedRequestBody 只给同请求内不关心 body 参数的轻量识别逻辑使用。
+func CachedOpenAIParsedRequestBody(c *gin.Context) map[string]any {
+	if c == nil {
+		return nil
+	}
+	if cached, ok := c.Get(OpenAIParsedRequestBodyKey); ok {
+		if cache, ok := cached.(openAIParsedRequestBodyCache); ok {
+			return cache.reqBody
+		}
+	}
+	return nil
+}
+
+func releaseOpenAIParsedRequestBody(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	delete(c.Keys, OpenAIParsedRequestBodyKey)
 }
 
 func extractOpenAIReasoningEffort(reqBody map[string]any, requestedModel string) *string {

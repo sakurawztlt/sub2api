@@ -1018,7 +1018,7 @@ func (h *OpenAIGatewayHandler) validateFunctionCallOutputRequest(c *gin.Context,
 		return true
 	}
 
-	c.Set(service.OpenAIParsedRequestBodyKey, reqBody)
+	service.CacheOpenAIParsedRequestBody(c, body, reqBody)
 	validation := service.ValidateFunctionCallOutputContext(reqBody)
 	if !validation.HasFunctionCallOutput {
 		return true
