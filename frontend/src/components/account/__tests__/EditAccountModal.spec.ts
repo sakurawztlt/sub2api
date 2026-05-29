@@ -287,4 +287,200 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty('openai_responses_mode')
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_responses_supported).toBe(true)
   })
+
+  it('submits OpenAI APIKey endpoint capabilities from credentials', async () => {
+    const account = buildAccount()
+    account.credentials.openai_capabilities = ['chat_completions']
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+
+    expect(wrapper.findAll('input[type="checkbox"]').some((input) => (input.element as HTMLInputElement).checked)).toBe(true)
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.openai_capabilities).toEqual([
+      'chat_completions'
+    ])
+  })
+
+  it('keeps at least one OpenAI APIKey endpoint capability selected', async () => {
+    const account = buildAccount()
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+
+    const chatCheckbox = wrapper.get<HTMLInputElement>(
+      '[data-testid="openai-endpoint-capability-chat_completions"]'
+    )
+    const embeddingsCheckbox = wrapper.get<HTMLInputElement>(
+      '[data-testid="openai-endpoint-capability-embeddings"]'
+    )
+
+    expect(chatCheckbox.element.checked).toBe(true)
+    expect(embeddingsCheckbox.element.checked).toBe(true)
+
+    await embeddingsCheckbox.setValue(false)
+
+    expect(chatCheckbox.element.checked).toBe(true)
+    expect(embeddingsCheckbox.element.checked).toBe(false)
+
+    await chatCheckbox.setValue(false)
+
+    expect(chatCheckbox.element.checked).toBe(true)
+    expect(embeddingsCheckbox.element.checked).toBe(false)
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.openai_capabilities).toEqual([
+      'chat_completions'
+    ])
+  })
+
+  it('submits account-level Codex image generation bridge override', async () => {
+    const account = buildAccount()
+    account.extra = {
+      codex_image_generation_bridge: false,
+      codex_image_generation_bridge_enabled: true
+    }
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+
+    await wrapper.get('button[data-testid="codex-image-bridge-enabled"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.codex_image_generation_bridge).toBe(true)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.extra).not.toHaveProperty('codex_image_generation_bridge_enabled')
+  })
+
+  it('allows saving apikey account when backend redacted api_key but credentials_status reports it exists', async () => {
+    // 新前端 + 新后端：响应已脱敏，credentials 里没有 api_key，credentials_status.has_api_key=true
+    const account = buildAccount()
+    account.credentials = {
+      base_url: 'https://api.openai.com',
+      model_mapping: { 'gpt-5.2': 'gpt-5.2' }
+    }
+    account.credentials_status = { has_api_key: true }
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    // 用户未输入新 key 时，payload 不应带 api_key，由后端合并保留旧值
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).not.toHaveProperty('api_key')
+  })
+
+  it('allows saving apikey account against legacy backend without credentials_status', async () => {
+    // 新前端 + 旧后端：credentials_status 缺失，但 credentials.api_key 仍是明文，应允许保存
+    const account = buildAccount()
+    // 显式确保没有 credentials_status
+    expect(account.credentials_status).toBeUndefined()
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    // 旧后端响应未脱敏，原 api_key 会随 currentCredentials 一起传回去（旧行为，等价于无操作）
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.api_key).toBe('sk-test')
+  })
+
+  it('blocks apikey save when neither credentials_status nor legacy api_key indicates existence', async () => {
+    const account = buildAccount()
+    account.credentials = {
+      base_url: 'https://api.openai.com'
+    }
+    // 既没有 credentials_status 也没有旧的 api_key
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+
+    const wrapper = mountModal(account)
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).not.toHaveBeenCalled()
+  })
+
+  it('allows saving Vertex SA account when backend redacted service_account_json but credentials_status reports it exists', async () => {
+    // 新前端 + 新后端：响应已脱敏，credentials 里没有 service_account_json，credentials_status.has_service_account_json=true
+    const account = buildVertexAccount()
+    account.credentials = {
+      project_id: 'demo-project',
+      client_email: 'sa@example.iam.gserviceaccount.com',
+      location: 'us-central1',
+      tier_id: 'vertex'
+    }
+    account.credentials_status = { has_service_account_json: true }
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.project_id).toBe('demo-project')
+  })
+
+  it('allows saving Vertex SA account against legacy backend without credentials_status', async () => {
+    // 新前端 + 旧后端：credentials_status 缺失，但 credentials.service_account_json 仍是明文，应允许保存
+    const account = buildVertexAccount()
+    expect(account.credentials_status).toBeUndefined()
+    expect(account.credentials.service_account_json).toBeTruthy()
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('blocks Vertex SA save when neither credentials_status nor legacy json indicates existence', async () => {
+    const account = buildVertexAccount()
+    account.credentials = {
+      project_id: 'demo-project',
+      client_email: 'sa@example.iam.gserviceaccount.com',
+      location: 'us-central1',
+      tier_id: 'vertex'
+    }
+    // 既没有 credentials_status 也没有旧的 service_account_json
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+
+    const wrapper = mountModal(account)
+
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).not.toHaveBeenCalled()
+  })
 })
