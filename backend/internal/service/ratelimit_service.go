@@ -1588,7 +1588,7 @@ func (s *RateLimitService) HandleUpstreamModelNotFound(ctx context.Context, acco
 	if !account.ShouldHandleErrorCode(statusCode) {
 		return false
 	}
-	if !isUpstreamModelUnavailableForAccountError(statusCode, responseBody) {
+	if !isUpstreamModelNotFoundError(statusCode, responseBody) {
 		return false
 	}
 	modelKey := modelRateLimitKeyForUpstreamModelNotFound(ctx, account, requestedModel)

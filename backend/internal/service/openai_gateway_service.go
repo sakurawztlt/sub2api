@@ -2487,9 +2487,6 @@ func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponseForAccount(st
 	if statusCode == 404 && account != nil && account.Type == AccountTypeOAuth {
 		return true
 	}
-	if account != nil && account.Type == AccountTypeOAuth && isOpenAICodexChatGPTModelUnsupportedError(statusCode, upstreamMsg, upstreamBody) {
-		return true
-	}
 	return false
 }
 
@@ -3941,7 +3938,7 @@ func openAIStreamFailedEventShouldFailover(payload []byte, message string) bool 
 	if isOpenAITransientProcessingError(http.StatusBadRequest, message, payload) {
 		return true
 	}
-	if isOpenAICodexChatGPTModelUnsupportedError(http.StatusBadRequest, message, payload) {
+	if containsOpenAICompatSensitiveBackendTerm(message, payload) {
 		return true
 	}
 	code := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "response.error.code").String()))
@@ -3981,12 +3978,16 @@ func (s *OpenAIGatewayService) newOpenAIStreamFailoverError(
 	payload []byte,
 	message string,
 ) *UpstreamFailoverError {
+	maskedSensitiveBackendError := containsOpenAICompatSensitiveBackendTerm(message, payload)
 	message = sanitizeUpstreamErrorMessage(strings.TrimSpace(message))
 	if message == "" {
 		message = "OpenAI stream disconnected before completion"
 	}
+	if maskedSensitiveBackendError {
+		message = openAICompatSensitiveBackendErrorMessage
+	}
 	detail := ""
-	if len(payload) > 0 && s != nil && s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
+	if len(payload) > 0 && !maskedSensitiveBackendError && s != nil && s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
 		maxBytes := s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes
 		if maxBytes <= 0 {
 			maxBytes = 2048
@@ -4003,6 +4004,9 @@ func (s *OpenAIGatewayService) newOpenAIStreamFailoverError(
 			Kind:               "failover",
 			Message:            message,
 			Detail:             detail,
+		}
+		if maskedSensitiveBackendError {
+			event.Kind = "masked_backend_error"
 		}
 		if account != nil {
 			event.Platform = account.Platform
@@ -4678,6 +4682,20 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 			maxBytes = 2048
 		}
 		upstreamDetail = truncateString(string(body), maxBytes)
+	}
+	if containsOpenAICompatSensitiveBackendTerm(upstreamMsg, body) {
+		setOpsUpstreamError(c, http.StatusBadGateway, openAICompatSensitiveBackendErrorMessage, "")
+		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			Platform:           account.Platform,
+			AccountID:          account.ID,
+			AccountName:        account.Name,
+			UpstreamStatusCode: resp.StatusCode,
+			UpstreamRequestID:  resp.Header.Get("x-request-id"),
+			Kind:               "masked_backend_error",
+			Message:            openAICompatSensitiveBackendErrorMessage,
+		})
+		writeError(c, http.StatusBadGateway, "api_error", openAICompatSensitiveBackendErrorMessage)
+		return nil, fmt.Errorf("upstream error: %d (sensitive backend message masked)", resp.StatusCode)
 	}
 	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
 
@@ -5650,9 +5668,13 @@ func extractOpenAISSEErrorMessage(payload []byte) string {
 }
 
 func (s *OpenAIGatewayService) writeOpenAINonStreamingProtocolError(resp *http.Response, c *gin.Context, message string) error {
+	maskedSensitiveBackendError := containsOpenAICompatSensitiveBackendTerm(message, nil)
 	message = sanitizeUpstreamErrorMessage(strings.TrimSpace(message))
 	if message == "" {
 		message = "Upstream returned an invalid non-streaming response"
+	}
+	if maskedSensitiveBackendError {
+		message = openAICompatSensitiveBackendErrorMessage
 	}
 	setOpsUpstreamError(c, http.StatusBadGateway, message, "")
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)

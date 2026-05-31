@@ -18,25 +18,6 @@ func isUpstreamModelNotFoundError(statusCode int, body []byte) bool {
 	return containsModelNotFoundKeyword(normalized)
 }
 
-func isOpenAICodexChatGPTModelUnsupportedError(statusCode int, message string, body []byte) bool {
-	if statusCode != http.StatusBadRequest {
-		return false
-	}
-	normalized := normalizeModelNotFoundText(message + " " + string(body))
-	if normalized == "" {
-		return false
-	}
-	return strings.Contains(normalized, "model") &&
-		strings.Contains(normalized, "not supported") &&
-		strings.Contains(normalized, "codex") &&
-		strings.Contains(normalized, "chatgpt account")
-}
-
-func isUpstreamModelUnavailableForAccountError(statusCode int, body []byte) bool {
-	return isUpstreamModelNotFoundError(statusCode, body) ||
-		isOpenAICodexChatGPTModelUnsupportedError(statusCode, "", body)
-}
-
 func isModelNotFoundError(statusCode int, body []byte) bool {
 	return isUpstreamModelNotFoundError(statusCode, body) || statusCode == http.StatusNotFound
 }
@@ -57,14 +38,7 @@ func normalizeModelNotFoundBody(body []byte) string {
 	if len(body) == 0 {
 		return ""
 	}
-	return normalizeModelNotFoundText(string(body))
-}
-
-func normalizeModelNotFoundText(text string) string {
-	if strings.TrimSpace(text) == "" {
-		return ""
-	}
-	normalized := strings.ToLower(text)
+	normalized := strings.ToLower(string(body))
 	normalized = strings.NewReplacer("_", " ", "-", " ", "\n", " ", "\r", " ", "\t", " ").Replace(normalized)
 	return strings.Join(strings.Fields(normalized), " ")
 }

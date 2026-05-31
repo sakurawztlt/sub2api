@@ -71,30 +71,3 @@ func TestShouldFailoverOpenAIUpstreamResponse_404StillNotFailover(t *testing.T) 
 		t.Errorf("legacy shouldFailoverOpenAIUpstreamResponse 404: regression — must NOT failover (account-aware variant handles 404)")
 	}
 }
-
-func TestShouldFailoverOpenAIUpstreamResponseForAccount_CodexChatGPTUnsupportedModelOAuthFailover(t *testing.T) {
-	s := &OpenAIGatewayService{}
-	acc := &Account{Type: AccountTypeOAuth}
-	body := []byte(`{"error":{"message":"The 'gpt-5.4' model is not supported when using Codex with a ChatGPT account.","type":"invalid_request_error"},"type":"error"}`)
-	if !s.shouldFailoverOpenAIUpstreamResponseForAccount(400, "The 'gpt-5.4' model is not supported when using Codex with a ChatGPT account.", body, acc) {
-		t.Fatal("OAuth ChatGPT account unsupported Codex model must trigger account failover")
-	}
-}
-
-func TestShouldFailoverOpenAIUpstreamResponseForAccount_CodexChatGPTUnsupportedModelAPIKeyNoFailover(t *testing.T) {
-	s := &OpenAIGatewayService{}
-	acc := &Account{Type: AccountTypeAPIKey}
-	body := []byte(`{"error":{"message":"The 'gpt-5.4' model is not supported when using Codex with a ChatGPT account.","type":"invalid_request_error"},"type":"error"}`)
-	if s.shouldFailoverOpenAIUpstreamResponseForAccount(400, "The 'gpt-5.4' model is not supported when using Codex with a ChatGPT account.", body, acc) {
-		t.Fatal("API-key account should keep normal 400 handling; this rule is OAuth account-scoped")
-	}
-}
-
-func TestShouldFailoverOpenAIUpstreamResponseForAccount_Generic400StillNoFailover(t *testing.T) {
-	s := &OpenAIGatewayService{}
-	acc := &Account{Type: AccountTypeOAuth}
-	body := []byte(`{"error":{"message":"Invalid request body","type":"invalid_request_error"},"type":"error"}`)
-	if s.shouldFailoverOpenAIUpstreamResponseForAccount(400, "Invalid request body", body, acc) {
-		t.Fatal("generic client 400 must not trigger failover")
-	}
-}
