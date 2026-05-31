@@ -186,8 +186,9 @@ func PrepareBedrockRequestBody(body []byte, modelID string, betaHeader string) (
 }
 
 // PrepareBedrockRequestBodyWithTokens prepares a Bedrock request using pre-resolved beta tokens.
-func PrepareBedrockRequestBodyWithTokens(body []byte, modelID string, betaTokens []string) ([]byte, error) {
+func PrepareBedrockRequestBodyWithTokens(body []byte, modelID string, betaTokens []string, ccCompatOpt ...bool) ([]byte, error) {
 	var err error
+	ccCompat := len(ccCompatOpt) > 0 && ccCompatOpt[0]
 
 	betaTokens = filterBedrockBetaTokens(betaTokens)
 	body = sanitizeBedrockFieldsForBetaTokens(body, betaTokens)
@@ -238,6 +239,11 @@ func PrepareBedrockRequestBodyWithTokens(body []byte, modelID string, betaTokens
 
 	// 清理 cache_control 中 Bedrock 不支持的字段
 	body = sanitizeBedrockCacheControl(body, modelID)
+
+	if ccCompat {
+		body = sanitizeBedrockThinking(body, modelID)
+		body = sanitizeBedrockToolUseIDs(body)
+	}
 
 	return body, nil
 }
@@ -625,4 +631,131 @@ func containsBedrockBetaToken(tokens []string, target string) bool {
 		}
 	}
 	return false
+}
+
+var bedrockToolUseIDRe = regexp.MustCompile(`[^a-zA-Z0-9_-]`)
+
+func isBedrockOpus47OrNewer(modelID string) bool {
+	lower := strings.ToLower(modelID)
+	if !strings.Contains(lower, "opus") {
+		return false
+	}
+	matches := claudeVersionRe.FindStringSubmatch(lower)
+	if matches == nil {
+		return false
+	}
+	major, _ := strconv.Atoi(matches[1])
+	minor, _ := strconv.Atoi(matches[2])
+	return major > 4 || (major == 4 && minor >= 7)
+}
+
+const defaultThinkingBudgetTokens = 10000
+
+func sanitizeBedrockThinking(body []byte, modelID string) []byte {
+	thinking := gjson.GetBytes(body, "thinking")
+	if !thinking.Exists() || !thinking.IsObject() {
+		return body
+	}
+
+	thinkingType := thinking.Get("type").String()
+	if thinkingType == "" {
+		return body
+	}
+
+	if isBedrockOpus47OrNewer(modelID) {
+		if thinkingType == "enabled" {
+			body, _ = sjson.SetBytes(body, "thinking.type", "adaptive")
+			body, _ = sjson.DeleteBytes(body, "thinking.budget_tokens")
+		}
+		return body
+	}
+
+	if thinkingType == "enabled" && !thinking.Get("budget_tokens").Exists() {
+		body, _ = sjson.SetBytes(body, "thinking.budget_tokens", defaultThinkingBudgetTokens)
+	}
+	return body
+}
+
+func sanitizeBedrockToolUseIDs(body []byte) []byte {
+	messages := gjson.GetBytes(body, "messages")
+	if !messages.Exists() || !messages.IsArray() {
+		return body
+	}
+	for mi, msg := range messages.Array() {
+		content := msg.Get("content")
+		if !content.Exists() || !content.IsArray() {
+			continue
+		}
+		for ci, block := range content.Array() {
+			switch block.Get("type").String() {
+			case "tool_use":
+				body = sanitizeIDField(body, block.Get("id").String(), fmt.Sprintf("messages.%d.content.%d.id", mi, ci))
+			case "tool_result":
+				body = sanitizeIDField(body, block.Get("tool_use_id").String(), fmt.Sprintf("messages.%d.content.%d.tool_use_id", mi, ci))
+			}
+		}
+	}
+	return body
+}
+
+func sanitizeIDField(body []byte, id, path string) []byte {
+	if id == "" {
+		return body
+	}
+	sanitized := bedrockToolUseIDRe.ReplaceAllString(id, "_")
+	if sanitized != id {
+		body, _ = sjson.SetBytes(body, path, sanitized)
+	}
+	return body
+}
+
+const defaultCCMaxTokens = 81920
+
+func sanitizeBedrockCCFields(body []byte) []byte {
+	if gjson.GetBytes(body, "service_tier").Exists() {
+		body, _ = sjson.DeleteBytes(body, "service_tier")
+	}
+	if gjson.GetBytes(body, "interface_geo").Exists() {
+		body, _ = sjson.DeleteBytes(body, "interface_geo")
+	}
+	if gjson.GetBytes(body, "context_management").Exists() {
+		body, _ = sjson.DeleteBytes(body, "context_management")
+	}
+	if !gjson.GetBytes(body, "max_tokens").Exists() {
+		body, _ = sjson.SetBytes(body, "max_tokens", defaultCCMaxTokens)
+	}
+	if !gjson.GetBytes(body, "anthropic_version").Exists() {
+		body, _ = sjson.SetBytes(body, "anthropic_version", "bedrock-2023-05-31")
+	}
+	return body
+}
+
+func sanitizeBedrockCCBetaTokens(body []byte, modelID string) []byte {
+	betaField := gjson.GetBytes(body, "anthropic_beta")
+	if !betaField.Exists() {
+		return body
+	}
+
+	var tokens []string
+	if betaField.IsArray() {
+		for _, t := range betaField.Array() {
+			if t.Type == gjson.String {
+				tokens = append(tokens, t.String())
+			}
+		}
+	}
+
+	bodyForAutoInject := body
+	if gjson.GetBytes(bodyForAutoInject, "thinking").Exists() {
+		bodyForAutoInject, _ = sjson.DeleteBytes(bodyForAutoInject, "thinking")
+	}
+	tokens = autoInjectBedrockBetaTokens(tokens, bodyForAutoInject, modelID)
+	tokens = filterBedrockBetaTokens(tokens)
+
+	if len(tokens) == 0 {
+		body, _ = sjson.DeleteBytes(body, "anthropic_beta")
+		return body
+	}
+	body, _ = sjson.SetBytes(body, "anthropic_beta", tokens)
+	return body
 }

@@ -655,12 +655,16 @@ func normalizeModelNameForPricing(model string) string {
 	model = strings.TrimLeft(model, "/")
 	model = strings.TrimPrefix(model, "models/")
 	model = strings.TrimPrefix(model, "publishers/google/models/")
+	model = strings.TrimPrefix(model, "openai/")
 
 	if idx := strings.LastIndex(model, "/publishers/google/models/"); idx != -1 {
 		model = model[idx+len("/publishers/google/models/"):]
 	}
 	if idx := strings.LastIndex(model, "/models/"); idx != -1 {
 		model = model[idx+len("/models/"):]
+	}
+	if strings.HasPrefix(model, "gpt") && len(model) > len("gpt") && model[len("gpt")] >= '0' && model[len("gpt")] <= '9' {
+		model = "gpt-" + model[len("gpt"):]
 	}
 
 	model = strings.TrimLeft(model, "/")

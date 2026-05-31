@@ -1784,7 +1784,7 @@ func (s *OpenAIGatewayService) selectAccountForModelWithExclusions(ctx context.C
 	selected, compactBlocked := s.selectBestAccount(ctx, groupID, accounts, requestedModel, excludedIDs, requireCompact, requiredCapability)
 
 	if selected == nil {
-		if recovered := s.recoverOpenAIRateLimitedAccountBeforeNoAvailable(ctx, groupID, requestedModel, excludedIDs, requireCompact); recovered != nil {
+		if recovered := s.recoverOpenAIRateLimitedAccountBeforeNoAvailable(ctx, groupID, requestedModel, excludedIDs, requireCompact, requiredCapability); recovered != nil {
 			if sessionHash != "" {
 				_ = s.setStickySessionAccountID(ctx, groupID, sessionHash, recovered.ID, openaiStickySessionTTL)
 			}
@@ -1936,7 +1936,7 @@ func (s *OpenAIGatewayService) selectBestAccount(ctx context.Context, groupID *i
 	return selected, compactBlocked
 }
 
-func (s *OpenAIGatewayService) recoverOpenAIRateLimitedAccountBeforeNoAvailable(ctx context.Context, groupID *int64, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool) *Account {
+func (s *OpenAIGatewayService) recoverOpenAIRateLimitedAccountBeforeNoAvailable(ctx context.Context, groupID *int64, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool, requiredCapability OpenAIEndpointCapability) *Account {
 	if s == nil || s.accountRepo == nil {
 		return nil
 	}
@@ -1981,7 +1981,7 @@ func (s *OpenAIGatewayService) recoverOpenAIRateLimitedAccountBeforeNoAvailable(
 			slog.Warn("openai_rate_limit_recovery_hydrate_failed", "account_id", candidate.ID, "error", err)
 			continue
 		}
-		if !isOpenAIAccountEligibleForRequest(ctx, fresh, requestedModel, requireCompact) {
+		if !isOpenAIAccountEligibleForRequest(ctx, fresh, requestedModel, requireCompact, requiredCapability) {
 			continue
 		}
 		if needsUpstreamCheck && s.isUpstreamModelRestrictedByChannel(ctx, *groupID, fresh, requestedModel, requireCompact) {
@@ -1995,8 +1995,8 @@ func (s *OpenAIGatewayService) recoverOpenAIRateLimitedAccountBeforeNoAvailable(
 	return nil
 }
 
-func (s *OpenAIGatewayService) recoverOpenAIRateLimitedSelectionBeforeNoAvailable(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool, cfg config.GatewaySchedulingConfig) (*AccountSelectionResult, bool) {
-	account := s.recoverOpenAIRateLimitedAccountBeforeNoAvailable(ctx, groupID, requestedModel, excludedIDs, requireCompact)
+func (s *OpenAIGatewayService) recoverOpenAIRateLimitedSelectionBeforeNoAvailable(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool, requiredCapability OpenAIEndpointCapability, cfg config.GatewaySchedulingConfig) (*AccountSelectionResult, bool) {
+	account := s.recoverOpenAIRateLimitedAccountBeforeNoAvailable(ctx, groupID, requestedModel, excludedIDs, requireCompact, requiredCapability)
 	if account == nil {
 		return nil, false
 	}
@@ -2223,7 +2223,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 		return nil, err
 	}
 	if len(accounts) == 0 {
-		if recovered, ok := s.recoverOpenAIRateLimitedSelectionBeforeNoAvailable(ctx, groupID, sessionHash, requestedModel, excludedIDs, requireCompact, cfg); ok {
+		if recovered, ok := s.recoverOpenAIRateLimitedSelectionBeforeNoAvailable(ctx, groupID, sessionHash, requestedModel, excludedIDs, requireCompact, requiredCapability, cfg); ok {
 			return recovered, nil
 		}
 		return nil, ErrNoAvailableAccounts
@@ -2306,7 +2306,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 	}
 
 	if len(candidates) == 0 {
-		if recovered, ok := s.recoverOpenAIRateLimitedSelectionBeforeNoAvailable(ctx, groupID, sessionHash, requestedModel, excludedIDs, requireCompact, cfg); ok {
+		if recovered, ok := s.recoverOpenAIRateLimitedSelectionBeforeNoAvailable(ctx, groupID, sessionHash, requestedModel, excludedIDs, requireCompact, requiredCapability, cfg); ok {
 			return recovered, nil
 		}
 		return nil, ErrNoAvailableAccounts
@@ -2478,7 +2478,7 @@ func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Contex
 		})
 	}
 
-	if recovered, ok := s.recoverOpenAIRateLimitedSelectionBeforeNoAvailable(ctx, groupID, sessionHash, requestedModel, excludedIDs, requireCompact, cfg); ok {
+	if recovered, ok := s.recoverOpenAIRateLimitedSelectionBeforeNoAvailable(ctx, groupID, sessionHash, requestedModel, excludedIDs, requireCompact, requiredCapability, cfg); ok {
 		return recovered, nil
 	}
 	if requireCompact && baseCandidateCount > 0 {

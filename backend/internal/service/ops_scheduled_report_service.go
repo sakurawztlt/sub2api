@@ -353,6 +353,22 @@ func (s *OpsScheduledReportService) runReport(ctx context.Context, report *opsSc
 	return attempts, nil
 }
 
+func opsScheduledReportDeliverySourceID(report *opsScheduledReport) string {
+	if report == nil {
+		return "scheduled_report"
+	}
+	parts := []string{
+		strings.TrimSpace(report.ReportType),
+		strings.TrimSpace(report.Name),
+		strings.TrimSpace(report.Schedule),
+	}
+	joined := strings.Trim(strings.Join(parts, ":"), ":")
+	if joined == "" {
+		return "scheduled_report"
+	}
+	return joined
+}
+
 func (s *OpsScheduledReportService) generateReportHTML(ctx context.Context, report *opsScheduledReport, now time.Time) (string, error) {
 	if s == nil || s.opsService == nil || report == nil {
 		return "", fmt.Errorf("service not initialized")
