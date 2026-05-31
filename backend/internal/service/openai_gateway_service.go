@@ -2487,6 +2487,9 @@ func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponseForAccount(st
 	if statusCode == 404 && account != nil && account.Type == AccountTypeOAuth {
 		return true
 	}
+	if account != nil && account.Type == AccountTypeOAuth && isOpenAICodexChatGPTModelUnsupportedError(statusCode, upstreamMsg, upstreamBody) {
+		return true
+	}
 	return false
 }
 
@@ -3936,6 +3939,9 @@ func openAIStreamFailedEventShouldFailover(payload []byte, message string) bool 
 	// SSE event with type=invalid_request_error) should bypass the
 	// "invalid_request" non-retryable marker below and trigger failover.
 	if isOpenAITransientProcessingError(http.StatusBadRequest, message, payload) {
+		return true
+	}
+	if isOpenAICodexChatGPTModelUnsupportedError(http.StatusBadRequest, message, payload) {
 		return true
 	}
 	code := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "response.error.code").String()))

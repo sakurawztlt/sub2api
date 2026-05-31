@@ -59,6 +59,19 @@ func TestIsUpstreamModelNotFoundError(t *testing.T) {
 	}
 }
 
+func TestIsOpenAICodexChatGPTModelUnsupportedError(t *testing.T) {
+	body := []byte(`{"error":{"message":"The 'gpt-5.4' model is not supported when using Codex with a ChatGPT account.","type":"invalid_request_error"},"type":"error"}`)
+	if !isOpenAICodexChatGPTModelUnsupportedError(http.StatusBadRequest, "", body) {
+		t.Fatal("expected exact Codex ChatGPT account unsupported-model error to match")
+	}
+	if isOpenAICodexChatGPTModelUnsupportedError(http.StatusBadRequest, "max_tokens is too large", []byte(`{"error":{"message":"max_tokens is too large"}}`)) {
+		t.Fatal("generic client 400 must not match account model unsupported rule")
+	}
+	if isOpenAICodexChatGPTModelUnsupportedError(http.StatusNotFound, "", body) {
+		t.Fatal("unsupported-model rule is intentionally scoped to HTTP 400")
+	}
+}
+
 func TestAntigravityModelNotFoundKeepsBare404Fallback(t *testing.T) {
 	if !isModelNotFoundError(http.StatusNotFound, []byte(`endpoint not found`)) {
 		t.Fatal("antigravity model-not-found helper should keep bare 404 fallback")

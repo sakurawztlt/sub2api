@@ -63,6 +63,42 @@ func TestForwardAsAnthropic_StreamEOFWithoutHeader_ReturnsBreakStickyFailover(t 
 	require.Empty(t, rec.Body.String(), "rec body should be empty — service didn't write SSE")
 }
 
+func TestForwardAsAnthropic_CodexChatGPTUnsupportedModelReturnsFailoverWithoutClientLeak(t *testing.T) {
+	t.Parallel()
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"claude-haiku-4-5-20251001","max_tokens":16,"messages":[{"role":"user","content":"hi"}],"stream":true}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstreamBody := `{"error":{"message":"The 'gpt-5.4' model is not supported when using Codex with a ChatGPT account.","type":"invalid_request_error"},"type":"error"}`
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
+	}}
+
+	svc := &OpenAIGatewayService{httpUpstream: upstream}
+	account := &Account{
+		ID: 1, Name: "openai-oauth", Platform: PlatformOpenAI,
+		Type: AccountTypeOAuth, Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token":       "oauth-token",
+			"chatgpt_account_id": "chatgpt-acc",
+		},
+	}
+
+	_, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "gpt-5.4")
+
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.True(t, errors.As(err, &failoverErr), "unsupported model on ChatGPT OAuth account should retry another account")
+	require.Equal(t, http.StatusBadRequest, failoverErr.StatusCode)
+	require.Empty(t, rec.Body.String(), "service must not leak upstream gpt-5.4/Codex wording to client before handler retry")
+}
+
 // scenario 2: 上游已发 meaningful content (text_delta) 之后 EOF →
 // headerWritten=true → 维持原 fmt.Errorf 不返 BreakSticky (客户已收部分 SSE)
 func TestForwardAsAnthropic_StreamEOFAfterHeader_NoBreakSticky(t *testing.T) {
