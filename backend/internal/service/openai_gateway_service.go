@@ -344,10 +344,18 @@ type OpenAIForwardResult struct {
 	// 是首个上游 SSE 字节, FirstMeaningfulMs 是首个 *有效* 业务事件. 大
 	// 上下文请求 ratio FirstMeaningfulMs/FirstTokenMs 大说明上游空转累计
 	// metadata 久. nil = 没见到 meaningful (timeout 路径).
-	FirstMeaningfulMs *int
-	ImageCount        int
-	ImageSize         string
-	HasToolCall       bool
+	FirstMeaningfulMs  *int
+	ImageCount         int
+	ImageSize          string
+	HasToolCall        bool
+	ImageInputSize     string
+	ImageOutputSize    string
+	ImageOutputSizes   []string
+	ImageSizeSource    string
+	ImageSizeBreakdown map[string]int
+
+	wsReplayInput       []json.RawMessage
+	wsReplayInputExists bool
 }
 
 type OpenAIWSRetryMetricsSnapshot struct {
