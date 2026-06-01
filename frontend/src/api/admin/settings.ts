@@ -370,6 +370,7 @@ export interface SystemSettings {
   login_agreement_mode: "modal" | "checkbox" | string;
   login_agreement_updated_at: string;
   login_agreement_documents: LoginAgreementDocument[];
+  default_proxy_id?: number | null;
   // Default settings
   default_balance: number;
   affiliate_rebate_rate: number;
@@ -627,6 +628,7 @@ export interface UpdateSettingsRequest {
   login_agreement_mode?: "modal" | "checkbox" | string;
   login_agreement_updated_at?: string;
   login_agreement_documents?: LoginAgreementDocument[];
+  default_proxy_id?: number | null;
   default_balance?: number;
   affiliate_rebate_rate?: number;
   affiliate_rebate_freeze_hours?: number;
