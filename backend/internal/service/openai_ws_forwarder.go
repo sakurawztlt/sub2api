@@ -2620,9 +2620,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			normalized = next
 		}
-		codexBridgeEnabled := s.cfg != nil &&
-			s.cfg.Gateway.CodexImageGenerationBridgeEnabled &&
-			isCodexCLI
+		apiKey := getAPIKeyFromContext(c)
+		imageGenerationAllowed := GroupAllowsImageGeneration(apiKeyGroup(apiKey))
+		codexBridgeEnabled := isCodexCLI && imageGenerationAllowed && s.isCodexImageGenerationBridgeEnabled(ctx, account, apiKey)
 		if codexBridgeEnabled {
 			payloadMap := make(map[string]any)
 			if err := json.Unmarshal(normalized, &payloadMap); err != nil {
@@ -2632,12 +2632,14 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if codexImageGenerationBridgeShouldFire(payloadMap) {
 				if ensureOpenAIResponsesImageGenerationTool(payloadMap) {
 					bridgeModified = true
+					logOpenAIWSModeInfo("ingress_ws_codex_image_tool_injected account_id=%d", account.ID)
 				}
 				if normalizeOpenAIResponsesImageGenerationTools(payloadMap) {
 					bridgeModified = true
 				}
 				if applyCodexImageGenerationBridgeInstructions(payloadMap) {
 					bridgeModified = true
+					logOpenAIWSModeInfo("ingress_ws_codex_image_bridge_instructions_added account_id=%d", account.ID)
 				}
 			}
 			if bridgeModified {
@@ -2657,7 +2659,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			normalized = next
 		}
 		imageIntent := IsImageGenerationIntent(openAIResponsesEndpoint, originalModel, normalized)
-		if imageIntent && !GroupAllowsImageGeneration(apiKeyGroup(getAPIKeyFromContext(c))) {
+		if imageIntent && !imageGenerationAllowed {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, ImageGenerationPermissionMessage(), nil)
 		}
 		imageBillingModel := ""
