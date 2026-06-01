@@ -210,6 +210,14 @@ func TestEstimateAnthropicCacheUsageForModel_UsesClaudeCacheFloors(t *testing.T)
 			wantCreation: 0,
 		},
 		{
+			name:         "opus_4_8_requires_4096_floor",
+			model:        "claude-opus-4-8",
+			total:        3000,
+			external:     3000,
+			wantInput:    3000,
+			wantCreation: 0,
+		},
+		{
 			name:         "short_external_prompt_suppresses_injected_prompt_cache_write",
 			model:        "claude-haiku-4-5-20251001",
 			total:        3436,

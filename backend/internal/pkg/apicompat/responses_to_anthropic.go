@@ -240,7 +240,8 @@ func estimateAnthropicCacheUsageForModel(total, cached int, model string, opts A
 func anthropicCacheMinTokensForModel(model string) int {
 	m := strings.ToLower(strings.TrimSpace(model))
 	switch {
-	case strings.Contains(m, "opus-4-7"),
+	case strings.Contains(m, "opus-4-8"),
+		strings.Contains(m, "opus-4-7"),
 		strings.Contains(m, "opus-4-6"),
 		strings.Contains(m, "opus-4-5"),
 		strings.Contains(m, "haiku-4-5"):
