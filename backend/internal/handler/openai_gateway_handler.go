@@ -710,11 +710,17 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	failedAccountIDs := make(map[int64]struct{})
 	sameAccountRetryCount := make(map[int64]int)
 	// 5/10 codex audit: per-reason switch count cap. 默认空 reason 走全局
-	// maxAccountSwitches=10. "first_meaningful_timeout" reason cap=1 避免
-	// 一个请求 timeout=120s × 10 次 = 20min, 客户体验差且烧账号多.
+	// maxAccountSwitches=10.
+	// 6/2 production triage: metadata-only first_meaningful_timeout on an
+	// ordinary single-turn request waited 120s, switched once, then waited
+	// another 120s. This reason means the selected upstream is already stuck
+	// before any visible Anthropic content, so cross-account retry usually
+	// just doubles client latency and burns another account. cap=0 means the
+	// first occurrence is exhausted immediately in this handler's pre-increment
+	// check below.
 	perReasonSwitchCount := make(map[string]int)
 	perReasonSwitchCap := map[string]int{
-		"first_meaningful_timeout":     1,
+		"first_meaningful_timeout":     0,
 		"stream_data_interval_timeout": 1, // 5/10 R38: data interval 同样限 1 次防烧账号
 		"buffered_total_timeout":       0, // 5/27 v0.5: 100s buffered 总超时不再换号重试, 避免 202/405s 放大
 		"buffered_empty_output":        1, // terminal 200 但无可见输出, 换号一次后放弃
