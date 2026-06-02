@@ -7,17 +7,27 @@ import (
 	"time"
 )
 
+const (
+	FallbackModeNone   = "none"
+	FallbackModeProxy  = "proxy"
+	FallbackModeDirect = "direct"
+)
+
 type Proxy struct {
-	ID        int64
-	Name      string
-	Protocol  string
-	Host      string
-	Port      int
-	Username  string
-	Password  string
-	Status    string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID             int64
+	Name           string
+	Protocol       string
+	Host           string
+	Port           int
+	Username       string
+	Password       string
+	Status         string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+	ExpiresAt      *time.Time
+	FallbackMode   string
+	BackupProxyID  *int64
+	ExpiryWarnDays int
 }
 
 func (p *Proxy) IsActive() bool {
@@ -29,6 +39,11 @@ func (p *Proxy) ActiveURL() string {
 		return ""
 	}
 	return p.URL()
+}
+
+// IsExpired 报告代理是否已过期（基于 expires_at，与 status 无关）。
+func (p *Proxy) IsExpired(now time.Time) bool {
+	return p.ExpiresAt != nil && !p.ExpiresAt.After(now)
 }
 
 func (p *Proxy) URL() string {
