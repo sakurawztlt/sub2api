@@ -32,7 +32,7 @@ func TestGatewayEnsureForwardErrorResponse_WritesFallbackWhenNotWritten(t *testi
 	// Keep customer-facing fallback neutral while still emitting protocol-correct
 	// stream termination when headers have already been written.
 	assert.Equal(t, "api_error", errorObj["type"])
-	assert.Equal(t, "Internal server error", errorObj["message"])
+	assert.Equal(t, anthropicTemporaryUnavailableMessage, errorObj["message"])
 }
 
 // Writer 已写后 ensureForwardErrorResponse 必须把错误以 SSE 形式追加，

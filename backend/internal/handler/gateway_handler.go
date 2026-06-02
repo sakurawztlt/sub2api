@@ -1625,7 +1625,7 @@ func (h *GatewayHandler) mapUpstreamError(statusCode int) (int, string, string) 
 	case 529:
 		return http.StatusServiceUnavailable, "overloaded_error", "Service overloaded. Please retry later."
 	case 500, 502, 503, 504:
-		return http.StatusBadGateway, "api_error", "The service is temporarily unavailable. Please retry."
+		return http.StatusBadGateway, "api_error", anthropicTemporaryUnavailableMessage
 	default:
 		return http.StatusBadGateway, "api_error", "Internal server error"
 	}
@@ -1670,7 +1670,7 @@ func (h *GatewayHandler) ensureForwardErrorResponse(c *gin.Context, streamStarte
 	if c.Writer.Written() {
 		streamStarted = true
 	}
-	h.handleStreamingAwareError(c, http.StatusBadGateway, "api_error", "Internal server error", streamStarted)
+	h.handleStreamingAwareError(c, http.StatusBadGateway, "api_error", anthropicTemporaryUnavailableMessage, streamStarted)
 	return true
 }
 

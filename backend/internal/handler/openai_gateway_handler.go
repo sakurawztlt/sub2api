@@ -1003,7 +1003,7 @@ func (h *OpenAIGatewayHandler) ensureAnthropicErrorResponse(c *gin.Context, stre
 	if c == nil || c.Writer == nil || c.Writer.Written() {
 		return false
 	}
-	h.anthropicStreamingAwareError(c, http.StatusBadGateway, "api_error", "Internal server error", streamStarted)
+	h.anthropicStreamingAwareError(c, http.StatusBadGateway, "api_error", anthropicTemporaryUnavailableMessage, streamStarted)
 	return true
 }
 
@@ -1840,6 +1840,8 @@ func (h *OpenAIGatewayHandler) handleFailoverExhaustedSimple(c *gin.Context, sta
 	h.handleStreamingAwareError(c, status, errType, errMsg, streamStarted)
 }
 
+const anthropicTemporaryUnavailableMessage = "The service is temporarily unavailable. Please retry."
+
 // mapUpstreamError — codex round 11am (2026-05-15): 客户响应中性化.
 // 之前 errType="upstream_error" 不是 Anthropic 协议合法值 (合法只有
 // invalid_request_error / authentication_error / permission_error /
@@ -1859,7 +1861,7 @@ func (h *OpenAIGatewayHandler) mapUpstreamError(statusCode int) (int, string, st
 	case 529:
 		return http.StatusServiceUnavailable, "overloaded_error", "Service overloaded. Please retry later."
 	case 500, 502, 503, 504:
-		return http.StatusBadGateway, "api_error", "The service is temporarily unavailable. Please retry."
+		return http.StatusBadGateway, "api_error", anthropicTemporaryUnavailableMessage
 	default:
 		return http.StatusBadGateway, "api_error", "Internal server error"
 	}
@@ -1907,7 +1909,7 @@ func (h *OpenAIGatewayHandler) ensureForwardErrorResponse(c *gin.Context, stream
 	if c.Writer.Written() {
 		streamStarted = true
 	}
-	h.handleStreamingAwareError(c, http.StatusBadGateway, "api_error", "Internal server error", streamStarted)
+	h.handleStreamingAwareError(c, http.StatusBadGateway, "api_error", anthropicTemporaryUnavailableMessage, streamStarted)
 	return true
 }
 

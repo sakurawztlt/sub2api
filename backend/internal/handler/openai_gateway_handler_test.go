@@ -156,7 +156,7 @@ func TestOpenAIEnsureForwardErrorResponse_WritesFallbackWhenNotWritten(t *testin
 	// Keep customer-facing fallback neutral while still emitting protocol-correct
 	// stream termination when headers have already been written.
 	assert.Equal(t, "api_error", errorObj["type"])
-	assert.Equal(t, "Internal server error", errorObj["message"])
+	assert.Equal(t, anthropicTemporaryUnavailableMessage, errorObj["message"])
 }
 
 // Writer 已写后 ensureForwardErrorResponse 必须仍然把错误信息以 SSE
@@ -201,7 +201,7 @@ func TestOpenAIEnsureForwardErrorResponse_ResponsesRouteAfterWrittenEmitsRespons
 	assert.Contains(t, body, "event: response.failed\n", "appended a Responses terminal event")
 	assert.Contains(t, body, `"type":"response.failed"`)
 	assert.Contains(t, body, `"code":"server_error"`)
-	assert.Contains(t, body, "Internal server error")
+	assert.Contains(t, body, anthropicTemporaryUnavailableMessage)
 }
 
 func TestShouldLogOpenAIForwardFailureAsWarn(t *testing.T) {
@@ -259,7 +259,7 @@ func TestOpenAIRecoverResponsesPanic_WritesFallbackResponse(t *testing.T) {
 	errorObj, ok := parsed["error"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "api_error", errorObj["type"])
-	assert.Equal(t, "Internal server error", errorObj["message"])
+	assert.Equal(t, anthropicTemporaryUnavailableMessage, errorObj["message"])
 }
 
 func TestOpenAIRecoverResponsesPanic_NoPanicNoWrite(t *testing.T) {
