@@ -250,6 +250,7 @@ type streamReqMeta struct {
 	Account               *Account
 	TimeToHeadersMs       int    // 从 httpUpstream.Do() 到 resp.Header 返回
 	MessagesCount         int    // gjson 数 body.messages 长度
+	ToolsCount            int    // gjson 数 body.tools 长度
 	PromptCacheKeySha256  string // sha256(promptCacheKey) hex 前 16 位
 	HasPreviousResponseID bool
 

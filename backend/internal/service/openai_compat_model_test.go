@@ -697,6 +697,35 @@ func TestEffectiveOpenAICompatBufferedPostContentIdleSeconds(t *testing.T) {
 	require.Equal(t, 45, effectiveOpenAICompatBufferedPostContentIdleSeconds(128*1024))
 }
 
+func TestEffectiveOpenAICompatStreamingFirstMeaningfulTimeout(t *testing.T) {
+	configured := 120 * time.Second
+	require.Equal(t, 60*time.Second, effectiveOpenAICompatStreamingFirstMeaningfulTimeout(
+		configured,
+		128*1024,
+		streamReqMeta{MessagesCount: 1},
+	))
+	require.Equal(t, configured, effectiveOpenAICompatStreamingFirstMeaningfulTimeout(
+		configured,
+		128*1024,
+		streamReqMeta{MessagesCount: 1, ToolsCount: 1},
+	))
+	require.Equal(t, configured, effectiveOpenAICompatStreamingFirstMeaningfulTimeout(
+		configured,
+		128*1024,
+		streamReqMeta{MessagesCount: 2},
+	))
+	require.Equal(t, configured, effectiveOpenAICompatStreamingFirstMeaningfulTimeout(
+		configured,
+		300*1024,
+		streamReqMeta{MessagesCount: 1},
+	))
+	require.Equal(t, 30*time.Second, effectiveOpenAICompatStreamingFirstMeaningfulTimeout(
+		30*time.Second,
+		128*1024,
+		streamReqMeta{MessagesCount: 1},
+	))
+}
+
 func TestForwardAsAnthropic_BufferedCreatedOnlyTriggersFirstMeaningfulTimeout(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

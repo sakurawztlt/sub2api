@@ -31,6 +31,7 @@ func computeStreamReqMeta(
 		Account:               account,
 		TimeToHeadersMs:       timeToHeadersMs,
 		MessagesCount:         countMessagesInBody(body),
+		ToolsCount:            countToolsInBody(body),
 		PromptCacheKeySha256:  shortSHA256(promptCacheKey),
 		HasPreviousResponseID: strings.TrimSpace(previousResponseID) != "",
 		HasTurnState:          strings.TrimSpace(turnState) != "",
@@ -47,6 +48,17 @@ func countMessagesInBody(body []byte) int {
 		return 0
 	}
 	return len(msgs.Array())
+}
+
+func countToolsInBody(body []byte) int {
+	if len(body) == 0 {
+		return 0
+	}
+	tools := gjson.GetBytes(body, "tools")
+	if !tools.IsArray() {
+		return 0
+	}
+	return len(tools.Array())
 }
 
 // shortSHA256 returns hex(sha256(s))[:16]. Empty in → empty out.

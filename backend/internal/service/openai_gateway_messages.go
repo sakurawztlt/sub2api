@@ -799,6 +799,8 @@ const (
 	openAICompatLargeBufferedBodyBytes           = 64 * 1024
 	openAICompatLargeBufferedTotalTimeoutSeconds = 360
 	openAICompatLargeBufferedPostContentIdleSec  = 45
+	openAICompatOrdinaryStreamingBodyBytes       = 256 * 1024
+	openAICompatOrdinaryFirstMeaningfulSeconds   = 60
 )
 
 func effectiveOpenAICompatBufferedTotalTimeoutSeconds(configuredSeconds int, inboundBodyLen int) int {
@@ -817,6 +819,23 @@ func effectiveOpenAICompatBufferedPostContentIdleSeconds(inboundBodyLen int) int
 		return openAICompatLargeBufferedPostContentIdleSec
 	}
 	return 0
+}
+
+func effectiveOpenAICompatStreamingFirstMeaningfulTimeout(configured time.Duration, inboundBodyLen int, meta streamReqMeta) time.Duration {
+	if configured <= 0 {
+		return configured
+	}
+	ordinaryTimeout := time.Duration(openAICompatOrdinaryFirstMeaningfulSeconds) * time.Second
+	if configured <= ordinaryTimeout {
+		return configured
+	}
+	if inboundBodyLen <= 0 || inboundBodyLen >= openAICompatOrdinaryStreamingBodyBytes {
+		return configured
+	}
+	if meta.MessagesCount > 1 || meta.ToolsCount > 0 || meta.HasPreviousResponseID || meta.HasTurnState {
+		return configured
+	}
+	return ordinaryTimeout
 }
 
 func positiveIntHeader(req *http.Request, name string) int {
@@ -1376,6 +1395,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	if s.cfg != nil && s.cfg.Gateway.FirstMeaningfulEventTimeoutSeconds > 0 {
 		firstMeaningfulTimeout = time.Duration(s.cfg.Gateway.FirstMeaningfulEventTimeoutSeconds) * time.Second
 	}
+	firstMeaningfulTimeout = effectiveOpenAICompatStreamingFirstMeaningfulTimeout(firstMeaningfulTimeout, inboundBodyLen, meta)
 	var firstMeaningfulDeadlineCh <-chan time.Time
 	var firstMeaningfulTimer *time.Timer
 	if firstMeaningfulTimeout > 0 {
@@ -2083,6 +2103,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				zap.String("account_type", accType),
 				zap.String("proxy_hash", meta.ProxyHash),
 				zap.Int("messages_count", meta.MessagesCount),
+				zap.Int("tools_count", meta.ToolsCount),
 				zap.String("prompt_cache_key_sha", meta.PromptCacheKeySha256),
 				zap.Bool("has_previous_response_id", meta.HasPreviousResponseID),
 				zap.Bool("has_turn_state", meta.HasTurnState),
