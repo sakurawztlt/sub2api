@@ -52,7 +52,7 @@ func TestCalculateOpenAI429ResetTime_5hExhausted(t *testing.T) {
 	headers.Set("x-codex-primary-used-percent", "50")
 	headers.Set("x-codex-primary-reset-after-seconds", "500000")
 	headers.Set("x-codex-primary-window-minutes", "10080") // 7 days
-	headers.Set("x-codex-secondary-used-percent", "0")
+	headers.Set("x-codex-secondary-used-percent", "100")
 	headers.Set("x-codex-secondary-reset-after-seconds", "3600") // 1 hour
 	headers.Set("x-codex-secondary-window-minutes", "300")       // 5 hours
 
@@ -111,7 +111,7 @@ func TestCalculateOpenAI429ResetTime_ReversedWindowOrder(t *testing.T) {
 
 	// Test when OpenAI sends primary as 5h and secondary as 7d (reversed)
 	headers := http.Header{}
-	headers.Set("x-codex-primary-used-percent", "0")           // 5h used%
+	headers.Set("x-codex-primary-used-percent", "100")         // 5h used%
 	headers.Set("x-codex-primary-reset-after-seconds", "3600") // 1 hour
 	headers.Set("x-codex-primary-window-minutes", "300")       // 5 hours - smaller!
 	headers.Set("x-codex-secondary-used-percent", "50")
@@ -161,7 +161,7 @@ func TestHandle429_OpenAIPersistsCodexSnapshotImmediately(t *testing.T) {
 	headers.Set("x-codex-primary-used-percent", "100")
 	headers.Set("x-codex-primary-reset-after-seconds", "604800")
 	headers.Set("x-codex-primary-window-minutes", "10080")
-	headers.Set("x-codex-secondary-used-percent", "0")
+	headers.Set("x-codex-secondary-used-percent", "100")
 	headers.Set("x-codex-secondary-reset-after-seconds", "18000")
 	headers.Set("x-codex-secondary-window-minutes", "300")
 
@@ -384,24 +384,18 @@ func TestHandle429_AnthropicPlatformUnaffected(t *testing.T) {
 }
 
 func TestCalculateOpenAI429ResetTime_UserProvidedScenario(t *testing.T) {
-	// This is the exact scenario from the user:
-	// codex_7d_used_percent: 100
-	// codex_7d_reset_after_seconds: 384607 (约4.5天后重置)
-	// codex_5h_used_percent: 3
-	// codex_5h_reset_after_seconds: 17369 (约4.8小时后重置)
+	// Official UI showed 5h remaining 0% and weekly remaining 34%.
+	// The raw headers observed online were primary=5h used 100 and secondary=7d used 66.
 
 	svc := &RateLimitService{}
 
-	// Simulate headers matching user's data
-	// Note: We need to map the canonical 5h/7d back to primary/secondary
-	// Based on typical OpenAI behavior: primary=7d (larger window), secondary=5h (smaller window)
 	headers := http.Header{}
 	headers.Set("x-codex-primary-used-percent", "100")
-	headers.Set("x-codex-primary-reset-after-seconds", "384607")
-	headers.Set("x-codex-primary-window-minutes", "10080") // 7 days = 10080 minutes
-	headers.Set("x-codex-secondary-used-percent", "3")
-	headers.Set("x-codex-secondary-reset-after-seconds", "17369")
-	headers.Set("x-codex-secondary-window-minutes", "300") // 5 hours = 300 minutes
+	headers.Set("x-codex-primary-reset-after-seconds", "4210")
+	headers.Set("x-codex-primary-window-minutes", "300")
+	headers.Set("x-codex-secondary-used-percent", "66")
+	headers.Set("x-codex-secondary-reset-after-seconds", "463536")
+	headers.Set("x-codex-secondary-window-minutes", "10080")
 
 	before := time.Now()
 	resetAt := svc.calculateOpenAI429ResetTime(headers)
@@ -411,8 +405,8 @@ func TestCalculateOpenAI429ResetTime_UserProvidedScenario(t *testing.T) {
 		t.Fatal("expected non-nil resetAt for user scenario")
 	}
 
-	// Should use the 7d reset time (384607 seconds) since 7d limit is exhausted (100%)
-	expectedDuration := 384607 * time.Second
+	// Should use the 5h reset time because the 5h window is exhausted.
+	expectedDuration := 4210 * time.Second
 	minExpected := before.Add(expectedDuration)
 	maxExpected := after.Add(expectedDuration)
 
@@ -420,16 +414,14 @@ func TestCalculateOpenAI429ResetTime_UserProvidedScenario(t *testing.T) {
 		t.Errorf("resetAt %v not in expected range [%v, %v]", resetAt, minExpected, maxExpected)
 	}
 
-	// Verify it's approximately 4.45 days (384607 seconds)
+	// Verify it is approximately 70 minutes, not the weekly reset.
 	duration := resetAt.Sub(before)
-	actualDays := duration.Hours() / 24.0
-
-	// 384607 / 86400 = ~4.45 days
-	if actualDays < 4.4 || actualDays > 4.5 {
-		t.Errorf("expected ~4.45 days, got %.2f days", actualDays)
+	actualMinutes := duration.Minutes()
+	if actualMinutes < 70 || actualMinutes > 71 {
+		t.Errorf("expected ~70 minutes, got %.2f minutes", actualMinutes)
 	}
 
-	t.Logf("User scenario: reset_at=%v, duration=%.2f days", resetAt, actualDays)
+	t.Logf("User scenario: reset_at=%v, duration=%.2f minutes", resetAt, actualMinutes)
 }
 
 func TestCalculateOpenAI429ResetTime_5MinFallbackWhenNoReset(t *testing.T) {
