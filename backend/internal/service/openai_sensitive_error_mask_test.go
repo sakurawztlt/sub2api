@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -56,7 +57,7 @@ func TestContainsOpenAICompatSensitiveBackendTerm(t *testing.T) {
 	}
 }
 
-func TestForwardAsAnthropic_SensitiveBackendErrorReturnsMasked502(t *testing.T) {
+func TestForwardAsAnthropic_SensitiveBackendErrorTriggersMaskedFailover(t *testing.T) {
 	t.Parallel()
 	gin.SetMode(gin.TestMode)
 
@@ -86,8 +87,11 @@ func TestForwardAsAnthropic_SensitiveBackendErrorReturnsMasked502(t *testing.T) 
 	_, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "gpt-5.4")
 
 	require.Error(t, err)
-	require.Equal(t, http.StatusBadGateway, rec.Code)
-	resp := strings.ToLower(rec.Body.String())
+	var failoverErr *UpstreamFailoverError
+	require.True(t, errors.As(err, &failoverErr))
+	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
+	resp := strings.ToLower(string(failoverErr.ResponseBody))
 	require.Contains(t, resp, strings.ToLower(openAICompatSensitiveBackendErrorMessage))
 	require.NotContains(t, resp, "gpt")
 	require.NotContains(t, resp, "codex")
@@ -95,6 +99,19 @@ func TestForwardAsAnthropic_SensitiveBackendErrorReturnsMasked502(t *testing.T) 
 	require.NotContains(t, resp, "5.4")
 	require.NotContains(t, strings.ToLower(err.Error()), "gpt")
 	require.NotContains(t, strings.ToLower(err.Error()), "codex")
+}
+
+func TestShouldFailoverOpenAIUpstreamResponseForAccount_SensitiveOAuthOnly(t *testing.T) {
+	t.Parallel()
+
+	svc := &OpenAIGatewayService{}
+	body := []byte(`{"error":{"message":"gpt-5.4 is unavailable for Codex"}}`)
+	oauth := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	apiKey := &Account{ID: 2, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+
+	require.True(t, svc.shouldFailoverOpenAIUpstreamResponseForAccount(http.StatusBadRequest, "", body, oauth))
+	require.False(t, svc.shouldFailoverOpenAIUpstreamResponseForAccount(http.StatusBadRequest, "", body, apiKey))
+	require.False(t, svc.shouldFailoverOpenAIUpstreamResponseForAccount(http.StatusBadRequest, "max_tokens: 128000 > 64000", nil, oauth))
 }
 
 func TestOpenAIStreamFailoverErrorMasksSensitiveBackendTerms(t *testing.T) {

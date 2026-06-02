@@ -216,9 +216,10 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 				Detail:             upstreamDetail,
 			})
 			s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, upstreamModel)
+			failoverStatus, failoverBody := sanitizeOpenAICompatFailoverError(resp.StatusCode, upstreamMsg, respBody, account)
 			return nil, &UpstreamFailoverError{
-				StatusCode:             resp.StatusCode,
-				ResponseBody:           respBody,
+				StatusCode:             failoverStatus,
+				ResponseBody:           failoverBody,
 				RetryableOnSameAccount: account.IsPoolMode() && (account.IsPoolModeRetryableStatus(resp.StatusCode) || isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
 			}
 		}

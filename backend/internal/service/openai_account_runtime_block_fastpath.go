@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -31,12 +32,27 @@ func isOpenAIAccount(account *Account) bool {
 	return account != nil && account.Platform == PlatformOpenAI
 }
 
+func isOpenAIOAuthSensitiveBackendError(account *Account, statusCode int, upstreamMsg string, responseBody []byte) bool {
+	if !isOpenAIOAuthAccount(account) || statusCode != http.StatusBadRequest {
+		return false
+	}
+	msg := strings.TrimSpace(upstreamMsg)
+	if msg == "" {
+		msg = extractUpstreamErrorMessage(responseBody)
+	}
+	return containsOpenAICompatSensitiveBackendTerm(msg, responseBody)
+}
+
 func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Context, account *Account, statusCode int, headers http.Header, responseBody []byte, requestedModel ...string) bool {
 	stateCtx, cancel := openAIAccountStateContext(ctx)
 	defer cancel()
 
 	if statusCode == http.StatusTooManyRequests {
 		s.markOpenAIOAuth429RateLimited(stateCtx, account, headers, responseBody)
+	}
+	if isOpenAIOAuthSensitiveBackendError(account, statusCode, "", responseBody) {
+		s.BlockAccountScheduling(account, time.Now().Add(openAIStopSchedulingBridgeCooldown), "sensitive_backend_400")
+		return true
 	}
 	if s == nil || account == nil || s.rateLimitService == nil {
 		return false

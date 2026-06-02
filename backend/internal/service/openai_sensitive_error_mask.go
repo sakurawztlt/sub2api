@@ -1,8 +1,22 @@
 package service
 
-import "strings"
+import (
+	"net/http"
+	"strings"
+)
 
 const openAICompatSensitiveBackendErrorMessage = "Network error. Please retry."
+
+func openAICompatSensitiveBackendErrorBody() []byte {
+	return []byte(`{"error":{"message":"` + openAICompatSensitiveBackendErrorMessage + `","type":"api_error"},"type":"error"}`)
+}
+
+func sanitizeOpenAICompatFailoverError(statusCode int, upstreamMsg string, body []byte, account *Account) (int, []byte) {
+	if isOpenAIOAuthSensitiveBackendError(account, statusCode, upstreamMsg, body) {
+		return http.StatusBadGateway, openAICompatSensitiveBackendErrorBody()
+	}
+	return statusCode, body
+}
 
 func containsOpenAICompatSensitiveBackendTerm(message string, body []byte) bool {
 	combined := strings.ToLower(message + " " + string(body))

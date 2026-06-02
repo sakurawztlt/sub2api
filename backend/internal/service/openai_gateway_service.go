@@ -2701,6 +2701,9 @@ func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponseForAccount(st
 	if s.shouldFailoverOpenAIUpstreamResponse(statusCode, upstreamMsg, upstreamBody) {
 		return true
 	}
+	if isOpenAIOAuthSensitiveBackendError(account, statusCode, upstreamMsg, upstreamBody) {
+		return true
+	}
 	if statusCode == 404 && account != nil && account.Type == AccountTypeOAuth {
 		return true
 	}
@@ -4821,9 +4824,10 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		Detail:             upstreamDetail,
 	})
 	if shouldDisable {
+		failoverStatus, failoverBody := sanitizeOpenAICompatFailoverError(resp.StatusCode, upstreamMsg, body, account)
 		return nil, &UpstreamFailoverError{
-			StatusCode:             resp.StatusCode,
-			ResponseBody:           body,
+			StatusCode:             failoverStatus,
+			ResponseBody:           failoverBody,
 			RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 		}
 	}
@@ -4901,6 +4905,9 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 		upstreamDetail = truncateString(string(body), maxBytes)
 	}
 	if containsOpenAICompatSensitiveBackendTerm(upstreamMsg, body) {
+		if isOpenAIOAuthSensitiveBackendError(account, resp.StatusCode, upstreamMsg, body) {
+			s.BlockAccountScheduling(account, time.Now().Add(openAIStopSchedulingBridgeCooldown), "sensitive_backend_400")
+		}
 		setOpsUpstreamError(c, http.StatusBadGateway, openAICompatSensitiveBackendErrorMessage, "")
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 			Platform:           account.Platform,
@@ -4985,9 +4992,10 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 		Detail:             upstreamDetail,
 	})
 	if shouldDisable {
+		failoverStatus, failoverBody := sanitizeOpenAICompatFailoverError(resp.StatusCode, upstreamMsg, body, account)
 		return nil, &UpstreamFailoverError{
-			StatusCode:             resp.StatusCode,
-			ResponseBody:           body,
+			StatusCode:             failoverStatus,
+			ResponseBody:           failoverBody,
 			RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 		}
 	}
