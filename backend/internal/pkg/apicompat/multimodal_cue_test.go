@@ -92,6 +92,8 @@ func TestRoundMultimodalCue_ImageUserTurn_AppendsCue(t *testing.T) {
 		"cue text must mention attached image; got: %q", last.Text)
 	assert.True(t, strings.Contains(last.Text, "refuse"),
 		"cue must explicitly tell GPT not to refuse; got: %q", last.Text)
+	assert.True(t, strings.Contains(last.Text, "OCR/transcription"),
+		"cue must frame visible-text probes as OCR/transcription; got: %q", last.Text)
 }
 
 // 负例: 纯文本 user turn → 不追加 cue
