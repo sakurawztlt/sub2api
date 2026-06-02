@@ -98,7 +98,25 @@ func TestResolveMessagesDispatchModel_GroupDefaultFallback(t *testing.T) {
 			name:           "no config at all: sonnet hard-coded default",
 			group:          &Group{},
 			requestedModel: "claude-sonnet-4-5",
-			want:           "gpt-5.3-codex",
+			want:           "gpt-5.4",
+		},
+		{
+			name: "sonnet 4 legacy codex family mapping is guarded",
+			group: &Group{
+				MessagesDispatchModelConfig: OpenAIMessagesDispatchModelConfig{
+					SonnetMappedModel: "gpt-5.3-codex",
+				},
+			},
+			requestedModel: "claude-sonnet-4-6",
+			want:           "gpt-5.4",
+		},
+		{
+			name: "sonnet 4 legacy codex group default is guarded",
+			group: &Group{
+				DefaultMappedModel: "gpt-5.3-codex",
+			},
+			requestedModel: "claude-sonnet-4-6",
+			want:           "gpt-5.4",
 		},
 		{
 			name:           "non-claude model returns empty",

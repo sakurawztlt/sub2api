@@ -8,12 +8,13 @@ import (
 )
 
 const (
-	openAIAccountStateUpdateTimeout       = 5 * time.Second
-	openAIOAuth429FallbackCooldown        = 5 * time.Second
-	openAIStopSchedulingBridgeCooldown    = 2 * time.Minute
-	openAIOAuth429StormWindow             = 10 * time.Second
-	openAIOAuth429StormThreshold          = 20
-	openAIOAuth429StormMaxAccountSwitches = 1
+	openAIAccountStateUpdateTimeout        = 5 * time.Second
+	openAIOAuth429FallbackCooldown         = 5 * time.Second
+	openAISensitiveBackendFallbackCooldown = 5 * time.Second
+	openAIStopSchedulingBridgeCooldown     = 2 * time.Minute
+	openAIOAuth429StormWindow              = 10 * time.Second
+	openAIOAuth429StormThreshold           = 20
+	openAIOAuth429StormMaxAccountSwitches  = 1
 )
 
 func openAIAccountStateContext(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -51,7 +52,7 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 		s.markOpenAIOAuth429RateLimited(stateCtx, account, headers, responseBody)
 	}
 	if isOpenAIOAuthSensitiveBackendError(account, statusCode, "", responseBody) {
-		s.BlockAccountScheduling(account, time.Now().Add(openAIStopSchedulingBridgeCooldown), "sensitive_backend_400")
+		s.BlockAccountScheduling(account, time.Now().Add(openAISensitiveBackendFallbackCooldown), "sensitive_backend_400")
 		return true
 	}
 	if s == nil || account == nil || s.rateLimitService == nil {

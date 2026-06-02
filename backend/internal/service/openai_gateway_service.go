@@ -4906,7 +4906,7 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 	}
 	if containsOpenAICompatSensitiveBackendTerm(upstreamMsg, body) {
 		if isOpenAIOAuthSensitiveBackendError(account, resp.StatusCode, upstreamMsg, body) {
-			s.BlockAccountScheduling(account, time.Now().Add(openAIStopSchedulingBridgeCooldown), "sensitive_backend_400")
+			s.BlockAccountScheduling(account, time.Now().Add(openAISensitiveBackendFallbackCooldown), "sensitive_backend_400")
 		}
 		setOpsUpstreamError(c, http.StatusBadGateway, openAICompatSensitiveBackendErrorMessage, "")
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{

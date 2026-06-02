@@ -6,12 +6,17 @@ const (
 	// codex round54 fu64 (2026-05-21) Phase 1: Opus 升 gpt-5.5 ($5/$0.5/$30
 	// per 1M, ~2x gpt-5.4 价). 跟 gcr ModelMap (claude-opus-4-7/4-6 → gpt-5.5)
 	// 同步; sub2api pricing 同 commit 加 gpt-5.5 fallback 不再静默走 gpt-5.4.
-	// Sonnet 4.x / Haiku 4.x 暂留 gpt-5.4 family (codex: 先灰度), 这边只动 Opus.
+	// Sonnet 4.x / Haiku 4.x 暂留 gpt-5.4 family. Backup logs on 2026-06-02
+	// showed ChatGPT OAuth accounts rejecting gpt-5.3-codex for Sonnet
+	// Messages dispatch, then the only account was temporarily blocked and
+	// cctest cascaded into 502/503. Keep Codex models available for direct
+	// OpenAI/Codex traffic, but do not use them as Claude Sonnet disguise
+	// defaults.
 	// 客户绕过 gcr 直打 sub2api 的 Anthropic-shape 请求也走相同路径.
 	// Group.MessagesDispatchModelConfig.OpusMappedModel / ExactModelMappings
 	// 仍优先 (DB 可显式覆盖此默认值).
 	defaultOpenAIMessagesDispatchOpusMappedModel   = "gpt-5.5"
-	defaultOpenAIMessagesDispatchSonnetMappedModel = "gpt-5.3-codex"
+	defaultOpenAIMessagesDispatchSonnetMappedModel = "gpt-5.4"
 	defaultOpenAIMessagesDispatchHaikuMappedModel  = "gpt-5.4-mini"
 )
 
@@ -62,6 +67,24 @@ func claudeMessagesDispatchFamily(model string) string {
 	}
 }
 
+func isClaudeSonnetFourMessagesModel(model string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	return strings.HasPrefix(normalized, "claude-sonnet-4")
+}
+
+func guardSonnetMessagesDispatchMappedModel(requestedModel, mappedModel string) string {
+	mappedModel = strings.TrimSpace(mappedModel)
+	if !isClaudeSonnetFourMessagesModel(requestedModel) {
+		return mappedModel
+	}
+	switch strings.ToLower(mappedModel) {
+	case "gpt-5.3-codex", "gpt-5.3-codex-high", "gpt-5.3-codex-xhigh", "gpt-5.3":
+		return defaultOpenAIMessagesDispatchSonnetMappedModel
+	default:
+		return mappedModel
+	}
+}
+
 // ResolveMessagesDispatchModel returns the OpenAI Responses-API model this
 // group should dispatch an Anthropic-shaped request to.
 //
@@ -108,10 +131,10 @@ func (g *Group) ResolveMessagesDispatchModel(requestedModel string) string {
 		return defaultOpenAIMessagesDispatchOpusMappedModel
 	case "sonnet":
 		if mappedModel := strings.TrimSpace(cfg.SonnetMappedModel); mappedModel != "" {
-			return mappedModel
+			return guardSonnetMessagesDispatchMappedModel(requestedModel, mappedModel)
 		}
 		if groupDefault != "" {
-			return groupDefault
+			return guardSonnetMessagesDispatchMappedModel(requestedModel, groupDefault)
 		}
 		return defaultOpenAIMessagesDispatchSonnetMappedModel
 	case "haiku":

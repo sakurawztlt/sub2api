@@ -26,6 +26,22 @@ func TestOpenAI429FastPath_MarksOAuthAccountCoolingDown(t *testing.T) {
 	require.False(t, svc.isOpenAIAccountRuntimeBlocked(apiKeyAccount))
 }
 
+func TestOpenAISensitiveBackend400_UsesShortRuntimeCooldown(t *testing.T) {
+	svc := &OpenAIGatewayService{}
+	account := &Account{ID: 48, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	body := []byte(`{"error":{"message":"The 'gpt-5.3-codex' model is not supported when using Codex with a ChatGPT account."}}`)
+
+	shouldDisable := svc.handleOpenAIAccountUpstreamError(context.Background(), account, http.StatusBadRequest, http.Header{}, body)
+
+	require.True(t, shouldDisable)
+	value, ok := svc.openaiAccountRuntimeBlockUntil.Load(account.ID)
+	require.True(t, ok)
+	actualUntil, ok := value.(time.Time)
+	require.True(t, ok)
+	require.WithinDuration(t, time.Now().Add(openAISensitiveBackendFallbackCooldown), actualUntil, time.Second)
+	require.True(t, actualUntil.Before(time.Now().Add(openAIStopSchedulingBridgeCooldown/2)))
+}
+
 func TestOpenAIRuntimeBlock_AppliesToOpenAIAPIKeyWhenRateLimitServiceStopsScheduling(t *testing.T) {
 	svc := &OpenAIGatewayService{}
 	account := &Account{ID: 44, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
