@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
@@ -266,7 +267,7 @@ func TrafficCaptureMiddleware(svc *service.TrafficCaptureService) gin.HandlerFun
 				entry.OutboundBody = []byte(raw)
 			}
 		}
-		entry.RequestID = extractFirstHeader(c, "X-Oneapi-Request-Id", "X-Newapi-Request-Id", "X-Request-Id")
+		entry.RequestID = extractRequestIDForTrafficCapture(c)
 		if v, ok := c.Get(TrafficCaptureUpstreamReqIDKey); ok {
 			if s, ok := v.(string); ok {
 				entry.UpstreamRequestID = s
@@ -367,6 +368,24 @@ func extractFirstHeader(c *gin.Context, keys ...string) string {
 		if v := strings.TrimSpace(c.Request.Header.Get(k)); v != "" {
 			return v
 		}
+	}
+	return ""
+}
+
+func extractRequestIDForTrafficCapture(c *gin.Context) string {
+	if c == nil || c.Request == nil {
+		return ""
+	}
+	if id := extractFirstHeader(c,
+		"X-Oneapi-Request-Id",
+		"X-Newapi-Request-Id",
+		"X-GCR-Request-Id",
+		"X-Request-Id",
+	); id != "" {
+		return id
+	}
+	if id, _ := c.Request.Context().Value(ctxkey.ClientRequestID).(string); strings.TrimSpace(id) != "" {
+		return strings.TrimSpace(id)
 	}
 	return ""
 }

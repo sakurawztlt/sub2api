@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
@@ -147,6 +148,27 @@ func TestTrafficCaptureMiddleware_ContextHelpers(t *testing.T) {
 	// 我们这里不让它 persist, 只确认 200 返回 + middleware 路径走通.
 	// 真 persist 测试见 service_test 那边.
 	_ = svc.Close(context.Background())
+}
+
+func TestTrafficCaptureRequestID_AdoptsGCRHeader(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest("POST", "/v1/messages", nil)
+	c.Request.Header.Set("X-GCR-Request-Id", "gcr-local-test123")
+
+	if got := extractRequestIDForTrafficCapture(c); got != "gcr-local-test123" {
+		t.Fatalf("request id = %q, want X-GCR-Request-Id", got)
+	}
+}
+
+func TestTrafficCaptureRequestID_FallsBackToClientRequestIDContext(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	req := httptest.NewRequest("POST", "/v1/messages", nil)
+	req = req.WithContext(context.WithValue(req.Context(), ctxkey.ClientRequestID, "client-ctx-id"))
+	c.Request = req
+
+	if got := extractRequestIDForTrafficCapture(c); got != "client-ctx-id" {
+		t.Fatalf("request id = %q, want context client request id", got)
+	}
 }
 
 func TestTrafficCaptureMiddleware_ResponseTotalBytesAccumulated(t *testing.T) {
