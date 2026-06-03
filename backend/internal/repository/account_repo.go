@@ -1168,6 +1168,7 @@ func (r *accountRepository) SetOverloaded(ctx context.Context, id int64, until t
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
 		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue overload failed: account=%d err=%v", id, err)
 	}
+	r.syncSchedulerAccountSnapshot(ctx, id)
 	return nil
 }
 
@@ -1206,6 +1207,7 @@ func (r *accountRepository) ClearTempUnschedulable(ctx context.Context, id int64
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
 		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue clear temp unschedulable failed: account=%d err=%v", id, err)
 	}
+	r.syncSchedulerAccountSnapshot(ctx, id)
 	return nil
 }
 
@@ -1271,6 +1273,7 @@ func (r *accountRepository) ClearModelRateLimits(ctx context.Context, id int64) 
 	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
 		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue clear model rate limit failed: account=%d err=%v", id, err)
 	}
+	r.syncSchedulerAccountSnapshot(ctx, id)
 	return nil
 }
 
