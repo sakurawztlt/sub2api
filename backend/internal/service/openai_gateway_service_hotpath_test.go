@@ -120,7 +120,7 @@ func TestExtractOpenAIReasoningEffortFromBody(t *testing.T) {
 	}
 }
 
-func TestGetOpenAIRequestBodyMap_UsesContextCache(t *testing.T) {
+func TestGetOpenAIRequestBodyMap_IgnoresContextCache(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -128,9 +128,10 @@ func TestGetOpenAIRequestBodyMap_UsesContextCache(t *testing.T) {
 	cached := map[string]any{"model": "cached-model", "stream": true}
 	c.Set(OpenAIParsedRequestBodyKey, cached)
 
-	got, err := getOpenAIRequestBodyMap(c, []byte(`{invalid-json`))
+	got, err := getOpenAIRequestBodyMap(c, []byte(`{"model":"fresh-model","stream":false}`))
 	require.NoError(t, err)
-	require.Equal(t, cached, got)
+	require.Equal(t, "fresh-model", got["model"])
+	require.Equal(t, false, got["stream"])
 }
 
 func TestGetOpenAIRequestBodyMap_ParseErrorWithoutCache(t *testing.T) {
