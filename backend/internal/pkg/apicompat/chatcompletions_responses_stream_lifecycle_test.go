@@ -45,40 +45,6 @@ func TestStream_ReasoningOpensItemBeforeDelta(t *testing.T) {
 	}
 }
 
-// TestStream_ToolCallLifecycleComplete guards that a tool call is fully closed
-// (function_call_arguments.done + output_item.done with full arguments), which
-// codex needs to execute the call.
-func TestStream_ToolCallLifecycleComplete(t *testing.T) {
-	events := collectStreamEvents(t, []string{
-		`{"choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"plan"}}]}`,
-		`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"exec","arguments":""}}]}}]}`,
-		`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"cmd\":\"ls\"}"}}]}}]}`,
-		`{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`,
-	})
-
-	var sawAdded, sawArgsDone, sawItemDone bool
-	for _, e := range events {
-		switch e.Type {
-		case "response.output_item.added":
-			if e.Item != nil && e.Item.Type == "function_call" {
-				sawAdded = true
-			}
-		case "response.function_call_arguments.done":
-			sawArgsDone = true
-			require.Equal(t, `{"cmd":"ls"}`, e.Arguments)
-		case "response.output_item.done":
-			if e.Item != nil && e.Item.Type == "function_call" {
-				sawItemDone = true
-				require.Equal(t, `{"cmd":"ls"}`, e.Item.Arguments)
-				require.Equal(t, "call_a", e.Item.CallID)
-			}
-		}
-	}
-	require.True(t, sawAdded, "function_call output_item.added missing")
-	require.True(t, sawArgsDone, "function_call_arguments.done missing")
-	require.True(t, sawItemDone, "function_call output_item.done missing")
-}
-
 func TestStream_ReasoningOnlySynthesizesVisibleText(t *testing.T) {
 	events := collectStreamEvents(t, []string{
 		`{"choices":[{"index":0,"delta":{"role":"assistant","content":null,"reasoning_content":""}}]}`,
@@ -177,6 +143,40 @@ func TestStream_ReasoningThenToolCallDoesNotSynthesizeVisibleText(t *testing.T) 
 			require.Equal(t, "function_call", e.Response.Output[1].Type)
 		}
 	}
+}
+
+// TestStream_ToolCallLifecycleComplete guards that a tool call is fully closed
+// (function_call_arguments.done + output_item.done with full arguments), which
+// codex needs to execute the call.
+func TestStream_ToolCallLifecycleComplete(t *testing.T) {
+	events := collectStreamEvents(t, []string{
+		`{"choices":[{"index":0,"delta":{"role":"assistant","reasoning_content":"plan"}}]}`,
+		`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_a","type":"function","function":{"name":"exec","arguments":""}}]}}]}`,
+		`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"cmd\":\"ls\"}"}}]}}]}`,
+		`{"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`,
+	})
+
+	var sawAdded, sawArgsDone, sawItemDone bool
+	for _, e := range events {
+		switch e.Type {
+		case "response.output_item.added":
+			if e.Item != nil && e.Item.Type == "function_call" {
+				sawAdded = true
+			}
+		case "response.function_call_arguments.done":
+			sawArgsDone = true
+			require.Equal(t, `{"cmd":"ls"}`, e.Arguments)
+		case "response.output_item.done":
+			if e.Item != nil && e.Item.Type == "function_call" {
+				sawItemDone = true
+				require.Equal(t, `{"cmd":"ls"}`, e.Item.Arguments)
+				require.Equal(t, "call_a", e.Item.CallID)
+			}
+		}
+	}
+	require.True(t, sawAdded, "function_call output_item.added missing")
+	require.True(t, sawArgsDone, "function_call_arguments.done missing")
+	require.True(t, sawItemDone, "function_call output_item.done missing")
 }
 
 // TestStream_SSEWireComplete drives the full stream through SSE encoding and

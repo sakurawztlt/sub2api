@@ -525,6 +525,9 @@ func chatMessageToResponsesOutput(message ChatMessage) []ResponsesOutput {
 	}
 
 	text := chatMessageContentText(message.Content)
+	if text == "" && strings.TrimSpace(message.ReasoningContent) != "" && len(message.ToolCalls) == 0 {
+		text = message.ReasoningContent
+	}
 	if text != "" || len(message.ToolCalls) == 0 {
 		outputs = append(outputs, ResponsesOutput{
 			Type: "message",
