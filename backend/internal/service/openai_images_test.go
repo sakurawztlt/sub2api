@@ -3,7 +3,6 @@ package service
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"

@@ -6040,6 +6040,29 @@ func writeAnthropicPassthroughResponseHeaders(dst http.Header, src http.Header, 
 	}
 }
 
+// ApplyBedrockCCCompat 应用 Bedrock CC 兼容转换（渠道级模型映射后调用）。
+func (s *GatewayService) ApplyBedrockCCCompat(ctx context.Context, body []byte, model string, account *Account, groupID *int64) []byte {
+	if !s.isBedrockCCCompatEnabled(ctx, account, groupID) {
+		return body
+	}
+	body = sanitizeBedrockCCFields(body)
+	body = sanitizeBedrockThinking(body, model)
+	body = sanitizeBedrockToolUseIDs(body)
+	body = sanitizeBedrockCCBetaTokens(body, model)
+	return body
+}
+
+func (s *GatewayService) isBedrockCCCompatEnabled(ctx context.Context, account *Account, groupID *int64) bool {
+	if account == nil || groupID == nil || s == nil || s.channelService == nil {
+		return false
+	}
+	ch, err := s.channelService.GetChannelForGroup(ctx, *groupID)
+	if err != nil || ch == nil {
+		return false
+	}
+	return ch.IsBedrockCCCompatEnabled(account.Platform)
+}
+
 // forwardBedrock 转发请求到 AWS Bedrock
 func (s *GatewayService) forwardBedrock(
 	ctx context.Context,

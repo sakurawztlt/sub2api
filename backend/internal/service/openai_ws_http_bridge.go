@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -21,13 +20,6 @@ const (
 	openAIWSHTTPBridgeThresholdBytesDefault int64 = 15 * 1024 * 1024
 	openAIWSHTTPBridgeErrorBodyLimitBytes         = 64 * 1024
 )
-
-func ResolveOpenAIWSClientReadLimitBytes(cfg *config.Config) int64 {
-	if cfg == nil || cfg.Gateway.OpenAIWS.ClientReadLimitBytes <= 0 {
-		return openAIWSClientReadLimitBytesDefault
-	}
-	return cfg.Gateway.OpenAIWS.ClientReadLimitBytes
-}
 
 func (s *OpenAIGatewayService) openAIWSHTTPBridgeEnabled() bool {
 	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.HTTPBridgeEnabled

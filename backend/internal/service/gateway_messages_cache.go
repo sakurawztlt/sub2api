@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
@@ -8,13 +9,9 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// stripMessageCacheControl 移除 $.messages[*].content[*].cache_control。
-// 与 Parrot _strip_message_cache_control 语义一致。
-//
-// 为什么必须整体清空：客户端（特别是 Claude Code）经常把 cache_control 打在
-// "当前最后一条 user message" 上；下一轮对话 messages 追加后，原本的最后一条
-// 变成中间某条，cache_control 还挂着就导致"前缀签名变化"，破坏缓存命中。
-// 统一由代理重新打断点（addMessageCacheBreakpoints）才能在多轮间稳定。
+// stripMessageCacheControl removes $.messages[*].content[*].cache_control.
+// The proxy re-adds stable breakpoints to avoid stale client-side markers
+// changing the prefix signature across turns.
 func stripMessageCacheControl(body []byte) []byte {
 	messages := gjson.GetBytes(body, "messages")
 	if !messages.IsArray() {
@@ -44,18 +41,7 @@ func stripMessageCacheControl(body []byte) []byte {
 	return body
 }
 
-// addMessageCacheBreakpoints 在 messages 上注入两个稳定的 cache 断点：
-//  1. 最后一条 message
-//  2. 当 messages 数量 ≥ 4 时，倒数第二个 role=user 的 message
-//
-// 与 Parrot add_cache_breakpoints 一致。两个断点 + system prompt block 的断点
-// + tools[-1] 的断点共同构成最多 4 个断点（Anthropic 上限）。
-//
-// cache_control ttl 策略：
-//   - 若目标 block 已有 cache_control.ttl → 不覆盖
-//   - 否则写入 {"type":"ephemeral","ttl": claude.DefaultCacheControlTTL}
-//
-// 调用前应先 stripMessageCacheControl 以保证幂等和稳定。
+// addMessageCacheBreakpoints injects stable cache breakpoints into messages.
 func addMessageCacheBreakpoints(body []byte) []byte {
 	messages := gjson.GetBytes(body, "messages")
 	if !messages.IsArray() {
@@ -85,11 +71,24 @@ func addMessageCacheBreakpoints(body []byte) []byte {
 	return body
 }
 
-// injectCacheControlOnLastContentBlock 把 cache_control 断点打在 messages[idx]
-// 的最后一个 content block 上。若 content 是 string，先升级成单块 text 数组
-// （对齐 Parrot _inject_cache_on_msg 的行为）。
-//
-// msg 是调用方已持有的 gjson.Result 快照，用于省一次 GetBytes。
+func (s *GatewayService) rewriteMessageCacheControlIfEnabled(ctx context.Context, body []byte) []byte {
+	if s == nil || !s.isRewriteMessageCacheControlEnabled(ctx) {
+		return body
+	}
+	body = stripMessageCacheControl(body)
+	return addMessageCacheBreakpoints(body)
+}
+
+func (s *GatewayService) isRewriteMessageCacheControlEnabled(ctx context.Context) bool {
+	if s == nil {
+		return false
+	}
+	if s.settingService != nil {
+		return s.settingService.IsRewriteMessageCacheControlEnabled(ctx)
+	}
+	return false
+}
+
 func injectCacheControlOnLastContentBlock(body []byte, idx int, msg *gjson.Result) []byte {
 	content := msg.Get("content")
 
@@ -134,8 +133,6 @@ func injectCacheControlOnLastContentBlock(body []byte, idx int, msg *gjson.Resul
 	return body
 }
 
-// mustJSONString 把一个 Go string 序列化为合法 JSON string（含引号），
-// 用于 sjson.SetRawBytes 场景下手工拼 JSON。
 func mustJSONString(s string) string {
 	return fmt.Sprintf("%q", s)
 }

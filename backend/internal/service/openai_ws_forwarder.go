@@ -2058,6 +2058,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	}
 
 	usage := &OpenAIUsage{}
+	imageCounter := newOpenAIImageOutputCounter()
 	var firstTokenMs *int
 	responseID := ""
 	var finalResponse []byte
@@ -2239,6 +2240,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		if openAIWSEventShouldParseUsage(eventType) {
 			parseOpenAIWSResponseUsageFromCompletedEvent(message, usage)
 		}
+		imageCounter.AddSSEData(message)
 
 		if eventType == "error" {
 			errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(message)
@@ -2406,7 +2408,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		clientDisconnected,
 	)
 
-	return &OpenAIForwardResult{
+	result := &OpenAIForwardResult{
 		RequestID:       responseID,
 		Usage:           *usage,
 		Model:           originalModel,
@@ -2418,7 +2420,24 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		ResponseHeaders: lease.HandshakeHeaders(),
 		Duration:        time.Since(startTime),
 		FirstTokenMs:    firstTokenMs,
-	}, nil
+	}
+	if imageCount := imageCounter.Count(); imageCount > 0 {
+		imageBillingModel := ""
+		imageSizeTier := ""
+		imageInputSize := ""
+		if imageCfg, imageCfgErr := resolveOpenAIResponsesImageBillingConfigDetailed(reqBody, mappedModel); imageCfgErr == nil {
+			imageBillingModel = imageCfg.Model
+			imageSizeTier = imageCfg.SizeTier
+			imageInputSize = imageCfg.InputSize
+		}
+		imageBillingModel, imageSizeTier = ensureOpenAIImageBillingDefaults(imageCount, imageBillingModel, imageSizeTier)
+		result.ImageCount = imageCount
+		result.ImageSize = imageSizeTier
+		result.ImageInputSize = imageInputSize
+		result.ImageOutputSizes = imageCounter.Sizes()
+		result.BillingModel = imageBillingModel
+	}
+	return result, nil
 }
 
 // ProxyResponsesWebSocketFromClient 处理客户端入站 WebSocket（OpenAI Responses WS Mode）并转发到上游。
@@ -3680,14 +3699,17 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					truncateOpenAIWSLogValue(pingErr.Error(), openAIWSLogValueMaxLen),
 				)
 				if forcePreferredConn {
-					// 携带 function_call_output 的请求不能丢弃 previous_response_id：
-					// 上游 API 需要 response chain 来匹配 tool_result 与之前的 tool_use，
-					// 除非 replay input 已经包含与每个 tool_result 匹配的 tool_use 上下文。
-					hasFCOutput := hasFunctionCallOutput
+					// 携带 function_call_output 的请求只有在 replay input 已经补齐对应
+					// function_call 上下文时，才能丢弃 previous_response_id 后换连重放；
+					// 否则上游会因找不到 tool call 锚点返回 "No tool call found..."。
+					hasFCOutput := hasFunctionCallOutput ||
+						(currentTurnReplayInputExists && openAIWSRawItemsHasFunctionCallOutput(currentTurnReplayInput))
 					hasReplayToolContext := hasFCOutput &&
 						currentTurnReplayInputExists &&
 						openAIWSRawItemsHaveToolCallContextForOutputs(currentTurnReplayInput)
-					if !turnPrevRecoveryTried && currentPreviousResponseID != "" && (!hasFCOutput || hasReplayToolContext) {
+					canDropPreviousResponseIDForRecovery := !hasFCOutput ||
+						(hasReplayToolContext && !toolSignals.HasToolCallContext)
+					if !turnPrevRecoveryTried && currentPreviousResponseID != "" && canDropPreviousResponseIDForRecovery {
 						updatedPayload, removed, dropErr := dropPreviousResponseIDFromRawPayload(currentPayload)
 						if dropErr != nil || !removed {
 							reason := "not_removed"

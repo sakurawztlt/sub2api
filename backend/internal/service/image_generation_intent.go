@@ -151,24 +151,6 @@ func openAIJSONToolChoiceSelectsImageGeneration(choice gjson.Result) bool {
 	return false
 }
 
-func openAIAnyToolChoiceSelectsImageGeneration(choice any) bool {
-	switch v := choice.(type) {
-	case string:
-		return strings.TrimSpace(v) == "image_generation"
-	case map[string]any:
-		if strings.TrimSpace(firstNonEmptyString(v["type"])) == "image_generation" {
-			return true
-		}
-		if tool, ok := v["tool"].(map[string]any); ok && strings.TrimSpace(firstNonEmptyString(tool["type"])) == "image_generation" {
-			return true
-		}
-		if fn, ok := v["function"].(map[string]any); ok && strings.TrimSpace(firstNonEmptyString(fn["name"])) == "image_generation" {
-			return true
-		}
-	}
-	return false
-}
-
 func getAPIKeyFromContext(c interface{ Get(string) (any, bool) }) *APIKey {
 	if c == nil {
 		return nil
@@ -226,7 +208,7 @@ func resolveOpenAIResponsesImageBillingConfigDetailed(reqBody map[string]any, fa
 	if imageModel == "" {
 		imageModel = strings.TrimSpace(fallbackModel)
 	}
-	sizeTier := normalizeOpenAIImageSizeTier(imageSize)
+	sizeTier := normalizeOpenAIImageSizeTier(imageSize, "")
 	return OpenAIResponsesImageBillingConfig{
 		Model:     imageModel,
 		SizeTier:  sizeTier,
@@ -277,9 +259,24 @@ func resolveOpenAIResponsesImageBillingConfigDetailedFromBody(body []byte, fallb
 	}
 	return OpenAIResponsesImageBillingConfig{
 		Model:     imageModel,
-		SizeTier:  normalizeOpenAIImageSizeTier(imageSize),
+		SizeTier:  normalizeOpenAIImageSizeTier(imageSize, ""),
 		InputSize: imageSize,
 	}, nil
+}
+
+func ensureOpenAIImageBillingDefaults(imageCount int, imageBillingModel, imageSizeTier string) (string, string) {
+	if imageCount <= 0 {
+		return imageBillingModel, imageSizeTier
+	}
+	imageBillingModel = strings.TrimSpace(imageBillingModel)
+	imageSizeTier = strings.TrimSpace(imageSizeTier)
+	if imageBillingModel == "" {
+		imageBillingModel = "gpt-image-2"
+	}
+	if imageSizeTier == "" {
+		imageSizeTier = normalizeOpenAIImageSizeTier("", "")
+	}
+	return imageBillingModel, imageSizeTier
 }
 
 func isOpenAIImageBillingModelAlias(model string) bool {

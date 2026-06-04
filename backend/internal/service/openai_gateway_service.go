@@ -583,18 +583,8 @@ func (s *OpenAIGatewayService) ResolveChannelMappingAndRestrict(ctx context.Cont
 }
 
 func (s *OpenAIGatewayService) isCodexImageGenerationBridgeEnabled(ctx context.Context, account *Account, apiKey *APIKey) bool {
-	if account != nil {
-		if override := account.CodexImageGenerationBridgeOverride(); override != nil {
-			return *override
-		}
-	}
-	if s != nil && s.channelService != nil && apiKey != nil && apiKey.GroupID != nil {
-		ch, err := s.channelService.GetChannelForGroup(ctx, *apiKey.GroupID)
-		if err != nil {
-			slog.Warn("failed to resolve codex image generation bridge channel override", "group_id", *apiKey.GroupID, "error", err)
-		} else if override := ch.CodexImageGenerationBridgeOverride(PlatformOpenAI); override != nil {
-			return *override
-		}
+	if account != nil && resolveAccountExtraBool(account.Extra, "codex_image_generation_bridge") {
+		return true
 	}
 	return s != nil && s.cfg != nil && s.cfg.Gateway.CodexImageGenerationBridgeEnabled
 }
@@ -2814,6 +2804,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	requestView := newOpenAIRequestView(body)
 	reqModel, reqStream, promptCacheKey := requestView.Model, requestView.Stream, requestView.PromptCacheKey
 	originalModel := reqModel
+	compatMessagesBridge := isOpenAICompatMessagesBridgeBody(body)
+	setOpenAICompatMessagesBridgeContext(c, compatMessagesBridge)
 
 	isCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) || (s.cfg != nil && s.cfg.Gateway.ForceCodexCLI)
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
@@ -3255,9 +3247,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 	}
 	if requestBodyChanged && account.Type == AccountTypeOAuth {
-		body, err = restoreResponsesTextFormatRaw(body, textFormatRaw)
-		if err != nil {
-			return nil, fmt.Errorf("restore text.format after request transform: %w", err)
+		var formatErr error
+		body, formatErr = restoreResponsesTextFormatRaw(body, textFormatRaw)
+		if formatErr != nil {
+			return nil, fmt.Errorf("restore text.format after request transform: %w", formatErr)
 		}
 		requestView = newOpenAIRequestView(body)
 	}
@@ -3606,6 +3599,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		// Handle normal response
 		var usage *OpenAIUsage
 		var firstTokenMs *int
+		imageCount := 0
+		var imageOutputSizes []string
 		if reqStream {
 			streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, upstreamModel)
 			if err != nil {
@@ -3613,11 +3608,16 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 			usage = streamResult.usage
 			firstTokenMs = streamResult.firstTokenMs
+			imageCount = streamResult.imageCount
+			imageOutputSizes = streamResult.imageOutputSizes
 		} else {
-			usage, err = s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, upstreamModel)
+			nonStreamResult, err := s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, upstreamModel)
 			if err != nil {
 				return nil, err
 			}
+			usage = nonStreamResult.usage
+			imageCount = nonStreamResult.imageCount
+			imageOutputSizes = nonStreamResult.imageOutputSizes
 		}
 
 		// Extract and save Codex usage snapshot from response headers (for OAuth accounts)
@@ -3631,7 +3631,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			usage = &OpenAIUsage{}
 		}
 
-		return &OpenAIForwardResult{
+		forwardResult := &OpenAIForwardResult{
 			RequestID:       resp.Header.Get("x-request-id"),
 			Usage:           *usage,
 			Model:           originalModel,
@@ -3642,7 +3642,16 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			OpenAIWSMode:    false,
 			Duration:        time.Since(startTime),
 			FirstTokenMs:    firstTokenMs,
-		}, nil
+		}
+		if imageCount > 0 {
+			imageBillingModel, imageSizeTier = ensureOpenAIImageBillingDefaults(imageCount, imageBillingModel, imageSizeTier)
+			forwardResult.ImageCount = imageCount
+			forwardResult.ImageSize = imageSizeTier
+			forwardResult.ImageInputSize = imageInputSize
+			forwardResult.ImageOutputSizes = imageOutputSizes
+			forwardResult.BillingModel = imageBillingModel
+		}
+		return forwardResult, nil
 	}
 }
 
@@ -4710,13 +4719,19 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 		req.Header.Del("conversation_id")
 		req.Header.Del("session_id")
 
-		req.Header.Set("OpenAI-Beta", "responses=experimental")
-		req.Header.Set("originator", resolveOpenAIUpstreamOriginator(c, isCodexCLI))
+		compatMessagesBridge := isOpenAICompatMessagesBridgeContext(c)
+		if !compatMessagesBridge {
+			req.Header.Set("OpenAI-Beta", "responses=experimental")
+			req.Header.Set("originator", resolveOpenAIUpstreamOriginator(c, isCodexCLI))
+		}
 		apiKeyID := getAPIKeyIDFromContext(c)
 		clientConversationID := strings.TrimSpace(c.Request.Header.Get("conversation_id"))
 		clientSessionID := clientConversationID
 		if clientSessionID == "" {
 			clientSessionID = strings.TrimSpace(c.Request.Header.Get("session_id"))
+		}
+		if clientSessionID == "" {
+			clientSessionID = strings.TrimSpace(promptCacheKey)
 		}
 		if clientSessionID == "" {
 			clientSessionID = extractOpenAIStickySessionSignal(c, body)
@@ -5066,8 +5081,17 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 
 // openaiStreamingResult streaming response result
 type openaiStreamingResult struct {
-	usage        *OpenAIUsage
-	firstTokenMs *int
+	usage            *OpenAIUsage
+	firstTokenMs     *int
+	imageCount       int
+	imageOutputSizes []string
+}
+
+type openaiNonStreamingResult struct {
+	*OpenAIUsage
+	usage            *OpenAIUsage
+	imageCount       int
+	imageOutputSizes []string
 }
 
 func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, startTime time.Time, originalModel, mappedModel string) (*openaiStreamingResult, error) {
@@ -5101,6 +5125,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 	}
 
 	usage := &OpenAIUsage{}
+	imageCounter := newOpenAIImageOutputCounter()
 	var firstTokenMs *int
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
@@ -5179,7 +5204,12 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 
 	needModelReplace := originalModel != mappedModel
 	resultWithUsage := func() *openaiStreamingResult {
-		return &openaiStreamingResult{usage: usage, firstTokenMs: firstTokenMs}
+		return &openaiStreamingResult{
+			usage:            usage,
+			firstTokenMs:     firstTokenMs,
+			imageCount:       imageCounter.Count(),
+			imageOutputSizes: imageCounter.Sizes(),
+		}
 	}
 	finalizeStream := func() (*openaiStreamingResult, error) {
 		if !sawTerminalEvent {
@@ -5292,6 +5322,7 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 				forceFlushFailedEvent = true
 				sawFailedEvent = true
 			}
+			imageCounter.AddSSEData(dataBytes)
 
 			// Correct Codex tool calls if needed (apply_patch -> edit, etc.)
 			if correctedData, corrected := s.toolCorrector.CorrectToolCallsInSSEBytes(dataBytes); corrected {
@@ -5778,7 +5809,7 @@ func openAIUsageFromGJSON(value gjson.Result) (OpenAIUsage, bool) {
 	}, true
 }
 
-func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, originalModel, mappedModel string) (*OpenAIUsage, error) {
+func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, originalModel, mappedModel string) (*openaiNonStreamingResult, error) {
 	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
 		return nil, err
@@ -5788,7 +5819,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	// Some OpenAI-compatible upstreams (including other sub2api instances)
 	// may return SSE even when stream=false was requested.
 	if isEventStreamResponse(resp.Header) {
-		return s.handleSSEToJSON(resp, c, body, originalModel, mappedModel)
+		return s.handleSSEToJSONResult(resp, c, body, originalModel, mappedModel)
 	}
 	bodyLooksLikeSSE := bytes.Contains(body, []byte("data:")) || bytes.Contains(body, []byte("event:"))
 
@@ -5798,17 +5829,19 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	// positives on JSON responses that coincidentally contain "data:" or
 	// "event:" in their text content.
 	if account.Type == AccountTypeOAuth && bodyLooksLikeSSE {
-		return s.handleSSEToJSON(resp, c, body, originalModel, mappedModel)
+		return s.handleSSEToJSONResult(resp, c, body, originalModel, mappedModel)
 	}
 
 	usageValue, usageOK := extractOpenAIUsageFromJSONBytes(body)
 	if !usageOK {
 		if bodyLooksLikeSSE {
-			return s.handleSSEToJSON(resp, c, body, originalModel, mappedModel)
+			return s.handleSSEToJSONResult(resp, c, body, originalModel, mappedModel)
 		}
 		return nil, fmt.Errorf("parse response: invalid json response")
 	}
 	usage := &usageValue
+	imageCounter := newOpenAIImageOutputCounter()
+	imageCounter.AddJSONResponse(body)
 
 	// Replace model in response if needed
 	if originalModel != mappedModel {
@@ -5826,7 +5859,12 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 
 	c.Data(resp.StatusCode, contentType, body)
 
-	return usage, nil
+	return &openaiNonStreamingResult{
+		OpenAIUsage:      usage,
+		usage:            usage,
+		imageCount:       imageCounter.Count(),
+		imageOutputSizes: imageCounter.Sizes(),
+	}, nil
 }
 
 func isEventStreamResponse(header http.Header) bool {
@@ -5887,6 +5925,21 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 	c.Data(resp.StatusCode, contentType, body)
 
 	return usage, nil
+}
+
+func (s *OpenAIGatewayService) handleSSEToJSONResult(resp *http.Response, c *gin.Context, body []byte, originalModel, mappedModel string) (*openaiNonStreamingResult, error) {
+	imageCounter := newOpenAIImageOutputCounter()
+	imageCounter.AddSSEBody(string(body))
+	usage, err := s.handleSSEToJSON(resp, c, body, originalModel, mappedModel)
+	if err != nil {
+		return nil, err
+	}
+	return &openaiNonStreamingResult{
+		OpenAIUsage:      usage,
+		usage:            usage,
+		imageCount:       imageCounter.Count(),
+		imageOutputSizes: imageCounter.Sizes(),
+	}, nil
 }
 
 func extractOpenAISSETerminalEvent(body string) (string, []byte, bool) {

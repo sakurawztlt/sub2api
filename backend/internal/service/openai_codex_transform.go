@@ -817,7 +817,10 @@ func codexImageGenerationBridgeShouldFire(reqBody map[string]any) bool {
 	if hasOpenAIInputImage(reqBody) {
 		return true
 	}
-	return hasOpenAIImageGenerationCallItem(reqBody["input"])
+	if hasOpenAIImageGenerationCallItem(reqBody["input"]) {
+		return true
+	}
+	return openAIInputTextLikelyRequestsImageGeneration(reqBody["input"])
 }
 
 // openAIAnyToolChoiceSelectsImageGeneration checks whether tool_choice — in
@@ -840,6 +843,11 @@ func openAIAnyToolChoiceSelectsImageGeneration(value any) bool {
 		// Chat Completions nested function shape.
 		if fn, ok := v["function"].(map[string]any); ok {
 			if name, ok := fn["name"].(string); ok && strings.EqualFold(strings.TrimSpace(name), "image_generation") {
+				return true
+			}
+		}
+		if tool, ok := v["tool"].(map[string]any); ok {
+			if toolType, ok := tool["type"].(string); ok && strings.EqualFold(strings.TrimSpace(toolType), "image_generation") {
 				return true
 			}
 		}
@@ -867,6 +875,63 @@ func hasOpenAIImageGenerationCallItem(value any) bool {
 			continue
 		}
 		if strings.TrimSpace(firstNonEmptyString(item["type"])) == "image_generation_call" {
+			return true
+		}
+	}
+	return false
+}
+
+func openAIInputTextLikelyRequestsImageGeneration(value any) bool {
+	switch v := value.(type) {
+	case string:
+		return openAITextLikelyRequestsImageGeneration(v)
+	case []any:
+		for _, item := range v {
+			if openAIInputTextLikelyRequestsImageGeneration(item) {
+				return true
+			}
+		}
+	case map[string]any:
+		if text := firstNonEmptyString(v["text"], v["content"]); openAITextLikelyRequestsImageGeneration(text) {
+			return true
+		}
+		if openAIInputTextLikelyRequestsImageGeneration(v["content"]) {
+			return true
+		}
+		if openAIInputTextLikelyRequestsImageGeneration(v["input"]) {
+			return true
+		}
+	}
+	return false
+}
+
+func openAITextLikelyRequestsImageGeneration(text string) bool {
+	text = strings.TrimSpace(strings.ToLower(text))
+	if text == "" {
+		return false
+	}
+	englishTriggers := []string{
+		"draw ",
+		"draw a ",
+		"draw an ",
+		"generate an image",
+		"generate image",
+		"create an image",
+		"create image",
+		"make an image",
+		"make image",
+		"render an image",
+		"render image",
+		"image generation",
+	}
+	for _, trigger := range englishTriggers {
+		if strings.Contains(text, trigger) {
+			return true
+		}
+	}
+	chineseTriggers := []string{"画一", "画张", "画个", "绘制", "生成图片", "生成一张", "生成图像", "做一张图", "出一张图"}
+	for _, trigger := range chineseTriggers {
+		if strings.Contains(text, trigger) {
 			return true
 		}
 	}
@@ -1137,6 +1202,10 @@ func extractSystemMessagesFromInput(reqBody map[string]any) bool {
 			continue
 		}
 		if text := extractTextFromContent(m["content"]); text != "" {
+			if strings.Contains(text, openAICompatClaudeCodeTodoGuardMarker) {
+				remaining = append(remaining, item)
+				continue
+			}
 			systemTexts = append(systemTexts, text)
 		}
 	}

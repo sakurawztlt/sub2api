@@ -30,6 +30,9 @@ type Group struct {
 	ImagePrice1K *float64
 	ImagePrice2K *float64
 	ImagePrice4K *float64
+	// OpenAI 图片生成权限。当前本地仓尚未完整接入 upstream 的 DB/UI 开关，
+	// 只用于已显式构造的请求上下文和测试 fixture。
+	AllowImageGeneration bool
 
 	// Claude Code 客户端限制
 	ClaudeCodeOnly  bool
