@@ -856,64 +856,85 @@ func (s *adminServiceImpl) DeleteUser(ctx context.Context, id int64) error {
 		return errors.New("cannot delete admin user")
 	}
 
-	opCtx := ctx
-	var tx *dbent.Tx
-	if s.entClient == nil {
-		logger.LegacyPrintf("service.admin", "Warning: entClient is nil, skipping transaction protection for user deletion")
-	} else {
-		tx, err = s.entClient.Tx(ctx)
-		if err != nil {
-			return fmt.Errorf("begin transaction: %w", err)
-		}
-		defer func() { _ = tx.Rollback() }()
-		opCtx = dbent.NewTxContext(ctx, tx)
-	}
-
-	userKeys, err := s.listUserAPIKeys(opCtx, id)
+	apiKeys, err := s.listUserAPIKeysForDeletion(ctx, id)
 	if err != nil {
-		return fmt.Errorf("list user api keys: %w", err)
-	}
-	for i := range userKeys {
-		if err := s.apiKeyRepo.Delete(opCtx, userKeys[i].ID); err != nil {
-			return fmt.Errorf("delete user api key %d: %w", userKeys[i].ID, err)
-		}
-	}
-
-	if err := s.userRepo.Delete(opCtx, id); err != nil {
-		logger.LegacyPrintf("service.admin", "delete user failed: user_id=%d err=%v", id, err)
 		return err
 	}
-	if tx != nil {
+
+	if s.entClient != nil {
+		tx, err := s.entClient.Tx(ctx)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = tx.Rollback() }()
+
+		opCtx := dbent.NewTxContext(ctx, tx)
+		if err := s.deleteUserWithAPIKeys(opCtx, id, apiKeys); err != nil {
+			return err
+		}
 		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit transaction: %w", err)
+			return err
+		}
+	} else {
+		if err := s.deleteUserWithAPIKeys(ctx, id, apiKeys); err != nil {
+			return err
 		}
 	}
+
 	if s.authCacheInvalidator != nil {
-		for i := range userKeys {
-			s.authCacheInvalidator.InvalidateAuthCacheByKey(ctx, userKeys[i].Key)
+		for _, key := range apiKeys {
+			if keyValue := strings.TrimSpace(key.Key); keyValue != "" {
+				s.authCacheInvalidator.InvalidateAuthCacheByKey(ctx, keyValue)
+			}
 		}
+		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, id)
 	}
 	return nil
 }
 
-func (s *adminServiceImpl) listUserAPIKeys(ctx context.Context, userID int64) ([]APIKey, error) {
-	const pageSize = 100
-
-	params := pagination.PaginationParams{Page: 1, PageSize: pageSize}
-	keys := make([]APIKey, 0)
-	for {
-		pageKeys, page, err := s.apiKeyRepo.ListByUserID(ctx, userID, params, APIKeyListFilters{})
-		if err != nil {
-			return nil, err
-		}
-		keys = append(keys, pageKeys...)
-		if page == nil || params.Page >= page.Pages || len(pageKeys) == 0 {
-			break
-		}
-		params.Page++
+func (s *adminServiceImpl) listUserAPIKeysForDeletion(ctx context.Context, userID int64) ([]APIKey, error) {
+	if s.apiKeyRepo == nil {
+		return nil, nil
 	}
 
+	const pageSize = 1000
+	keys := make([]APIKey, 0)
+	for page := 1; ; page++ {
+		batch, result, err := s.apiKeyRepo.ListByUserID(ctx, userID, pagination.PaginationParams{
+			Page:      page,
+			PageSize:  pageSize,
+			SortBy:    "id",
+			SortOrder: pagination.SortOrderAsc,
+		}, APIKeyListFilters{})
+		if err != nil {
+			return nil, fmt.Errorf("list user api keys: %w", err)
+		}
+		keys = append(keys, batch...)
+		if len(batch) == 0 || len(batch) < pageSize || result == nil || int64(len(keys)) >= result.Total {
+			break
+		}
+	}
 	return keys, nil
+}
+
+func (s *adminServiceImpl) deleteUserWithAPIKeys(ctx context.Context, userID int64, apiKeys []APIKey) error {
+	if s.apiKeyRepo != nil {
+		for _, key := range apiKeys {
+			if key.ID <= 0 {
+				continue
+			}
+			if err := s.apiKeyRepo.DeleteWithAudit(ctx, key.ID); err != nil {
+				logger.LegacyPrintf("service.admin", "delete user api key failed: user_id=%d api_key_id=%d err=%v", userID, key.ID, err)
+				return fmt.Errorf("delete user api key %d: %w", key.ID, err)
+			}
+		}
+	}
+
+	if err := s.userRepo.Delete(ctx, userID); err != nil {
+		logger.LegacyPrintf("service.admin", "delete user failed: user_id=%d err=%v", userID, err)
+		return err
+	}
+	return nil
 }
 
 func (s *adminServiceImpl) UpdateUserBalance(ctx context.Context, userID int64, balance float64, operation string, notes string) (*User, error) {
