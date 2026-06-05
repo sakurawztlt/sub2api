@@ -246,3 +246,29 @@ func TestParsePricingData_PreservesServiceTierPriorityFields(t *testing.T) {
 	require.InDelta(t, 0.0000005, pricing.CacheReadInputTokenCostPriority, 1e-12)
 	require.True(t, pricing.SupportsServiceTier)
 }
+
+func TestListModelNamesByProvider_ReturnsSortedMatchingModels(t *testing.T) {
+	svc := &PricingService{
+		pricingData: map[string]*LiteLLMModelPricing{
+			"claude-sonnet-4-5":        {LiteLLMProvider: "anthropic", InputCostPerToken: 3e-6},
+			"claude-opus-4-5-20251101": {LiteLLMProvider: "anthropic", InputCostPerToken: 1.5e-5},
+			"gpt-4o":                   {LiteLLMProvider: "openai", InputCostPerToken: 5e-6},
+			"gemini-2.5-pro":           {LiteLLMProvider: "google", InputCostPerToken: 1.25e-6},
+		},
+	}
+
+	got := svc.ListModelNamesByProvider("Anthropic")
+	require.Equal(t, []string{"claude-opus-4-5-20251101", "claude-sonnet-4-5"}, got)
+}
+
+func TestListModelNamesByProvider_NoMatchReturnsEmptySlice(t *testing.T) {
+	svc := &PricingService{
+		pricingData: map[string]*LiteLLMModelPricing{
+			"gpt-4o": {LiteLLMProvider: "openai", InputCostPerToken: 5e-6},
+		},
+	}
+
+	got := svc.ListModelNamesByProvider("anthropic")
+	require.NotNil(t, got)
+	require.Empty(t, got)
+}
