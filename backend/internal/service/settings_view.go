@@ -307,12 +307,6 @@ type LoginAgreementDocument struct {
 	ContentMD string `json:"content_md"`
 }
 
-type LoginAgreementDocument struct {
-	ID        string `json:"id"`
-	Title     string `json:"title"`
-	ContentMD string `json:"content_md"`
-}
-
 type WeChatConnectOAuthConfig struct {
 	Enabled             bool
 	LegacyAppID         string
