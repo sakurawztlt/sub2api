@@ -353,6 +353,7 @@ type OpenAIForwardResult struct {
 	// 上下文请求 ratio FirstMeaningfulMs/FirstTokenMs 大说明上游空转累计
 	// metadata 久. nil = 没见到 meaningful (timeout 路径).
 	FirstMeaningfulMs  *int
+	ClientDisconnect   bool
 	ImageCount         int
 	ImageSize          string
 	HasToolCall        bool

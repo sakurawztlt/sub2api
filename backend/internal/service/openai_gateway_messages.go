@@ -498,7 +498,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// codex round37 fu56 (2026-05-20): outbound signal — see field doc.
 	streamMeta.UpstreamTurnStateReturned = upstreamTurnState != ""
 	if clientStream {
-		result, handleErr = s.handleAnthropicStreamingResponse(resp, c, originalModel, billingModel, upstreamModel, startTime, len(body), streamMeta)
+		result, handleErr = s.handleAnthropicStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime, len(body), streamMeta)
 	} else if !isStream && !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
 		result, handleErr = s.handleAnthropicJSONResponse(resp, c, originalModel, billingModel, upstreamModel, startTime)
 	} else {
@@ -971,6 +971,27 @@ func responsesResponseHasVisibleOutput(resp *apicompat.ResponsesResponse) bool {
 	return false
 }
 
+func (s *OpenAIGatewayService) recordOpenAIMessagesStreamUpstreamError(c *gin.Context, account *Account, upstreamRequestID, kind, message string) {
+	if c == nil {
+		return
+	}
+	message = sanitizeUpstreamErrorMessage(message)
+	setOpsUpstreamError(c, http.StatusBadGateway, message, "")
+	event := OpsUpstreamErrorEvent{
+		Platform:           PlatformOpenAI,
+		UpstreamStatusCode: http.StatusBadGateway,
+		UpstreamRequestID:  strings.TrimSpace(upstreamRequestID),
+		Kind:               kind,
+		Message:            message,
+	}
+	if account != nil {
+		event.Platform = account.Platform
+		event.AccountID = account.ID
+		event.AccountName = account.Name
+	}
+	appendOpsUpstreamError(c, event)
+}
+
 func isOpenAICompatDoneSentinelLine(line string) bool {
 	payload, ok := extractOpenAISSEDataLine(line)
 	return ok && strings.TrimSpace(payload) == "[DONE]"
@@ -1304,6 +1325,7 @@ func (s *OpenAIGatewayService) readOpenAICompatBufferedTerminal(
 func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	resp *http.Response,
 	c *gin.Context,
+	account *Account,
 	originalModel string,
 	billingModel string,
 	upstreamModel string,
@@ -1360,6 +1382,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	firstMeaningfulSeen := false // codex 5/8 #1: WriteHeader 直到见到 meaningful event
 	clientDisconnected := false
 	var disconnectedAt time.Time // codex 5/8 #3: drain after disconnect 上限
+	clientOutputStarted := false
 
 	// R29 v25 cctest 签名校验失败教训: 没 forward 累积的 metadata events
 	// (message_start / content_block_start text/thinking / ping) 给客户,
@@ -1443,6 +1466,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			Duration:          time.Since(startTime),
 			FirstTokenMs:      firstTokenMs,
 			FirstMeaningfulMs: firstMeaningfulMs,
+			ClientDisconnect:  clientDisconnected,
 		}
 	}
 
@@ -1591,6 +1615,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				}
 				if !clientDisconnected {
 					c.Writer.Flush()
+					clientOutputStarted = true
 				}
 			}
 			pendingEvents = nil // 释放, 后续走 normal 路径
@@ -1608,6 +1633,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 					)
 					continue
 				}
+				writeStreamHeader()
 				if _, err := fmt.Fprint(c.Writer, sse); err != nil {
 					clientDisconnected = true
 					disconnectedAt = time.Now()
@@ -1616,6 +1642,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 					)
 					break
 				}
+				clientOutputStarted = true
 			}
 		}
 		if len(events) > 0 && !clientDisconnected {
@@ -1632,6 +1659,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				if err != nil {
 					continue
 				}
+				writeStreamHeader()
 				if _, err := fmt.Fprint(c.Writer, sse); err != nil {
 					clientDisconnected = true
 					disconnectedAt = time.Now()
@@ -1640,6 +1668,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 					)
 					break
 				}
+				clientOutputStarted = true
 			}
 			if !clientDisconnected {
 				c.Writer.Flush()
@@ -1775,7 +1804,16 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		}
 	}
 	missingTerminalErr := func() (*OpenAIForwardResult, error) {
-		return resultWithUsage(), fmt.Errorf("stream usage incomplete: missing terminal event")
+		result := resultWithUsage()
+		if clientDisconnected {
+			return result, fmt.Errorf("stream usage incomplete: missing terminal event")
+		}
+		message := "OpenAI messages stream ended before a terminal event"
+		if !clientOutputStarted {
+			return result, s.newOpenAIStreamFailoverError(c, account, false, requestID, nil, message)
+		}
+		s.recordOpenAIMessagesStreamUpstreamError(c, account, requestID, "stream_missing_terminal", message)
+		return result, fmt.Errorf("stream usage incomplete: missing terminal event")
 	}
 	// codex round23 / upstream cc5328c49 fu40: processFrame is the new
 	// frame-aware entry point — patches `type` into payloads that arrived
@@ -2048,6 +2086,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				}
 				if !clientDisconnected {
 					c.Writer.Flush()
+					clientOutputStarted = true
 				}
 			}
 			pendingEvents = nil
@@ -2203,6 +2242,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 						disconnectedAt = time.Now()
 					} else {
 						c.Writer.Flush()
+						clientOutputStarted = true
 					}
 				}
 				continue
@@ -2212,6 +2252,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				continue
 			}
 			// Send Anthropic-format ping event
+			writeStreamHeader()
 			if _, err := fmt.Fprint(c.Writer, "event: ping\ndata: {\"type\":\"ping\"}\n\n"); err != nil {
 				// Client disconnected
 				logger.L().Info("openai messages stream: client disconnected during keepalive",
@@ -2221,6 +2262,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				disconnectedAt = time.Now()
 				continue
 			}
+			clientOutputStarted = true
 			c.Writer.Flush()
 		}
 	}
