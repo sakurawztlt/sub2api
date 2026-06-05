@@ -2121,6 +2121,7 @@ type oauthPendingFlowTestHandlerOptions struct {
 	emailCache         service.EmailCache
 	settingValues      map[string]string
 	defaultSubAssigner service.DefaultSubscriptionAssigner
+	affiliateFactory   func(*dbent.Client, *service.SettingService) *service.AffiliateService
 	totpCache          service.TotpCache
 	totpEncryptor      service.SecretEncryptor
 	userRepoOptions    oauthPendingFlowUserRepoOptions
@@ -2198,6 +2199,10 @@ CREATE TABLE IF NOT EXISTS user_avatars (
 			},
 		}, options.emailCache)
 	}
+	var affiliateSvc *service.AffiliateService
+	if options.affiliateFactory != nil {
+		affiliateSvc = options.affiliateFactory(client, settingSvc)
+	}
 	authSvc := service.NewAuthService(
 		client,
 		userRepo,
@@ -2210,7 +2215,7 @@ CREATE TABLE IF NOT EXISTS user_avatars (
 		nil,
 		nil,
 		options.defaultSubAssigner,
-		nil,
+		affiliateSvc,
 		nil,
 	)
 	userSvc := service.NewUserService(userRepo, nil, nil, nil)
