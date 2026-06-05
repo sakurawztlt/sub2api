@@ -45,8 +45,9 @@ func TestCCChain_OrphanToolResultFromTrimmedHistory(t *testing.T) {
 			{Role: "user", Content: json.RawMessage(`"thanks, now do Y"`)},
 		},
 	})
+	expectedOrphanID := expectedAnthropicToolID(orphanID)
 	for _, m := range msgs {
-		require.Falsef(t, hasToolResult(parseContentBlocks(m.Content), orphanID),
+		require.Falsef(t, hasToolResult(parseContentBlocks(m.Content), expectedOrphanID),
 			"orphan tool_result %s should have been dropped", orphanID)
 	}
 }
@@ -67,8 +68,9 @@ func TestCCChain_ParallelToolOneResultMissing(t *testing.T) {
 			// call_b's result is missing.
 		},
 	})
+	expectedCallB := expectedAnthropicToolID("call_b")
 	for _, m := range msgs {
-		require.Falsef(t, hasToolUse(parseContentBlocks(m.Content), "call_b"),
+		require.Falsef(t, hasToolUse(parseContentBlocks(m.Content), expectedCallB),
 			"unanswered tool_use call_b should have been dropped")
 	}
 }
@@ -92,11 +94,13 @@ func TestCCChain_WellFormedMultiRound(t *testing.T) {
 		},
 	})
 	// Both calls survive and stay paired (assertAnthropicPairing already checks).
+	expectedCallA := expectedAnthropicToolID("call_a")
+	expectedCallB := expectedAnthropicToolID("call_b")
 	var sawA, sawB bool
 	for _, m := range msgs {
 		blocks := parseContentBlocks(m.Content)
-		sawA = sawA || hasToolUse(blocks, "call_a")
-		sawB = sawB || hasToolUse(blocks, "call_b")
+		sawA = sawA || hasToolUse(blocks, expectedCallA)
+		sawB = sawB || hasToolUse(blocks, expectedCallB)
 	}
 	require.True(t, sawA && sawB, "both well-formed calls should be preserved")
 }

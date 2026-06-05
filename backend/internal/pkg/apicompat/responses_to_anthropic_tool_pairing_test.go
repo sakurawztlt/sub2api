@@ -64,9 +64,13 @@ func convertAnthropic(t *testing.T, input string) []AnthropicMessage {
 	return messages
 }
 
-// Tests use call_-prefixed ids because fromResponsesCallIDToAnthropic passes
-// those through unchanged (matching codex's real call_00_... ids); bare ids
-// would be rewritten to toolu_<id>.
+func expectedAnthropicToolID(id string) string {
+	return fromResponsesCallIDToAnthropic(id)
+}
+
+// Tests use call_-prefixed ids because real OpenAI/Codex histories use them.
+// This fork intentionally rewrites them to Anthropic-style toolu_* IDs before
+// forwarding, so assertions compare against expectedAnthropicToolID(...).
 
 // A developer/approval message injected between a function_call and its output
 // must be moved out of the tool_use→tool_result adjacency. This is the shape
@@ -80,10 +84,11 @@ func TestAnthropicPairing_DeveloperMessageBetween(t *testing.T) {
 		{"type":"function_call_output","call_id":"call_A","output":"ok"}
 	]`)
 	// The assistant tool_use message is immediately followed by its tool_result.
+	expectedID := expectedAnthropicToolID("call_A")
 	for i, m := range msgs {
-		if hasToolUse(parseContentBlocks(m.Content), "call_A") {
+		if hasToolUse(parseContentBlocks(m.Content), expectedID) {
 			require.Equal(t, "user", msgs[i+1].Role)
-			require.True(t, hasToolResult(parseContentBlocks(msgs[i+1].Content), "call_A"))
+			require.True(t, hasToolResult(parseContentBlocks(msgs[i+1].Content), expectedID))
 		}
 	}
 }
@@ -98,10 +103,12 @@ func TestAnthropicPairing_ParallelBothAnswered(t *testing.T) {
 		{"type":"function_call_output","call_id":"call_c0","output":"log"},
 		{"type":"function_call_output","call_id":"call_c1","output":"tags"}
 	]`)
+	expectedC0 := expectedAnthropicToolID("call_c0")
+	expectedC1 := expectedAnthropicToolID("call_c1")
 	var sawGrouped bool
 	for _, m := range msgs {
 		blocks := parseContentBlocks(m.Content)
-		if hasToolUse(blocks, "call_c0") && hasToolUse(blocks, "call_c1") {
+		if hasToolUse(blocks, expectedC0) && hasToolUse(blocks, expectedC1) {
 			sawGrouped = true
 		}
 	}
@@ -117,8 +124,9 @@ func TestAnthropicPairing_ParallelOneUnanswered(t *testing.T) {
 		{"type":"function_call","call_id":"call_B","name":"exec","arguments":"{}"},
 		{"type":"function_call_output","call_id":"call_A","output":"oa"}
 	]`)
+	expectedB := expectedAnthropicToolID("call_B")
 	for _, m := range msgs {
-		require.Falsef(t, hasToolUse(parseContentBlocks(m.Content), "call_B"),
+		require.Falsef(t, hasToolUse(parseContentBlocks(m.Content), expectedB),
 			"unanswered tool_use call_B should have been dropped")
 	}
 }
@@ -129,8 +137,9 @@ func TestAnthropicPairing_OrphanToolResultDropped(t *testing.T) {
 		{"type":"message","role":"user","content":[{"type":"input_text","text":"q"}]},
 		{"type":"function_call_output","call_id":"call_ghost","output":"orphan"}
 	]`)
+	expectedGhost := expectedAnthropicToolID("call_ghost")
 	for _, m := range msgs {
-		require.Falsef(t, hasToolResult(parseContentBlocks(m.Content), "call_ghost"),
+		require.Falsef(t, hasToolResult(parseContentBlocks(m.Content), expectedGhost),
 			"orphan tool_result should have been dropped")
 	}
 }
@@ -142,8 +151,9 @@ func TestAnthropicPairing_DanglingCallDropped(t *testing.T) {
 		{"type":"message","role":"user","content":[{"type":"input_text","text":"q"}]},
 		{"type":"function_call","call_id":"call_A","name":"exec","arguments":"{}"}
 	]`)
+	expectedA := expectedAnthropicToolID("call_A")
 	for _, m := range msgs {
-		require.Falsef(t, hasToolUse(parseContentBlocks(m.Content), "call_A"),
+		require.Falsef(t, hasToolUse(parseContentBlocks(m.Content), expectedA),
 			"dangling tool_use call_A should have been dropped")
 	}
 }
@@ -158,8 +168,9 @@ func TestAnthropicPairing_SingleCall(t *testing.T) {
 		{"type":"message","role":"assistant","content":[{"type":"output_text","text":"It is deadbeef."}]}
 	]`)
 	// user, assistant(tool_use), user(tool_result), assistant(text)
+	expectedA := expectedAnthropicToolID("call_A")
 	require.GreaterOrEqual(t, len(msgs), 4)
 	require.Equal(t, "user", msgs[0].Role)
-	require.True(t, hasToolUse(parseContentBlocks(msgs[1].Content), "call_A"))
-	require.True(t, hasToolResult(parseContentBlocks(msgs[2].Content), "call_A"))
+	require.True(t, hasToolUse(parseContentBlocks(msgs[1].Content), expectedA))
+	require.True(t, hasToolResult(parseContentBlocks(msgs[2].Content), expectedA))
 }
