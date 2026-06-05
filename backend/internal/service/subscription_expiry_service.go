@@ -2,9 +2,19 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"log"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
+)
+
+const (
+	// subscriptionExpiryLeaderLockKey gates the periodic expired-subscription
+	// status sweep so only one instance updates rows per cycle.
+	subscriptionExpiryLeaderLockKey = "subscription:expiry:leader"
+	subscriptionExpiryLeaderLockTTL = 2 * time.Minute
 )
 
 // SubscriptionExpiryService periodically updates expired subscription status.
@@ -14,6 +24,10 @@ type SubscriptionExpiryService struct {
 	stopCh      chan struct{}
 	stopOnce    sync.Once
 	wg          sync.WaitGroup
+
+	lockCache  LeaderLockCache
+	db         *sql.DB
+	instanceID string
 }
 
 func NewSubscriptionExpiryService(userSubRepo UserSubscriptionRepository, interval time.Duration) *SubscriptionExpiryService {
@@ -21,7 +35,19 @@ func NewSubscriptionExpiryService(userSubRepo UserSubscriptionRepository, interv
 		userSubRepo: userSubRepo,
 		interval:    interval,
 		stopCh:      make(chan struct{}),
+		instanceID:  uuid.NewString(),
 	}
+}
+
+// SetLeaderLock injects the leader-lock cache and DB used to elect a single
+// instance for the periodic expired-subscription sweep. When both are nil it runs
+// ungated (single-instance / test behavior).
+func (s *SubscriptionExpiryService) SetLeaderLock(lockCache LeaderLockCache, db *sql.DB) {
+	if s == nil {
+		return
+	}
+	s.lockCache = lockCache
+	s.db = db
 }
 
 func (s *SubscriptionExpiryService) Start() {
@@ -57,6 +83,14 @@ func (s *SubscriptionExpiryService) Stop() {
 }
 
 func (s *SubscriptionExpiryService) runOnce() {
+	lockCtx, lockCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	release, ok := tryAcquireSingletonLeaderLock(lockCtx, s.lockCache, s.db, subscriptionExpiryLeaderLockKey, s.instanceID, subscriptionExpiryLeaderLockTTL)
+	lockCancel()
+	if !ok {
+		return
+	}
+	defer release()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
