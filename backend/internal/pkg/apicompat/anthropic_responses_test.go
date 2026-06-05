@@ -2921,6 +2921,31 @@ func TestAnthropicToResponses_ToolsAsBackgroundGate_SingleTurnBuiltins(t *testin
 	assert.Equal(t, "none", tc, "single-turn probe + only builtin tools must set tool_choice=none")
 }
 
+// 2026-06-05: cctest structure probes include ToolSearch as a loaded tool
+// while the prompt also lists deferred tools. Treat ToolSearch like the other
+// Claude Code builtins in single-turn probes; otherwise GPT emits a tool_use
+// and the validator waits for a tool_result that never comes.
+func TestAnthropicToResponses_ToolsAsBackgroundGate_ToolSearchBuiltin(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:     "claude-opus-4-8",
+		MaxTokens: 64000,
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: json.RawMessage(`"The following deferred tools are now available via ToolSearch. Use ToolSearch with query select:TaskCreate."`)},
+		},
+		Tools: []AnthropicTool{
+			{Name: "Read", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			{Name: "ToolSearch", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			{Name: "Write", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		},
+	}
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+	require.NotNil(t, resp.ToolChoice)
+	var tc string
+	require.NoError(t, json.Unmarshal(resp.ToolChoice, &tc))
+	assert.Equal(t, "none", tc)
+}
+
 // 多轮请求 (有 history) — 真 agent loop, 不 gate.
 func TestAnthropicToResponses_ToolsAsBackgroundGate_MultiTurnSkipped(t *testing.T) {
 	req := &AnthropicRequest{

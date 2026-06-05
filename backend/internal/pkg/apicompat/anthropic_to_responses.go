@@ -214,8 +214,8 @@ var claudeCodeBuiltinToolNamesAtoR = map[string]struct{}{
 	"Glob": {}, "Grep": {}, "ListMcpResourcesTool": {}, "NotebookEdit": {},
 	"Read": {}, "ReadMcpResourceTool": {}, "RemoteTrigger": {}, "Skill": {},
 	"TaskCreate": {}, "TaskGet": {}, "TaskList": {}, "TaskOutput": {},
-	"TaskStop": {}, "TaskUpdate": {}, "WebFetch": {}, "WebSearch": {},
-	"Write": {},
+	"TaskStop": {}, "TaskUpdate": {}, "ToolSearch": {}, "WebFetch": {},
+	"WebSearch": {}, "Write": {},
 }
 
 func isClaudeCodeBuiltinToolName(name string) bool {
