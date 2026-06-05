@@ -34,7 +34,7 @@ export interface NotifyEmailEntry {
 
 // ==================== User & Auth Types ====================
 
-export type UserAuthProvider = 'email' | 'linuxdo' | 'oidc' | 'wechat' | 'github' | 'google'
+export type UserAuthProvider = 'email' | 'linuxdo' | 'oidc' | 'wechat' | 'github' | 'google' | 'dingtalk'
 
 export interface UserAuthBindingStatus {
   bound?: boolean
@@ -169,6 +169,7 @@ export interface CustomMenuItem {
   label: string
   icon_svg: string
   url: string
+  page_slug?: string
   visibility: 'user' | 'admin'
   sort_order: number
 }
@@ -215,6 +216,7 @@ export interface PublicSettings {
   custom_menu_items: CustomMenuItem[]
   custom_endpoints: CustomEndpoint[]
   linuxdo_oauth_enabled: boolean
+  dingtalk_oauth_enabled?: boolean
   wechat_oauth_enabled: boolean
   wechat_oauth_open_enabled?: boolean
   wechat_oauth_mp_enabled?: boolean
