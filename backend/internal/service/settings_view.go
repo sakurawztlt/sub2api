@@ -34,11 +34,14 @@ type SystemSettings struct {
 	SMTPFromName           string
 	SMTPUseTLS             bool
 
-	TurnstileEnabled             bool
-	TurnstileSiteKey             string
-	TurnstileSecretKey           string
-	TurnstileSecretKeyConfigured bool
-	APIKeyACLTrustForwardedIP    bool
+	TurnstileEnabled                  bool
+	TurnstileSiteKey                  string
+	TurnstileSecretKey                string
+	TurnstileSecretKeyConfigured      bool
+	APIKeyACLTrustForwardedIP         bool
+	APIRequestIPBlocklist             []string
+	APIRequestIPBlockAction           string
+	APIRequestIPBlockTrustForwardedIP bool
 
 	// LinuxDo Connect OAuth 登录
 	LinuxDoConnectEnabled                bool

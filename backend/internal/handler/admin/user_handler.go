@@ -163,6 +163,17 @@ func (h *UserHandler) List(c *gin.Context) {
 	response.Paginated(c, out, total, page, pageSize)
 }
 
+// ImportDisabledUsageIPsToAPIBlocklist extracts client IPs from disabled users' usage logs
+// and appends them to the global API request IP blocklist.
+func (h *UserHandler) ImportDisabledUsageIPsToAPIBlocklist(c *gin.Context) {
+	result, err := h.adminService.ImportAPIRequestIPBlocklistFromDisabledUsers(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
 // parseAttributeFilters extracts attribute filters from query params
 // Format: attr[{attributeID}]=value, e.g. attr[1]=company&attr[2]=developer
 func parseAttributeFilters(c *gin.Context) map[int64]string {

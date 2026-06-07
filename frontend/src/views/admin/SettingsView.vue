@@ -1346,6 +1346,7 @@
                   {{ t("admin.settings.openaiFastPolicy.saveHint") }}
                 </p>
               </div>
+
             </div>
           </div>
         </div>
@@ -1582,6 +1583,47 @@
                   </p>
                 </div>
                 <Toggle v-model="form.api_key_acl_trust_forwarded_ip" />
+              </div>
+              <div class="border-t border-gray-100 pt-5 dark:border-dark-700">
+                <div class="mb-3">
+                  <label class="font-medium text-gray-900 dark:text-white">
+                    API 请求全局 IP 封禁列表
+                  </label>
+                  <p class="text-sm text-gray-500 dark:text-gray-400">
+                    一行一个 IP 或 CIDR。命中后会在 API Key 鉴权阶段直接拦截。
+                  </p>
+                </div>
+                <textarea
+                  :value="form.api_request_ip_blocklist.join('\n')"
+                  class="input min-h-[120px] font-mono text-sm"
+                  placeholder="1.2.3.4&#10;8.8.8.0/24"
+                  @input="updateAPIRequestIPBlocklist"
+                ></textarea>
+                <div class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div>
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      命中动作
+                    </label>
+                    <Select
+                      v-model="form.api_request_ip_block_action"
+                      :options="[
+                        { value: 'block', label: '只拒绝请求' },
+                        { value: 'ban_user', label: '拒绝并禁用用户' }
+                      ]"
+                    />
+                  </div>
+                  <div class="flex items-center justify-between rounded-lg border border-gray-200 p-3 dark:border-dark-700">
+                    <div>
+                      <label class="font-medium text-gray-900 dark:text-white">
+                        信任转发 IP
+                      </label>
+                      <p class="text-xs text-gray-500 dark:text-gray-400">
+                        开启后读取 CF-Connecting-IP / X-Real-IP / X-Forwarded-For。
+                      </p>
+                    </div>
+                    <Toggle v-model="form.api_request_ip_block_trust_forwarded_ip" />
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -6761,6 +6803,14 @@ function localText(zh: string, en: string): string {
   return isZhLocale.value ? zh : en;
 }
 
+function updateAPIRequestIPBlocklist(event: Event): void {
+  const value = (event.target as HTMLTextAreaElement).value;
+  form.api_request_ip_blocklist = value
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 const paymentGuideHref = computed(() =>
   locale.value.startsWith("zh")
     ? "https://github.com/Wei-Shaw/sub2api/blob/main/docs/PAYMENT_CN.md"
@@ -7095,6 +7145,9 @@ const form = reactive<SettingsForm>({
   turnstile_secret_key: "",
   turnstile_secret_key_configured: false,
   api_key_acl_trust_forwarded_ip: false,
+  api_request_ip_blocklist: [],
+  api_request_ip_block_action: "block",
+  api_request_ip_block_trust_forwarded_ip: false,
   // LinuxDo Connect OAuth 登录
   linuxdo_connect_enabled: false,
   linuxdo_connect_client_id: "",
@@ -8205,6 +8258,9 @@ async function saveSettings() {
       turnstile_site_key: form.turnstile_site_key,
       turnstile_secret_key: form.turnstile_secret_key || undefined,
       api_key_acl_trust_forwarded_ip: form.api_key_acl_trust_forwarded_ip,
+      api_request_ip_blocklist: form.api_request_ip_blocklist,
+      api_request_ip_block_action: form.api_request_ip_block_action,
+      api_request_ip_block_trust_forwarded_ip: form.api_request_ip_block_trust_forwarded_ip,
       linuxdo_connect_enabled: form.linuxdo_connect_enabled,
       linuxdo_connect_client_id: form.linuxdo_connect_client_id,
       linuxdo_connect_client_secret:

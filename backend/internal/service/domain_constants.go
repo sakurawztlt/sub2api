@@ -156,7 +156,10 @@ const (
 	SettingKeyTurnstileSecretKey = "turnstile_secret_key" // Turnstile Secret Key
 
 	// API Key IP 访问控制设置
-	SettingKeyAPIKeyACLTrustForwardedIP = "api_key_acl_trust_forwarded_ip" // API Key IP 白/黑名单是否信任转发 IP
+	SettingKeyAPIKeyACLTrustForwardedIP         = "api_key_acl_trust_forwarded_ip"          // API Key IP 白/黑名单是否信任转发 IP
+	SettingKeyAPIRequestIPBlocklist             = "api_request_ip_blocklist"                // 全局 API 请求 IP 封禁列表（JSON 数组，支持 IP/CIDR）
+	SettingKeyAPIRequestIPBlockAction           = "api_request_ip_block_action"             // 全局 API 请求 IP 命中动作：block/ban_user
+	SettingKeyAPIRequestIPBlockTrustForwardedIP = "api_request_ip_block_trust_forwarded_ip" // 全局 API 请求 IP 封禁是否信任转发 IP
 
 	// TOTP 双因素认证设置
 	SettingKeyTotpEnabled = "totp_enabled" // 是否启用 TOTP 2FA 功能

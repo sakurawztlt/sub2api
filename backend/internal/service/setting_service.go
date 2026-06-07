@@ -20,6 +20,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/imroc/req/v3"
 	"golang.org/x/sync/singleflight"
 )
@@ -1082,7 +1083,7 @@ func (s *SettingService) IsOpenAIAllowClaudeCodeCodexPluginEnabled(ctx context.C
 		value, err := s.settingRepo.GetValue(dbCtx, SettingKeyOpenAIAllowClaudeCodeCodexPlugin)
 		if err != nil {
 			if errors.Is(err, ErrSettingNotFound) {
-				// 设置不存在 → 默认关闭，正常 TTL 缓存
+				// 设置不存在 -> 默认关闭，正常 TTL 缓存
 				s.openAIAllowCodexPluginCache.Store(&cachedOpenAIAllowCodexPlugin{
 					value:     false,
 					expiresAt: time.Now().Add(openAIAllowCodexPluginCacheTTL).UnixNano(),
@@ -1090,7 +1091,7 @@ func (s *SettingService) IsOpenAIAllowClaudeCodeCodexPluginEnabled(ctx context.C
 				return false, nil
 			}
 			slog.Warn("failed to get openai_allow_claude_code_codex_plugin setting", "error", err)
-			// DB 错误 → 安全默认关闭，短 TTL 快速重试
+			// DB 错误 -> 安全默认关闭，短 TTL 快速重试
 			s.openAIAllowCodexPluginCache.Store(&cachedOpenAIAllowCodexPlugin{
 				value:     false,
 				expiresAt: time.Now().Add(openAIAllowCodexPluginErrorTTL).UnixNano(),
@@ -1622,6 +1623,11 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 		normalizedWhitelist = []string{}
 	}
 	settings.RegistrationEmailSuffixWhitelist = normalizedWhitelist
+	settings.APIRequestIPBlocklist = normalizeIPBlocklist(settings.APIRequestIPBlocklist)
+	if invalid := ip.ValidateIPPatterns(settings.APIRequestIPBlocklist); len(invalid) > 0 {
+		return nil, fmt.Errorf("invalid api request IP blocklist pattern: %s", invalid[0])
+	}
+	settings.APIRequestIPBlockAction = normalizeAPIRequestIPBlockAction(settings.APIRequestIPBlockAction)
 	alipaySource, err := normalizeVisibleMethodSettingSource("alipay", settings.PaymentVisibleMethodAlipaySource, settings.PaymentVisibleMethodAlipayEnabled)
 	if err != nil {
 		return nil, err
@@ -1710,6 +1716,13 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 		updates[SettingKeyTurnstileSecretKey] = settings.TurnstileSecretKey
 	}
 	updates[SettingKeyAPIKeyACLTrustForwardedIP] = strconv.FormatBool(settings.APIKeyACLTrustForwardedIP)
+	apiRequestIPBlocklistJSON, err := json.Marshal(settings.APIRequestIPBlocklist)
+	if err != nil {
+		return nil, fmt.Errorf("marshal api request IP blocklist: %w", err)
+	}
+	updates[SettingKeyAPIRequestIPBlocklist] = string(apiRequestIPBlocklistJSON)
+	updates[SettingKeyAPIRequestIPBlockAction] = settings.APIRequestIPBlockAction
+	updates[SettingKeyAPIRequestIPBlockTrustForwardedIP] = strconv.FormatBool(settings.APIRequestIPBlockTrustForwardedIP)
 
 	// LinuxDo Connect OAuth 登录
 	updates[SettingKeyLinuxDoConnectEnabled] = strconv.FormatBool(settings.LinuxDoConnectEnabled)
@@ -2078,6 +2091,9 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	}
 	if s.cfg != nil {
 		s.cfg.SetTrustForwardedIPForAPIKeyACL(settings.APIKeyACLTrustForwardedIP)
+		s.cfg.SetAPIRequestIPBlocklist(settings.APIRequestIPBlocklist)
+		s.cfg.SetAPIRequestIPBlockAction(settings.APIRequestIPBlockAction)
+		s.cfg.SetAPIRequestIPBlockTrustForwardedIP(settings.APIRequestIPBlockTrustForwardedIP)
 	}
 	s.openAIAllowCodexPluginSF.Forget("openai_allow_codex_plugin_enabled")
 	s.openAIAllowCodexPluginCache.Store(&cachedOpenAIAllowCodexPlugin{
@@ -2091,6 +2107,43 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 
 func (s *SettingService) defaultRewriteMessageCacheControl() bool {
 	return false
+}
+
+func normalizeAPIRequestIPBlockAction(action string) string {
+	action = strings.TrimSpace(action)
+	if action == "ban_user" {
+		return action
+	}
+	return "block"
+}
+
+func normalizeIPBlocklist(items []string) []string {
+	seen := make(map[string]struct{}, len(items))
+	cleaned := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		cleaned = append(cleaned, item)
+	}
+	return cleaned
+}
+
+func parseIPBlocklistSetting(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return []string{}
+	}
+	var items []string
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		return []string{}
+	}
+	return normalizeIPBlocklist(items)
 }
 
 func (s *SettingService) validateDefaultSubscriptionGroups(ctx context.Context, items []DefaultSubscriptionSetting) error {
@@ -2688,6 +2741,9 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyLoginAgreementUpdatedAt:                   defaultLoginAgreementDate,
 		SettingKeyLoginAgreementDocuments:                   loginAgreementDocumentsJSON,
 		SettingKeyAPIKeyACLTrustForwardedIP:                 "false",
+		SettingKeyAPIRequestIPBlocklist:                     "[]",
+		SettingKeyAPIRequestIPBlockAction:                   "block",
+		SettingKeyAPIRequestIPBlockTrustForwardedIP:         "false",
 		SettingKeySiteName:                                  "Sub2API",
 		SettingKeySiteLogo:                                  "",
 		SettingKeyPurchaseSubscriptionEnabled:               "false",
@@ -2855,42 +2911,53 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	} else if s != nil && s.cfg != nil {
 		apiKeyACLTrustForwardedIP = s.cfg.Security.TrustForwardedIPForAPIKeyACL
 	}
+	apiRequestIPBlocklist := parseIPBlocklistSetting(settings[SettingKeyAPIRequestIPBlocklist])
+	apiRequestIPBlockAction := normalizeAPIRequestIPBlockAction(settings[SettingKeyAPIRequestIPBlockAction])
+	apiRequestIPBlockTrustForwardedIP := false
+	if value, ok := settings[SettingKeyAPIRequestIPBlockTrustForwardedIP]; ok {
+		apiRequestIPBlockTrustForwardedIP = value == "true"
+	} else if s != nil && s.cfg != nil {
+		apiRequestIPBlockTrustForwardedIP = s.cfg.Security.APIRequestIPBlockTrustForwardedIP
+	}
 	result := &SystemSettings{
-		RegistrationEnabled:              settings[SettingKeyRegistrationEnabled] == "true",
-		EmailVerifyEnabled:               emailVerifyEnabled,
-		RegistrationEmailSuffixWhitelist: ParseRegistrationEmailSuffixWhitelist(settings[SettingKeyRegistrationEmailSuffixWhitelist]),
-		PromoCodeEnabled:                 settings[SettingKeyPromoCodeEnabled] != "false", // 默认启用
-		PasswordResetEnabled:             emailVerifyEnabled && settings[SettingKeyPasswordResetEnabled] == "true",
-		FrontendURL:                      settings[SettingKeyFrontendURL],
-		InvitationCodeEnabled:            settings[SettingKeyInvitationCodeEnabled] == "true",
-		TotpEnabled:                      settings[SettingKeyTotpEnabled] == "true",
-		LoginAgreementEnabled:            settings[SettingKeyLoginAgreementEnabled] == "true",
-		LoginAgreementMode:               normalizeLoginAgreementMode(settings[SettingKeyLoginAgreementMode]),
-		LoginAgreementUpdatedAt:          loginAgreementUpdatedAt,
-		LoginAgreementDocuments:          loginAgreementDocuments,
-		SMTPHost:                         settings[SettingKeySMTPHost],
-		SMTPUsername:                     settings[SettingKeySMTPUsername],
-		SMTPFrom:                         settings[SettingKeySMTPFrom],
-		SMTPFromName:                     settings[SettingKeySMTPFromName],
-		SMTPUseTLS:                       settings[SettingKeySMTPUseTLS] == "true",
-		SMTPPasswordConfigured:           settings[SettingKeySMTPPassword] != "",
-		TurnstileEnabled:                 settings[SettingKeyTurnstileEnabled] == "true",
-		TurnstileSiteKey:                 settings[SettingKeyTurnstileSiteKey],
-		TurnstileSecretKeyConfigured:     settings[SettingKeyTurnstileSecretKey] != "",
-		APIKeyACLTrustForwardedIP:        apiKeyACLTrustForwardedIP,
-		SiteName:                         s.getStringOrDefault(settings, SettingKeySiteName, "Sub2API"),
-		SiteLogo:                         settings[SettingKeySiteLogo],
-		SiteSubtitle:                     s.getStringOrDefault(settings, SettingKeySiteSubtitle, "Subscription to API Conversion Platform"),
-		APIBaseURL:                       settings[SettingKeyAPIBaseURL],
-		ContactInfo:                      settings[SettingKeyContactInfo],
-		DocURL:                           settings[SettingKeyDocURL],
-		HomeContent:                      settings[SettingKeyHomeContent],
-		HideCcsImportButton:              settings[SettingKeyHideCcsImportButton] == "true",
-		PurchaseSubscriptionEnabled:      settings[SettingKeyPurchaseSubscriptionEnabled] == "true",
-		PurchaseSubscriptionURL:          strings.TrimSpace(settings[SettingKeyPurchaseSubscriptionURL]),
-		CustomMenuItems:                  settings[SettingKeyCustomMenuItems],
-		CustomEndpoints:                  settings[SettingKeyCustomEndpoints],
-		BackendModeEnabled:               settings[SettingKeyBackendModeEnabled] == "true",
+		RegistrationEnabled:               settings[SettingKeyRegistrationEnabled] == "true",
+		EmailVerifyEnabled:                emailVerifyEnabled,
+		RegistrationEmailSuffixWhitelist:  ParseRegistrationEmailSuffixWhitelist(settings[SettingKeyRegistrationEmailSuffixWhitelist]),
+		PromoCodeEnabled:                  settings[SettingKeyPromoCodeEnabled] != "false", // 默认启用
+		PasswordResetEnabled:              emailVerifyEnabled && settings[SettingKeyPasswordResetEnabled] == "true",
+		FrontendURL:                       settings[SettingKeyFrontendURL],
+		InvitationCodeEnabled:             settings[SettingKeyInvitationCodeEnabled] == "true",
+		TotpEnabled:                       settings[SettingKeyTotpEnabled] == "true",
+		LoginAgreementEnabled:             settings[SettingKeyLoginAgreementEnabled] == "true",
+		LoginAgreementMode:                normalizeLoginAgreementMode(settings[SettingKeyLoginAgreementMode]),
+		LoginAgreementUpdatedAt:           loginAgreementUpdatedAt,
+		LoginAgreementDocuments:           loginAgreementDocuments,
+		SMTPHost:                          settings[SettingKeySMTPHost],
+		SMTPUsername:                      settings[SettingKeySMTPUsername],
+		SMTPFrom:                          settings[SettingKeySMTPFrom],
+		SMTPFromName:                      settings[SettingKeySMTPFromName],
+		SMTPUseTLS:                        settings[SettingKeySMTPUseTLS] == "true",
+		SMTPPasswordConfigured:            settings[SettingKeySMTPPassword] != "",
+		TurnstileEnabled:                  settings[SettingKeyTurnstileEnabled] == "true",
+		TurnstileSiteKey:                  settings[SettingKeyTurnstileSiteKey],
+		TurnstileSecretKeyConfigured:      settings[SettingKeyTurnstileSecretKey] != "",
+		APIKeyACLTrustForwardedIP:         apiKeyACLTrustForwardedIP,
+		APIRequestIPBlocklist:             apiRequestIPBlocklist,
+		APIRequestIPBlockAction:           apiRequestIPBlockAction,
+		APIRequestIPBlockTrustForwardedIP: apiRequestIPBlockTrustForwardedIP,
+		SiteName:                          s.getStringOrDefault(settings, SettingKeySiteName, "Sub2API"),
+		SiteLogo:                          settings[SettingKeySiteLogo],
+		SiteSubtitle:                      s.getStringOrDefault(settings, SettingKeySiteSubtitle, "Subscription to API Conversion Platform"),
+		APIBaseURL:                        settings[SettingKeyAPIBaseURL],
+		ContactInfo:                       settings[SettingKeyContactInfo],
+		DocURL:                            settings[SettingKeyDocURL],
+		HomeContent:                       settings[SettingKeyHomeContent],
+		HideCcsImportButton:               settings[SettingKeyHideCcsImportButton] == "true",
+		PurchaseSubscriptionEnabled:       settings[SettingKeyPurchaseSubscriptionEnabled] == "true",
+		PurchaseSubscriptionURL:           strings.TrimSpace(settings[SettingKeyPurchaseSubscriptionURL]),
+		CustomMenuItems:                   settings[SettingKeyCustomMenuItems],
+		CustomEndpoints:                   settings[SettingKeyCustomEndpoints],
+		BackendModeEnabled:                settings[SettingKeyBackendModeEnabled] == "true",
 	}
 	result.TableDefaultPageSize, result.TablePageSizeOptions = parseTablePreferences(
 		settings[SettingKeyTableDefaultPageSize],
@@ -4501,14 +4568,35 @@ func (s *SettingService) GetClaudeCodeVersionBounds(ctx context.Context) (min, m
 	return b.min, b.max
 }
 
+// GetRectifierSettings 获取请求整流器配置
+func (s *SettingService) GetRectifierSettings(ctx context.Context) (*RectifierSettings, error) {
+	value, err := s.settingRepo.GetValue(ctx, SettingKeyRectifierSettings)
+	if err != nil {
+		if errors.Is(err, ErrSettingNotFound) {
+			return DefaultRectifierSettings(), nil
+		}
+		return nil, fmt.Errorf("get rectifier settings: %w", err)
+	}
+	if value == "" {
+		return DefaultRectifierSettings(), nil
+	}
+
+	var settings RectifierSettings
+	if err := json.Unmarshal([]byte(value), &settings); err != nil {
+		return DefaultRectifierSettings(), nil
+	}
+
+	return &settings, nil
+}
+
 // GetOpenAIQuotaAutoPauseSettings returns the current global default quota auto-pause
 // settings. It is invoked on the OpenAI scheduling hot path (once per request) and is
 // therefore designed to never block on the DB:
 //
-//   - Fresh cached value → returned immediately.
-//   - Stale or empty cache → the last known value is returned, and a background
+//   - Fresh cached value -> returned immediately.
+//   - Stale or empty cache -> the last known value is returned, and a background
 //     goroutine refreshes the cache via singleflight (stale-while-revalidate).
-//   - First call with no cache yet → zero defaults are returned and the same async
+//   - First call with no cache yet -> zero defaults are returned and the same async
 //     refresh is kicked off; the next call gets the freshly populated value.
 //
 // Callers that need the freshly persisted value synchronously (tests, post-update
@@ -4562,18 +4650,20 @@ func (s *SettingService) refreshOpenAIQuotaAutoPauseSettings(ctx context.Context
 	}
 	dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), openAIQuotaAutoPauseSettingsDBTimeout)
 	defer cancel()
-
 	settings := OpsOpenAIAccountQuotaAutoPauseSettings{}
 	ttl := openAIQuotaAutoPauseSettingsCacheTTL
 	raw, err := s.settingRepo.GetValue(dbCtx, SettingKeyOpsAdvancedSettings)
 	if err == nil {
-		cfg := defaultOpsAdvancedSettings()
-		if strings.TrimSpace(raw) != "" {
-			if jsonErr := json.Unmarshal([]byte(raw), cfg); jsonErr == nil {
-				normalizeOpsAdvancedSettings(cfg)
+		var cfg OpsAdvancedSettings
+		if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+			slog.Warn("failed to parse ops advanced settings for openai quota auto-pause", "error", err)
+			if prior, _ := s.openAIQuotaAutoPauseSettingsCache.Load().(*cachedOpenAIQuotaAutoPauseSettings); prior != nil {
+				settings = prior.settings
 			}
+			ttl = openAIQuotaAutoPauseSettingsErrorTTL
+		} else {
+			settings = cfg.OpenAIAccountQuotaAutoPause
 		}
-		settings = cfg.OpenAIAccountQuotaAutoPause
 	} else if !errors.Is(err, ErrSettingNotFound) {
 		// Real error: keep serving prior value but refresh sooner.
 		if prior, _ := s.openAIQuotaAutoPauseSettingsCache.Load().(*cachedOpenAIQuotaAutoPauseSettings); prior != nil {
@@ -4599,27 +4689,6 @@ func (s *SettingService) SetOpenAIQuotaAutoPauseSettings(settings OpsOpenAIAccou
 		settings:  settings,
 		expiresAt: time.Now().Add(openAIQuotaAutoPauseSettingsCacheTTL).UnixNano(),
 	})
-}
-
-// GetRectifierSettings 获取请求整流器配置
-func (s *SettingService) GetRectifierSettings(ctx context.Context) (*RectifierSettings, error) {
-	value, err := s.settingRepo.GetValue(ctx, SettingKeyRectifierSettings)
-	if err != nil {
-		if errors.Is(err, ErrSettingNotFound) {
-			return DefaultRectifierSettings(), nil
-		}
-		return nil, fmt.Errorf("get rectifier settings: %w", err)
-	}
-	if value == "" {
-		return DefaultRectifierSettings(), nil
-	}
-
-	var settings RectifierSettings
-	if err := json.Unmarshal([]byte(value), &settings); err != nil {
-		return DefaultRectifierSettings(), nil
-	}
-
-	return &settings, nil
 }
 
 // SetRectifierSettings 设置请求整流器配置
