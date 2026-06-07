@@ -30,10 +30,8 @@ type openAIChatSilentRefusalDetector struct {
 	finishReason    string
 }
 
-func newOpenAIChatSilentRefusalDetector(requestBodyLen int) *openAIChatSilentRefusalDetector {
-	return &openAIChatSilentRefusalDetector{
-		enabled: requestBodyLen >= openAISilentRefusalMinRequestBodyBytes,
-	}
+func newOpenAIChatSilentRefusalDetector(_ int) *openAIChatSilentRefusalDetector {
+	return &openAIChatSilentRefusalDetector{enabled: true}
 }
 
 func (d *openAIChatSilentRefusalDetector) Enabled() bool {
