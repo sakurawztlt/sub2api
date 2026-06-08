@@ -563,6 +563,7 @@ func NewOpenAIGatewayService(
 		openAITokenProvider.SetAccountRuntimeBlocker(svc)
 	}
 	svc.logOpenAIWSModeBootstrap()
+	svc.logOpenAICompactNonstreamKeepaliveBootstrap()
 	return svc
 }
 
@@ -691,6 +692,17 @@ func (s *OpenAIGatewayService) logOpenAIWSModeBootstrap() {
 		wsCfg.RetryTotalBudgetMS,
 		openAIWSMessageReadLimitBytes,
 	)
+}
+
+func (s *OpenAIGatewayService) logOpenAICompactNonstreamKeepaliveBootstrap() {
+	interval := s.compactNonstreamKeepaliveInterval()
+	if interval <= 0 {
+		return
+	}
+	logger.L().With(
+		zap.String("component", "service.openai_gateway"),
+		zap.Int("interval_seconds", int(interval.Seconds())),
+	).Info("OpenAI compact non-stream keepalive enabled")
 }
 
 func (s *OpenAIGatewayService) getCodexClientRestrictionDetector() CodexClientRestrictionDetector {
@@ -3548,10 +3560,15 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 
 		// Send request
+		stopCompactKeepalive := func() {}
+		if !reqStream {
+			stopCompactKeepalive = s.startCompactNonstreamKeepalive(ctx, c)
+		}
 		upstreamStart := time.Now()
 		resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 		if err != nil {
+			stopCompactKeepalive()
 			// Transport-level failure (proxy/DNS/TCP/TLS — no HTTP response). Convert to
 			// a failover so the handler switches to a healthy account, and temporarily
 			// unschedule the account on durable faults (e.g. rejected proxy credentials).
@@ -3560,6 +3577,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 		// Handle error response
 		if resp.StatusCode >= 400 {
+			stopCompactKeepalive()
 			respBody := s.readUpstreamErrorBody(resp)
 			_ = resp.Body.Close()
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
@@ -3567,6 +3585,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 			upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 			upstreamCode := extractUpstreamErrorCode(respBody)
+			if isOpenAIResponsesCompactPath(c) && c != nil && c.Writer != nil && c.Writer.Written() {
+				logOpenAICompactKeepaliveCommitted(ctx, c, account, resp)
+				return s.handleErrorResponse(ctx, resp, c, account, body, billingModel)
+			}
 			if !httpInvalidEncryptedContentRetryTried && resp.StatusCode == http.StatusBadRequest && upstreamCode == "invalid_encrypted_content" {
 				decoded, decodeErr := ensureReqBody()
 				if decodeErr != nil {
@@ -3627,6 +3649,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		imageCount := 0
 		var imageOutputSizes []string
 		if reqStream {
+			stopCompactKeepalive()
 			streamResult, err := s.handleStreamingResponse(ctx, resp, c, account, startTime, originalModel, upstreamModel)
 			if err != nil {
 				return nil, err
@@ -3637,7 +3660,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			imageCount = streamResult.imageCount
 			imageOutputSizes = streamResult.imageOutputSizes
 		} else {
-			nonStreamResult, err := s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, upstreamModel)
+			nonStreamResult, err := s.handleNonStreamingResponse(ctx, resp, c, account, originalModel, upstreamModel, stopCompactKeepalive)
 			if err != nil {
 				return nil, err
 			}
@@ -3814,10 +3837,16 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		c.Set("openai_passthrough", true)
 	}
 
+	stopCompactKeepalive := func() {}
+	if !reqStream {
+		stopCompactKeepalive = s.startCompactNonstreamKeepalive(ctx, c)
+	}
+
 	upstreamStart := time.Now()
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 	if err != nil {
+		stopCompactKeepalive()
 		// Transport-level failure (proxy/DNS/TCP/TLS — no HTTP response). Convert to
 		// a failover so the handler switches to a healthy account, and temporarily
 		// unschedule the account on durable faults (e.g. rejected proxy credentials).
@@ -3826,6 +3855,11 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
+		stopCompactKeepalive()
+		if isOpenAIResponsesCompactPath(c) && c != nil && c.Writer != nil && c.Writer.Written() {
+			logOpenAICompactKeepaliveCommitted(ctx, c, account, resp)
+			return nil, s.handleErrorResponsePassthrough(ctx, resp, c, account, body)
+		}
 		// 透传模式默认保持原样代理；但 429/529 属于网关必须兜底的
 		// 上游容量类错误，应先触发多账号 failover 以维持基础 SLA。
 		if shouldFailoverOpenAIPassthroughResponse(resp.StatusCode) {
@@ -3838,6 +3872,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	var firstTokenMs *int
 	responseID := ""
 	if reqStream {
+		stopCompactKeepalive()
 		result, err := s.handleStreamingResponsePassthrough(ctx, resp, c, account, startTime, reqModel, upstreamPassthroughModel)
 		if err != nil {
 			return nil, err
@@ -3846,7 +3881,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		firstTokenMs = result.firstTokenMs
 		responseID = strings.TrimSpace(result.responseID)
 	} else {
-		result, err := s.handleNonStreamingResponsePassthrough(ctx, resp, c, reqModel, upstreamPassthroughModel)
+		result, err := s.handleNonStreamingResponsePassthrough(ctx, resp, c, reqModel, upstreamPassthroughModel, stopCompactKeepalive)
 		if err != nil {
 			return nil, err
 		}
@@ -4174,6 +4209,127 @@ func isOpenAIPassthroughTimeoutHeader(lowerKey string) bool {
 
 func (s *OpenAIGatewayService) isOpenAIPassthroughTimeoutHeadersAllowed() bool {
 	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIPassthroughAllowTimeoutHeaders
+}
+
+// compactNonstreamKeepaliveInterval 返回 compact 非流式空行 keepalive 间隔；0 表示禁用。
+func (s *OpenAIGatewayService) compactNonstreamKeepaliveInterval() time.Duration {
+	if s == nil || s.cfg == nil {
+		return 0
+	}
+	seconds := s.cfg.Gateway.OpenAICompactNonstreamKeepaliveInterval
+	if seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+// startCompactNonstreamKeepalive 为 compact 非流式请求启动下游空行心跳，防止反代空闲断连。
+func (s *OpenAIGatewayService) startCompactNonstreamKeepalive(ctx context.Context, c *gin.Context) func() {
+	if s == nil || c == nil || c.Writer == nil || !isOpenAIResponsesCompactPath(c) {
+		return func() {}
+	}
+	interval := s.compactNonstreamKeepaliveInterval()
+	if interval <= 0 {
+		return func() {}
+	}
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		return func() {}
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	path := ""
+	if c.Request != nil && c.Request.URL != nil {
+		path = strings.TrimSpace(c.Request.URL.Path)
+	}
+	log := logger.FromContext(ctx).With(
+		zap.String("component", "service.openai_gateway"),
+		zap.String("request_path", path),
+		zap.Int("interval_seconds", int(interval.Seconds())),
+	)
+	log.Info("OpenAI compact non-stream keepalive started")
+
+	headers := c.Writer.Header()
+	headers.Set("Content-Type", "application/json")
+	headers.Set("Cache-Control", "no-cache")
+	headers.Set("X-Accel-Buffering", "no")
+	headers.Del("Content-Length")
+
+	stopCh := make(chan struct{})
+	var stopOnce sync.Once
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		flushedLogged := false
+		for {
+			select {
+			case <-stopCh:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if _, err := c.Writer.Write([]byte("\n")); err != nil {
+					log.Warn("OpenAI compact non-stream keepalive write failed", zap.Error(err))
+					return
+				}
+				flusher.Flush()
+				if !flushedLogged {
+					log.Info("OpenAI compact non-stream keepalive flushed")
+					flushedLogged = true
+				}
+			}
+		}
+	}()
+
+	return func() {
+		stopOnce.Do(func() {
+			close(stopCh)
+		})
+		wg.Wait()
+	}
+}
+
+// logOpenAICompactKeepaliveCommitted 记录 keepalive 已提交响应后上游返回错误的诊断日志。
+func logOpenAICompactKeepaliveCommitted(ctx context.Context, c *gin.Context, account *Account, resp *http.Response) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	accountID := int64(0)
+	accountName := ""
+	if account != nil {
+		accountID = account.ID
+		accountName = strings.TrimSpace(account.Name)
+	}
+	statusCode := 0
+	upstreamRequestID := ""
+	if resp != nil {
+		statusCode = resp.StatusCode
+		upstreamRequestID = strings.TrimSpace(resp.Header.Get("x-request-id"))
+	}
+	requestPath := ""
+	if c != nil && c.Request != nil && c.Request.URL != nil {
+		requestPath = strings.TrimSpace(c.Request.URL.Path)
+	}
+	logger.FromContext(ctx).With(
+		zap.String("component", "service.openai_gateway"),
+		zap.Bool("compact_keepalive_committed", true),
+		zap.Int64("account_id", accountID),
+		zap.String("account_name", accountName),
+		zap.Int("upstream_status", statusCode),
+		zap.String("upstream_request_id", upstreamRequestID),
+		zap.String("request_path", requestPath),
+	).Warn("OpenAI compact non-stream keepalive committed response before upstream error; proxying error without failover")
+}
+
+func compactStopFunc(stops ...func()) func() {
+	if len(stops) == 0 || stops[0] == nil {
+		return func() {}
+	}
+	return stops[0]
 }
 
 func collectOpenAIPassthroughTimeoutHeaders(h http.Header) []string {
@@ -4546,9 +4702,17 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	c *gin.Context,
 	originalModel string,
 	mappedModel string,
+	stopBeforeWrite func(),
 ) (*openaiNonStreamingResultPassthrough, error) {
-	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
+	if stopBeforeWrite == nil {
+		stopBeforeWrite = func() {}
+	}
+	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, func(c *gin.Context) {
+		stopBeforeWrite()
+		openAITooLargeError(c)
+	})
 	if err != nil {
+		stopBeforeWrite()
 		return nil, err
 	}
 
@@ -4557,7 +4721,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	// stream=false was requested. Without this conversion the client would
 	// receive raw SSE text or a terminal event with empty output.
 	if isEventStreamResponse(resp.Header) {
-		return s.handlePassthroughSSEToJSON(resp, c, body, originalModel, mappedModel)
+		return s.handlePassthroughSSEToJSON(resp, c, body, originalModel, mappedModel, stopBeforeWrite)
 	}
 
 	usage := &OpenAIUsage{}
@@ -4582,6 +4746,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 	if originalModel != "" && mappedModel != "" && originalModel != mappedModel {
 		body = s.replaceModelInResponseBody(body, mappedModel, originalModel)
 	}
+	stopBeforeWrite()
 	c.Data(resp.StatusCode, contentType, body)
 	return &openaiNonStreamingResultPassthrough{
 		usage:      usage,
@@ -4593,7 +4758,10 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 // response for the passthrough path. It mirrors handleSSEToJSON while
 // preserving passthrough payloads, except compact-only model remapping may
 // rewrite model fields back to the original requested model.
-func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c *gin.Context, body []byte, originalModel string, mappedModel string) (*openaiNonStreamingResultPassthrough, error) {
+func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c *gin.Context, body []byte, originalModel string, mappedModel string, stopBeforeWrite func()) (*openaiNonStreamingResultPassthrough, error) {
+	if stopBeforeWrite == nil {
+		stopBeforeWrite = func() {}
+	}
 	bodyText := string(body)
 	finalResponse, ok := extractCodexFinalResponse(bodyText)
 
@@ -4624,6 +4792,7 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 			if msg == "" {
 				msg = "Upstream compact response failed"
 			}
+			stopBeforeWrite()
 			return nil, s.writeOpenAINonStreamingProtocolError(resp, c, msg)
 		}
 		usage = s.parseSSEUsageFromBody(bodyText)
@@ -4642,6 +4811,7 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 			contentType = "text/event-stream"
 		}
 	}
+	stopBeforeWrite()
 	c.Data(resp.StatusCode, contentType, body)
 
 	return &openaiNonStreamingResultPassthrough{
@@ -5999,9 +6169,14 @@ func openAIUsageFromGJSON(value gjson.Result) (OpenAIUsage, bool) {
 	}, true
 }
 
-func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, originalModel, mappedModel string) (*openaiNonStreamingResult, error) {
-	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
+func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, originalModel, mappedModel string, stopBeforeWrite ...func()) (*openaiNonStreamingResult, error) {
+	stop := compactStopFunc(stopBeforeWrite...)
+	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, func(c *gin.Context) {
+		stop()
+		openAITooLargeError(c)
+	})
 	if err != nil {
+		stop()
 		return nil, err
 	}
 
@@ -6009,7 +6184,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	// Some OpenAI-compatible upstreams (including other sub2api instances)
 	// may return SSE even when stream=false was requested.
 	if isEventStreamResponse(resp.Header) {
-		return s.handleSSEToJSONResult(resp, c, body, originalModel, mappedModel)
+		return s.handleSSEToJSONResult(resp, c, body, originalModel, mappedModel, stop)
 	}
 	bodyLooksLikeSSE := bytes.Contains(body, []byte("data:")) || bytes.Contains(body, []byte("event:"))
 
@@ -6019,15 +6194,16 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	// positives on JSON responses that coincidentally contain "data:" or
 	// "event:" in their text content.
 	if account.Type == AccountTypeOAuth && bodyLooksLikeSSE {
-		return s.handleSSEToJSONResult(resp, c, body, originalModel, mappedModel)
+		return s.handleSSEToJSONResult(resp, c, body, originalModel, mappedModel, stop)
 	}
 
 	usageValue, usageOK := extractOpenAIUsageFromJSONBytes(body)
 	if !usageOK {
 		logOpenAIHTTP200SuspiciousUsageResponse(ctx, "openai_non_stream_parse_failed", resp, c, body, nil, false)
 		if bodyLooksLikeSSE {
-			return s.handleSSEToJSONResult(resp, c, body, originalModel, mappedModel)
+			return s.handleSSEToJSONResult(resp, c, body, originalModel, mappedModel, stop)
 		}
+		stop()
 		return nil, fmt.Errorf("parse response: invalid json response")
 	}
 	usage := &usageValue
@@ -6049,6 +6225,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	}
 
 	logOpenAIHTTP200SuspiciousUsageResponse(ctx, "openai_non_stream", resp, c, body, usage, true)
+	stop()
 	c.Data(resp.StatusCode, contentType, body)
 
 	return &openaiNonStreamingResult{
@@ -6065,7 +6242,8 @@ func isEventStreamResponse(header http.Header) bool {
 	return strings.Contains(contentType, "text/event-stream")
 }
 
-func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Context, body []byte, originalModel, mappedModel string) (*OpenAIUsage, error) {
+func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Context, body []byte, originalModel, mappedModel string, stopBeforeWrite ...func()) (*OpenAIUsage, error) {
+	stop := compactStopFunc(stopBeforeWrite...)
 	bodyText := string(body)
 	finalResponse, ok := extractCodexFinalResponse(bodyText)
 
@@ -6097,6 +6275,7 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 			if msg == "" {
 				msg = "Upstream compact response failed"
 			}
+			stop()
 			return nil, s.writeOpenAINonStreamingProtocolError(resp, c, msg)
 		}
 		usage = s.parseSSEUsageFromBody(bodyText)
@@ -6116,15 +6295,16 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		}
 	}
 	logOpenAIHTTP200SuspiciousUsageResponse(context.Background(), "openai_sse_to_json", resp, c, body, usage, true)
+	stop()
 	c.Data(resp.StatusCode, contentType, body)
 
 	return usage, nil
 }
 
-func (s *OpenAIGatewayService) handleSSEToJSONResult(resp *http.Response, c *gin.Context, body []byte, originalModel, mappedModel string) (*openaiNonStreamingResult, error) {
+func (s *OpenAIGatewayService) handleSSEToJSONResult(resp *http.Response, c *gin.Context, body []byte, originalModel, mappedModel string, stopBeforeWrite ...func()) (*openaiNonStreamingResult, error) {
 	imageCounter := newOpenAIImageOutputCounter()
 	imageCounter.AddSSEBody(string(body))
-	usage, err := s.handleSSEToJSON(resp, c, body, originalModel, mappedModel)
+	usage, err := s.handleSSEToJSON(resp, c, body, originalModel, mappedModel, stopBeforeWrite...)
 	if err != nil {
 		return nil, err
 	}

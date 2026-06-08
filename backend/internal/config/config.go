@@ -809,6 +809,10 @@ type GatewayConfig struct {
 	// OpenAIPassthroughAllowTimeoutHeaders: OpenAI 透传模式是否放行客户端超时头
 	// 关闭（默认）可避免 x-stainless-timeout 等头导致上游提前断流。
 	OpenAIPassthroughAllowTimeoutHeaders bool `mapstructure:"openai_passthrough_allow_timeout_headers"`
+	// OpenAICompactNonstreamKeepaliveInterval: /responses/compact 非流式空行 keepalive 间隔（秒）。
+	// 等待上游 compact 响应期间，按此间隔向下游写 \n 并 flush，防止反代/CDN 空闲超时断连。
+	// 0 表示禁用；非 0 时必须为 5-60。
+	OpenAICompactNonstreamKeepaliveInterval int `mapstructure:"openai_compact_nonstream_keepalive_interval"`
 	// OpenAIWS: OpenAI Responses WebSocket 配置（默认开启，可按需回滚到 HTTP）
 	OpenAIWS GatewayOpenAIWSConfig `mapstructure:"openai_ws"`
 	// OpenAIScheduler: OpenAI 高级调度器粘性逃逸配置
@@ -2004,6 +2008,7 @@ func setDefaults() {
 	// admin 想恢复 Codex 画图: ConfigMap gateway.codex_image_generation_bridge_enabled=true.
 	viper.SetDefault("gateway.codex_image_generation_bridge_enabled", false)
 	viper.SetDefault("gateway.openai_passthrough_allow_timeout_headers", false)
+	viper.SetDefault("gateway.openai_compact_nonstream_keepalive_interval", 0)
 	// OpenAI Responses WebSocket（默认开启；可通过 force_http 紧急回滚）
 	viper.SetDefault("gateway.openai_ws.enabled", true)
 	viper.SetDefault("gateway.openai_ws.mode_router_v2_enabled", false)
@@ -2654,6 +2659,13 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.OpenAIResponseHeaderTimeout < 0 {
 		return fmt.Errorf("gateway.openai_response_header_timeout must be non-negative")
+	}
+	if c.Gateway.OpenAICompactNonstreamKeepaliveInterval < 0 {
+		return fmt.Errorf("gateway.openai_compact_nonstream_keepalive_interval must be non-negative")
+	}
+	if c.Gateway.OpenAICompactNonstreamKeepaliveInterval != 0 &&
+		(c.Gateway.OpenAICompactNonstreamKeepaliveInterval < 5 || c.Gateway.OpenAICompactNonstreamKeepaliveInterval > 60) {
+		return fmt.Errorf("gateway.openai_compact_nonstream_keepalive_interval must be 0 or between 5-60 seconds")
 	}
 	if strings.TrimSpace(c.Gateway.ConnectionPoolIsolation) != "" {
 		switch c.Gateway.ConnectionPoolIsolation {
