@@ -315,12 +315,11 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 
 // resolveRawCCUpstreamEndpoint returns the actual upstream endpoint for
 // OpenAI Chat Completions requests. For APIKey accounts whose upstream
-// is forced or probed to not support the Responses API, the request is
-// forwarded directly to /v1/chat/completions — not through the default
-// CC→Responses conversion path.
+// is forced, probed, or known by base_url to not support the Responses API,
+// the request is forwarded directly to /v1/chat/completions.
 func resolveRawCCUpstreamEndpoint(c *gin.Context, account *service.Account) string {
 	if account != nil && account.Type == service.AccountTypeAPIKey &&
-		!openai_compat.ShouldUseResponsesAPI(account.Extra) {
+		!openai_compat.ShouldUseResponsesAPIForBaseURL(account.Extra, account.GetOpenAIBaseURL()) {
 		return "/v1/chat/completions"
 	}
 	return GetUpstreamEndpoint(c, account.Platform)

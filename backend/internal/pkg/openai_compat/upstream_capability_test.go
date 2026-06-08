@@ -64,6 +64,83 @@ func TestShouldUseResponsesAPI(t *testing.T) {
 	}
 }
 
+func TestShouldUseResponsesAPIForBaseURL(t *testing.T) {
+	tests := []struct {
+		name    string
+		extra   map[string]any
+		baseURL string
+		want    bool
+	}{
+		{
+			name:    "unknown official defaults to responses",
+			baseURL: "https://api.openai.com/v1",
+			want:    true,
+		},
+		{
+			name:    "known chat-only host routes raw chat",
+			baseURL: "https://api.deepseek.com/v1",
+			want:    false,
+		},
+		{
+			name:    "known chat-only subdomain routes raw chat",
+			baseURL: "https://proxy.moonshot.cn/v1",
+			want:    false,
+		},
+		{
+			name:    "missing scheme still normalizes",
+			baseURL: "dashscope.aliyuncs.com/compatible-mode/v1",
+			want:    false,
+		},
+		{
+			name:    "force responses overrides chat-only host",
+			extra:   map[string]any{ExtraKeyResponsesMode: string(ResponsesSupportModeForceResponses)},
+			baseURL: "https://api.deepseek.com/v1",
+			want:    true,
+		},
+		{
+			name:    "force chat completions overrides official host",
+			extra:   map[string]any{ExtraKeyResponsesMode: string(ResponsesSupportModeForceChatCompletions)},
+			baseURL: "https://api.openai.com/v1",
+			want:    false,
+		},
+		{
+			name:    "probe false still routes raw chat",
+			extra:   map[string]any{ExtraKeyResponsesSupported: false},
+			baseURL: "https://api.openai.com/v1",
+			want:    false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ShouldUseResponsesAPIForBaseURL(tc.extra, tc.baseURL)
+			if got != tc.want {
+				t.Errorf("ShouldUseResponsesAPIForBaseURL(%v, %q) = %v, want %v", tc.extra, tc.baseURL, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsKnownChatCompletionsOnlyBaseURL(t *testing.T) {
+	tests := []struct {
+		baseURL string
+		want    bool
+	}{
+		{"https://api.deepseek.com", true},
+		{"https://www.kimi.com/api", true},
+		{"https://example.com", false},
+		{"", false},
+		{"%", false},
+	}
+
+	for _, tc := range tests {
+		got := IsKnownChatCompletionsOnlyBaseURL(tc.baseURL)
+		if got != tc.want {
+			t.Errorf("IsKnownChatCompletionsOnlyBaseURL(%q) = %v, want %v", tc.baseURL, got, tc.want)
+		}
+	}
+}
+
 func TestNormalizeResponsesSupportMode(t *testing.T) {
 	tests := []struct {
 		name string

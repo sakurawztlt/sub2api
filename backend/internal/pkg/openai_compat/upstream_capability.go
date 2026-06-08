@@ -17,6 +17,11 @@
 //     pensieve/short-term/maxims/preserve-existing-runtime-behavior-when-replacing-logic-in-stateful-systems）
 package openai_compat
 
+import (
+	"net/url"
+	"strings"
+)
+
 // AccountResponsesSupport 描述账号上游对 OpenAI Responses API 的有效支持状态。
 //
 // 仅用于 platform=openai + type=apikey 的账号；其他账号类型不应调用本包判定。
@@ -112,4 +117,90 @@ func ResolveResponsesSupport(extra map[string]any) AccountResponsesSupport {
 // （详见 internal/service/openai_gateway_chat_completions_raw.go）。
 func ShouldUseResponsesAPI(extra map[string]any) bool {
 	return ResolveResponsesSupport(extra) != ResponsesSupportNo
+}
+
+// ShouldUseResponsesAPIForBaseURL decides whether an OpenAI-compatible API key
+// account should send requests to the upstream /v1/responses endpoint.
+//
+// Several OpenAI-compatible providers are chat-completions-first: they accept
+// /v1/chat/completions but either do not implement /v1/responses or return a
+// shape strict Responses clients cannot consume. In auto mode, route those
+// providers through the raw Chat Completions fallback even when no probe result
+// has been persisted yet. Operators can still opt into native Responses with
+// force_responses.
+func ShouldUseResponsesAPIForBaseURL(extra map[string]any, baseURL string) bool {
+	mode := ResponsesSupportModeAuto
+	if extra != nil {
+		if rawMode, ok := extra[ExtraKeyResponsesMode].(string); ok {
+			mode = NormalizeResponsesSupportMode(rawMode)
+		}
+	}
+	switch mode {
+	case ResponsesSupportModeForceResponses:
+		return true
+	case ResponsesSupportModeForceChatCompletions:
+		return false
+	}
+
+	if IsKnownChatCompletionsOnlyBaseURL(baseURL) {
+		return false
+	}
+
+	return ShouldUseResponsesAPI(extra)
+}
+
+// IsKnownChatCompletionsOnlyBaseURL returns true for upstream hosts that are
+// commonly OpenAI Chat Completions compatible but not reliable native Responses
+// providers for Codex-style clients.
+func IsKnownChatCompletionsOnlyBaseURL(baseURL string) bool {
+	host := normalizedBaseURLHost(baseURL)
+	if host == "" {
+		return false
+	}
+	for _, suffix := range knownChatCompletionsOnlyHostSuffixes {
+		if host == suffix || strings.HasSuffix(host, "."+suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+var knownChatCompletionsOnlyHostSuffixes = []string{
+	"deepseek.com",
+	"minimax.chat",
+	"minimax.io",
+	"minimax-m2.com",
+	"minimaxi.com",
+	"kimi.com",
+	"moonshot.ai",
+	"moonshot.cn",
+	"bigmodel.cn",
+	"zhipuai.cn",
+	"chatglm.cn",
+	"z.ai",
+	"xiaomimimo.com",
+	"mimo-v2.com",
+	"xiaomi.com",
+	"mi.com",
+	"dashscope.aliyuncs.com",
+	"alibailian.com",
+}
+
+func normalizedBaseURLHost(baseURL string) string {
+	raw := strings.TrimSpace(strings.ToLower(baseURL))
+	if raw == "" {
+		return ""
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "https://" + raw
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	host := strings.TrimSpace(parsed.Hostname())
+	if host == "" {
+		return ""
+	}
+	return strings.TrimPrefix(host, "www.")
 }
