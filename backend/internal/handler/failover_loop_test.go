@@ -728,6 +728,29 @@ func TestHandleSelectionExhausted(t *testing.T) {
 	})
 }
 
+func TestHandleAccountSlotExhausted(t *testing.T) {
+	t.Run("槽位耗尽时切换到下一个账号", func(t *testing.T) {
+		fs := NewFailoverState(3, false)
+
+		action := fs.HandleAccountSlotExhausted(context.Background(), 101)
+
+		require.Equal(t, FailoverContinue, action)
+		require.Equal(t, 1, fs.SwitchCount)
+		require.Contains(t, fs.FailedAccountIDs, int64(101))
+	})
+
+	t.Run("达到切换上限时停止", func(t *testing.T) {
+		fs := NewFailoverState(1, false)
+		fs.SwitchCount = 1
+
+		action := fs.HandleAccountSlotExhausted(context.Background(), 202)
+
+		require.Equal(t, FailoverExhausted, action)
+		require.Equal(t, 1, fs.SwitchCount)
+		require.Contains(t, fs.FailedAccountIDs, int64(202))
+	})
+}
+
 // ---------------------------------------------------------------------------
 // 5/11 codex xhigh prod 51 慢 502 修 — per-reason cap 单测
 // 明确策略: cap=1 reason 第一次出现就 FailoverExhausted, 不再换号继续等同样
