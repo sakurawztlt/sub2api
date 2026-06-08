@@ -279,19 +279,11 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 	if err != nil {
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
-		setOpsUpstreamError(c, 0, safeErr, "")
-		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
-			Platform:           account.Platform,
-			AccountID:          account.ID,
-			AccountName:        account.Name,
-			UpstreamStatusCode: 0,
-			Kind:               "request_error",
-			Message:            safeErr,
-		})
-		// Generic message — "Upstream request failed" leaks our relay wording.
-		// Detail is already recorded via appendOpsUpstreamError above.
-		writeChatCompletionsError(c, http.StatusBadGateway, "upstream_error", "Internal server error")
-		return nil, fmt.Errorf("upstream request failed: %s", safeErr)
+		recordOpenAIChatCompletionsRequestError(c, account, safeErr)
+		return nil, &UpstreamFailoverError{
+			StatusCode:   http.StatusBadGateway,
+			ResponseBody: []byte(safeErr),
+		}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -426,6 +418,18 @@ func openAICompatFailedResponseMessage(resp *apicompat.ResponsesResponse) string
 		return ""
 	}
 	return strings.TrimSpace(resp.Error.Message)
+}
+
+func recordOpenAIChatCompletionsRequestError(c *gin.Context, account *Account, message string) {
+	setOpsUpstreamError(c, 0, message, "")
+	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		Platform:           account.Platform,
+		AccountID:          account.ID,
+		AccountName:        account.Name,
+		UpstreamStatusCode: 0,
+		Kind:               "request_error",
+		Message:            message,
+	})
 }
 
 // handleChatCompletionsErrorResponse reads an upstream error and returns it in
