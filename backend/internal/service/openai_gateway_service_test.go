@@ -2346,6 +2346,142 @@ func TestNormalizeOpenAICompactRequestBodyPreservesCurrentCodexPayloadFields(t *
 	require.False(t, gjson.GetBytes(normalized, "prompt_cache_key").Exists())
 }
 
+func TestIsCodexCompactRequest(t *testing.T) {
+	tests := []struct {
+		name string
+		body []byte
+		want bool
+	}{
+		{
+			name: "context compaction instructions",
+			body: []byte(`{"model":"gpt-5.5","instructions":"Perform context compaction for a remote compact task","input":"summarize the conversation"}`),
+			want: true,
+		},
+		{
+			name: "compact context input",
+			body: []byte(`{"model":"gpt-5.5","input":[{"role":"user","content":"remote compact task: compact the context into a summary"}]}`),
+			want: true,
+		},
+		{
+			name: "ordinary coding summary prompt",
+			body: []byte(`{"model":"gpt-5.5","instructions":"You are a coding assistant","input":"summarize this file and explain the context"}`),
+			want: false,
+		},
+		{
+			name: "ordinary coding compact adjective",
+			body: []byte(`{"model":"gpt-5.5","input":"write a compact helper for the request context"}`),
+			want: false,
+		},
+		{
+			name: "ordinary compaction discussion",
+			body: []byte(`{"model":"gpt-5.5","input":"explain context compaction with examples"}`),
+			want: false,
+		},
+		{
+			name: "explicit image tool overrides compact text",
+			body: []byte(`{"model":"gpt-5.5","instructions":"context compaction","tools":[{"type":"image_generation"}],"input":"draw a compact context diagram"}`),
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, isCodexCompactRequest(tt.body))
+		})
+	}
+}
+
+func TestShouldEnableCodexImageGenerationBridge_CompactSuppressionAndImageOverride(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	compactBody := []byte(`{"model":"gpt-5.5","instructions":"Remote compact task: perform context compaction","input":"summarize conversation"}`)
+	imageBody := []byte(`{"model":"gpt-5.5","instructions":"Remote compact task: perform context compaction","tools":[{"type":"image_generation"}],"input":"draw it"}`)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.125.0")
+
+	require.False(t, shouldEnableCodexImageGenerationBridge(c, compactBody, "gpt-5.5", nil, nil))
+	require.True(t, shouldEnableCodexImageGenerationBridge(c, imageBody, "gpt-5.5", nil, nil))
+
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/compact", nil)
+	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.125.0")
+	require.False(t, shouldEnableCodexImageGenerationBridge(c, []byte(`{"model":"gpt-5.5","input":"hello"}`), "gpt-5.5", nil, nil))
+}
+
+func TestOpenAIForward_CodexCompactDoesNotInjectImageGenerationBridge(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"gpt-5.5","stream":false,"instructions":"Remote compact task: perform context compaction","input":"summarize conversation"}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.125.0")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"id":"resp_compact","status":"completed","model":"gpt-5.5","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`)),
+	}}
+	svc := &OpenAIGatewayService{
+		cfg:          &config.Config{Gateway: config.GatewayConfig{CodexImageGenerationBridgeEnabled: true}},
+		httpUpstream: upstream,
+	}
+	account := &Account{
+		ID:          1,
+		Name:        "openai-oauth",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
+		Status:      StatusActive,
+		Schedulable: true,
+	}
+
+	_, err := svc.Forward(context.Background(), c, account, body)
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(upstream.lastBody, "tools").Exists(), string(upstream.lastBody))
+	require.NotContains(t, gjson.GetBytes(upstream.lastBody, "instructions").String(), codexImageGenerationBridgeMarker)
+}
+
+func TestOpenAIForward_CodexOrdinaryImageRequestStillInjectsBridge(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"gpt-5.5","stream":false,"instructions":"You are a coding assistant","input":"Please generate an image asset for this UI"}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.125.0")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"id":"resp_image","status":"completed","model":"gpt-5.5","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`)),
+	}}
+	svc := &OpenAIGatewayService{
+		cfg:          &config.Config{Gateway: config.GatewayConfig{CodexImageGenerationBridgeEnabled: true}},
+		httpUpstream: upstream,
+	}
+	account := &Account{
+		ID:          2,
+		Name:        "openai-oauth",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
+		Status:      StatusActive,
+		Schedulable: true,
+	}
+
+	_, err := svc.Forward(context.Background(), c, account, body)
+	require.NoError(t, err)
+	require.True(t, openAIRequestBodyHasImageGenerationTool(upstream.lastBody), string(upstream.lastBody))
+	require.Contains(t, gjson.GetBytes(upstream.lastBody, "instructions").String(), codexImageGenerationBridgeMarker)
+}
+
 func TestOpenAIBuildUpstreamRequestOpenAIPassthroughPreservesCompactPath(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()

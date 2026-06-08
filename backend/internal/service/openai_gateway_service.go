@@ -2967,9 +2967,16 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	if apiKey != nil {
 		imageGenerationAllowed = GroupAllowsImageGeneration(apiKey.Group)
 	}
-	codexImageGenerationBridgeEnabled := isCodexCLI && imageGenerationAllowed && s.isCodexImageGenerationBridgeEnabled(ctx, account, apiKey)
-	codexImageBridgeShouldApply := false
 	imageIntent := IsImageGenerationIntent(openAIResponsesEndpoint, reqModel, body)
+	codexCompactRequest := isOpenAIResponsesCompactPath(c) || (isCodexCLI && isCodexCompactRequest(body))
+	codexImageGenerationBridgeEnabled := isCodexCLI &&
+		shouldEnableCodexImageGenerationBridge(c, body, reqModel, account, apiKey) &&
+		imageGenerationAllowed &&
+		s.isCodexImageGenerationBridgeEnabled(ctx, account, apiKey)
+	if codexCompactRequest && isCodexCLI && !imageIntent {
+		logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Skip image_generation bridge for Codex compact request")
+	}
+	codexImageBridgeShouldApply := false
 	if imageIntent && !imageGenerationAllowed {
 		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalFeatureGate)
 		c.JSON(http.StatusForbidden, gin.H{"error": gin.H{"type": "permission_error", "message": ImageGenerationPermissionMessage()}})
@@ -2978,7 +2985,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 	instructions := gjson.GetBytes(body, "instructions")
 	instructionsEmpty := !instructions.Exists() || instructions.Type != gjson.String || strings.TrimSpace(instructions.String()) == ""
-	if instructionsEmpty && !compatMessagesBridge {
+	if instructionsEmpty && !compatMessagesBridge && !(codexCompactRequest && !imageIntent) {
 		markPatchSet("instructions", "You are a helpful coding assistant.")
 	}
 
@@ -2989,7 +2996,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		markPatchSet("model", billingModel)
 	}
 	upstreamModel := billingModel
-	isCompactRequest := isOpenAIResponsesCompactPath(c)
+	isCompactRequest := codexCompactRequest
 	compactMapped := false
 	if isCompactRequest {
 		compactMappedModel := resolveOpenAICompactForwardModel(account, billingModel)
@@ -6730,6 +6737,65 @@ func sanitizeEncryptedReasoningInputItem(item any) (next any, changed bool, keep
 
 func IsOpenAIResponsesCompactPathForTest(c *gin.Context) bool {
 	return isOpenAIResponsesCompactPath(c)
+}
+
+func isCodexCompactRequest(body []byte) bool {
+	if len(body) == 0 || !gjson.ValidBytes(body) {
+		return false
+	}
+	if IsImageGenerationIntent(openAIResponsesEndpoint, "", body) {
+		return false
+	}
+
+	fields := make([]string, 0, 4)
+	for _, path := range []string{"instructions", "input", "messages"} {
+		if value := gjson.GetBytes(body, path); value.Exists() {
+			fields = append(fields, strings.ToLower(value.Raw))
+		}
+	}
+	haystack := strings.Join(fields, "\n")
+	if haystack == "" {
+		return false
+	}
+
+	strongCompactSignature := false
+	for _, phrase := range []string{
+		"remote compact task",
+		"remote compact request",
+		"compact task",
+		"compact request",
+	} {
+		if strings.Contains(haystack, phrase) {
+			strongCompactSignature = true
+			break
+		}
+	}
+	if !strongCompactSignature {
+		return false
+	}
+
+	for _, phrase := range []string{
+		"context compaction",
+		"compact the context",
+		"compacting the context",
+		"conversation summary",
+		"summarize conversation",
+		"summarize the conversation",
+	} {
+		if strings.Contains(haystack, phrase) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func shouldEnableCodexImageGenerationBridge(c *gin.Context, body []byte, reqModel string, _ *Account, _ *APIKey) bool {
+	if (isOpenAIResponsesCompactPath(c) || isCodexCompactRequest(body)) &&
+		!IsImageGenerationIntent(openAIResponsesEndpoint, reqModel, body) {
+		return false
+	}
+	return true
 }
 
 func OpenAICompactSessionSeedKeyForTest() string {
