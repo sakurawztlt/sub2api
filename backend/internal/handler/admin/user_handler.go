@@ -82,6 +82,13 @@ type UpdateBalanceRequest struct {
 	Notes     string  `json:"notes"`
 }
 
+type BatchUpdateConcurrencyRequest struct {
+	UserIDs     []int64 `json:"user_ids"`
+	All         bool    `json:"all"`
+	Concurrency int     `json:"concurrency"`
+	Mode        string  `json:"mode" binding:"required,oneof=set add"`
+}
+
 type BindUserAuthIdentityRequest struct {
 	ProviderType    string                              `json:"provider_type"`
 	ProviderKey     string                              `json:"provider_key"`
@@ -506,6 +513,55 @@ func (h *UserHandler) GetUserRPMStatus(c *gin.Context) {
 	}
 
 	response.Success(c, status)
+}
+
+// BatchUpdateConcurrency handles bulk user concurrency updates.
+// POST /api/v1/admin/users/batch-concurrency
+func (h *UserHandler) BatchUpdateConcurrency(c *gin.Context) {
+	var req BatchUpdateConcurrencyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if !req.All && len(req.UserIDs) == 0 {
+		response.BadRequest(c, "user_ids is required unless all=true")
+		return
+	}
+	if len(req.UserIDs) > 500 {
+		response.BadRequest(c, "user_ids cannot exceed 500")
+		return
+	}
+
+	userIDs := req.UserIDs
+	if req.All {
+		userIDs = nil
+		const pageSize = 500
+		for page := 1; ; page++ {
+			users, _, err := h.adminService.ListUsers(c.Request.Context(), page, pageSize, service.UserListFilters{}, "id", "asc")
+			if err != nil {
+				response.ErrorFrom(c, err)
+				return
+			}
+			for _, user := range users {
+				userIDs = append(userIDs, user.ID)
+			}
+			if len(users) < pageSize {
+				break
+			}
+		}
+	}
+
+	if len(userIDs) == 0 {
+		response.Success(c, gin.H{"affected": 0})
+		return
+	}
+
+	affected, err := h.adminService.BatchUpdateConcurrency(c.Request.Context(), userIDs, req.Concurrency, req.Mode)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"affected": affected})
 }
 
 // GetUserPlatformQuotas GET /admin/users/:id/platform-quotas
