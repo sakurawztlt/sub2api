@@ -221,7 +221,7 @@ const modelNameOptions = computed(() =>
 
 const handleUserClick = async (userId: number) => {
   try {
-    const user = await adminAPI.users.getById(userId, true)
+    const user = await adminAPI.users.getById(userId)
     balanceHistoryUser.value = user
     showBalanceHistoryModal.value = true
   } catch {
