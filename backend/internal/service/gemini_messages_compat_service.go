@@ -1457,6 +1457,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 				if contentType == "" {
 					contentType = "application/json"
 				}
+				MarkResponseCommitted(c)
 				c.Data(http.StatusInternalServerError, contentType, respBody)
 				return nil, fmt.Errorf("gemini upstream error: %d (skipped by error policy)", resp.StatusCode)
 			case ErrorPolicyMatched, ErrorPolicyTempUnscheduled:
@@ -1569,6 +1570,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		if contentType == "" {
 			contentType = "application/json"
 		}
+		MarkResponseCommitted(c)
 		c.Data(resp.StatusCode, contentType, respBody)
 		if upstreamMsg == "" {
 			return nil, fmt.Errorf("gemini upstream error: %d", resp.StatusCode)
@@ -2250,6 +2252,7 @@ func randomHex(nBytes int) string {
 }
 
 func (s *GeminiMessagesCompatService) writeClaudeError(c *gin.Context, status int, errType, message string) error {
+	MarkResponseCommitted(c)
 	c.JSON(status, gin.H{
 		"type":  "error",
 		"error": gin.H{"type": errType, "message": message},
@@ -2258,6 +2261,7 @@ func (s *GeminiMessagesCompatService) writeClaudeError(c *gin.Context, status in
 }
 
 func (s *GeminiMessagesCompatService) writeGoogleError(c *gin.Context, status int, message string) error {
+	MarkResponseCommitted(c)
 	c.JSON(status, gin.H{
 		"error": gin.H{
 			"code":    status,

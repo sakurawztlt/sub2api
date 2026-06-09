@@ -5038,6 +5038,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		"upstream_error",
 		"Upstream request failed",
 	); matched {
+		MarkResponseCommitted(c)
 		c.JSON(status, gin.H{
 			"error": gin.H{
 				"type":    errType,
@@ -5065,6 +5066,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 			Message:            upstreamMsg,
 			Detail:             upstreamDetail,
 		})
+		MarkResponseCommitted(c)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": gin.H{
 				"type":    "upstream_error",
@@ -5207,6 +5209,7 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 		c, account.Platform, resp.StatusCode, body,
 		http.StatusBadGateway, "api_error", "Upstream request failed",
 	); matched {
+		MarkResponseCommitted(c)
 		writeError(c, status, errType, errMsg)
 		if upstreamMsg == "" {
 			upstreamMsg = errMsg
@@ -5237,6 +5240,7 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 			Message:            upstreamMsg,
 			Detail:             upstreamDetail,
 		})
+		MarkResponseCommitted(c)
 		if resp.StatusCode == http.StatusBadRequest && upstreamMsg != "" {
 			writeError(c, http.StatusBadRequest, "invalid_request_error", upstreamMsg)
 		} else {
