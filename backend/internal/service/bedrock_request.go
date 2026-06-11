@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/domain"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -469,15 +470,15 @@ func parseAnthropicBetaHeader(header string) []string {
 // 参考: litellm/litellm/llms/bedrock/common_utils.py (anthropic_beta_headers_config.json)
 // 更新策略: 当 AWS Bedrock 新增支持的 beta token 时需同步更新此白名单
 var bedrockSupportedBetaTokens = map[string]bool{
-	"computer-use-2025-01-24":            true,
-	"computer-use-2025-11-24":            true,
-	"context-1m-2025-08-07":              true,
-	"context-management-2025-06-27":      true, // compaction + clear_thinking，AWS 文档已支持
-	"compact-2026-01-12":                 true, // 官方支持，仅 InvokeModel API（Opus 4.6+）
+	"computer-use-2025-01-24":                true,
+	"computer-use-2025-11-24":                true,
+	"context-1m-2025-08-07":                  true,
+	"context-management-2025-06-27":          true, // compaction + clear_thinking，AWS 文档已支持
+	"compact-2026-01-12":                     true, // 官方支持，仅 InvokeModel API（Opus 4.6+）
 	"fine-grained-tool-streaming-2025-05-14": true, // AWS Tool Use 文档已支持
-	"interleaved-thinking-2025-05-14":         true,
-	"tool-search-tool-2025-10-19":             true,
-	"tool-examples-2025-10-29":                true,
+	"interleaved-thinking-2025-05-14":        true,
+	"tool-search-tool-2025-10-19":            true,
+	"tool-examples-2025-10-29":               true,
 }
 
 const bedrockContextManagementBetaToken = "context-management-2025-06-27"

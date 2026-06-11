@@ -836,7 +836,8 @@ func TestGatewayService_AnthropicOAuth_ForwardPreservesBillingHeaderSystemBlock(
 			require.True(t, messages.IsArray())
 			firstMsg := messages.Array()[0]
 			require.Equal(t, "user", firstMsg.Get("role").String())
-			require.Contains(t, firstMsg.Get("content.0.text").String(), "x-anthropic-billing-header keep")
+			require.Equal(t, "[System Instructions]", firstMsg.Get("content.0.text").String())
+			require.Contains(t, firstMsg.Get("content.1.text").String(), "x-anthropic-billing-header keep")
 		})
 	}
 }
