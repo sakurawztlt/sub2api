@@ -56,6 +56,8 @@ type Channel struct {
 	AccountStatsPricingRules   []AccountStatsPricingRule // 自定义账号统计定价规则（按 SortOrder 排序，先命中为准）
 }
 
+const featureKeyCodexImageGenerationBridge = "codex_image_generation_bridge"
+
 // AccountStatsPricingRule 账号统计定价规则
 // 每条规则包含匹配条件（分组/账号）和独立的模型定价。
 // 多条规则按 SortOrder 排序，先命中为准。
@@ -271,6 +273,53 @@ func (c *Channel) IsBedrockCCCompatEnabled(platform string) bool {
 		return byPlatform[platform]
 	}
 	return false
+}
+
+// CodexImageGenerationBridgeEnabled returns the explicit channel override for
+// the Codex image-generation bridge. The second return value is false when the
+// channel has no usable setting, so callers can fall back to account/global
+// defaults without treating an absent value as an explicit deny.
+func (c *Channel) CodexImageGenerationBridgeEnabled(platform string) (bool, bool) {
+	if c == nil || c.FeaturesConfig == nil {
+		return false, false
+	}
+	value, ok := c.FeaturesConfig[featureKeyCodexImageGenerationBridge]
+	if !ok {
+		return false, false
+	}
+	if enabled, ok := boolFromFeatureValue(value); ok {
+		return enabled, true
+	}
+	if byPlatform, ok := value.(map[string]any); ok {
+		enabled, ok := boolFromFeatureValue(byPlatform[platform])
+		return enabled, ok
+	}
+	if byPlatform, ok := value.(map[string]bool); ok {
+		enabled, ok := byPlatform[platform]
+		return enabled, ok
+	}
+	return false, false
+}
+
+func boolFromFeatureValue(value any) (bool, bool) {
+	switch v := value.(type) {
+	case bool:
+		return v, true
+	case string:
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "true", "1", "yes", "on", "enabled":
+			return true, true
+		case "false", "0", "no", "off", "disabled":
+			return false, true
+		}
+	case int:
+		return v != 0, true
+	case int64:
+		return v != 0, true
+	case float64:
+		return v != 0, true
+	}
+	return false, false
 }
 
 // deepCopyFeaturesConfig creates a deep copy of FeaturesConfig to prevent cache pollution.

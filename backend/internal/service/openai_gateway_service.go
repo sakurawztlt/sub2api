@@ -595,10 +595,34 @@ func (s *OpenAIGatewayService) ResolveChannelMappingAndRestrict(ctx context.Cont
 }
 
 func (s *OpenAIGatewayService) isCodexImageGenerationBridgeEnabled(ctx context.Context, account *Account, apiKey *APIKey) bool {
-	if account != nil && resolveAccountExtraBool(account.Extra, "codex_image_generation_bridge") {
-		return true
+	if enabled, ok := s.codexImageGenerationBridgeExplicitValue(ctx, account, apiKey); ok {
+		return enabled
 	}
 	return s != nil && s.cfg != nil && s.cfg.Gateway.CodexImageGenerationBridgeEnabled
+}
+
+func (s *OpenAIGatewayService) codexImageGenerationBridgeForcedEnabled(ctx context.Context, account *Account, apiKey *APIKey) bool {
+	enabled, ok := s.codexImageGenerationBridgeExplicitValue(ctx, account, apiKey)
+	return ok && enabled
+}
+
+func (s *OpenAIGatewayService) codexImageGenerationBridgeExplicitValue(ctx context.Context, account *Account, apiKey *APIKey) (bool, bool) {
+	if account != nil && account.Platform == PlatformOpenAI {
+		if enabled, ok := resolveAccountExtraBoolValue(account.Extra, featureKeyCodexImageGenerationBridge); ok {
+			return enabled, true
+		}
+		if enabled, ok := resolveNestedAccountExtraBoolValue(account.Extra, PlatformOpenAI, "codex_image_generation_bridge_enabled"); ok {
+			return enabled, true
+		}
+	}
+	if s != nil && s.channelService != nil && apiKey != nil && apiKey.GroupID != nil {
+		if ch, err := s.channelService.GetChannelForGroup(ctx, *apiKey.GroupID); err == nil && ch != nil {
+			if enabled, ok := ch.CodexImageGenerationBridgeEnabled(PlatformOpenAI); ok {
+				return enabled, true
+			}
+		}
+	}
+	return false, false
 }
 
 func (s *OpenAIGatewayService) checkChannelPricingRestriction(ctx context.Context, groupID *int64, requestedModel string) bool {
@@ -1321,6 +1345,51 @@ func isOpenAITransientProcessingError(upstreamStatusCode int, upstreamMsg string
 	return match(string(upstreamBody))
 }
 
+func isOpenAIContextWindowError(upstreamMsg string, upstreamBody []byte) bool {
+	match := func(text string) bool {
+		lower := strings.ToLower(strings.TrimSpace(text))
+		if lower == "" {
+			return false
+		}
+		if strings.Contains(lower, "context_too_large") || strings.Contains(lower, "context_length_exceeded") {
+			return true
+		}
+		if strings.Contains(lower, "maximum context length") || strings.Contains(lower, "max context length") {
+			return true
+		}
+		hasExceeded := strings.Contains(lower, "exceed") || strings.Contains(lower, "too large") || strings.Contains(lower, "too long")
+		if strings.Contains(lower, "context window") && hasExceeded {
+			return true
+		}
+		if strings.Contains(lower, "context length") && hasExceeded {
+			return true
+		}
+		return strings.Contains(lower, "token limit") &&
+			strings.Contains(lower, "context") &&
+			hasExceeded
+	}
+
+	if match(upstreamMsg) {
+		return true
+	}
+	if len(upstreamBody) == 0 {
+		return false
+	}
+	for _, path := range []string{
+		"error.message",
+		"response.error.message",
+		"message",
+		"error.code",
+		"response.error.code",
+		"code",
+	} {
+		if match(gjson.GetBytes(upstreamBody, path).String()) {
+			return true
+		}
+	}
+	return match(string(upstreamBody))
+}
+
 type AnthropicMessageSessionContext struct {
 	PromptCacheKey string
 	SessionHash    string
@@ -1625,33 +1694,62 @@ func shouldAutoPauseOpenAIAccountByQuota(ctx context.Context, account *Account) 
 // the few shapes JSON unmarshalling may produce (real bool, "true"/"false"
 // strings, 0/1 numbers).
 func resolveAccountExtraBool(extra map[string]any, key string) bool {
+	value, ok := resolveAccountExtraBoolValue(extra, key)
+	return ok && value
+}
+
+func resolveAccountExtraBoolValue(extra map[string]any, key string) (bool, bool) {
 	if len(extra) == 0 {
-		return false
+		return false, false
 	}
 	value, ok := extra[key]
 	if !ok || value == nil {
-		return false
+		return false, false
 	}
+	return resolveBoolLikeValue(value)
+}
+
+func resolveNestedAccountExtraBoolValue(extra map[string]any, namespace string, key string) (bool, bool) {
+	if len(extra) == 0 || namespace == "" || key == "" {
+		return false, false
+	}
+	raw, ok := extra[namespace]
+	if !ok || raw == nil {
+		return false, false
+	}
+	if nested, ok := raw.(map[string]any); ok {
+		return resolveAccountExtraBoolValue(nested, key)
+	}
+	if nested, ok := raw.(map[string]bool); ok {
+		enabled, ok := nested[key]
+		return enabled, ok
+	}
+	return false, false
+}
+
+func resolveBoolLikeValue(value any) (bool, bool) {
 	switch v := value.(type) {
 	case bool:
-		return v
+		return v, true
 	case string:
 		parsed, err := strconv.ParseBool(strings.TrimSpace(v))
-		return err == nil && parsed
+		if err == nil {
+			return parsed, true
+		}
 	case float64:
-		return v != 0
+		return v != 0, true
 	case float32:
-		return v != 0
+		return v != 0, true
 	case int:
-		return v != 0
+		return v != 0, true
 	case int64:
-		return v != 0
+		return v != 0, true
 	case json.Number:
 		if i, err := v.Int64(); err == nil {
-			return i != 0
+			return i != 0, true
 		}
 	}
-	return false
+	return false, false
 }
 
 func resolveOpenAIQuotaAutoPauseThresholds(ctx context.Context, account *Account) (float64, float64) {
@@ -2782,6 +2880,9 @@ func (s *OpenAIGatewayService) shouldFailoverUpstreamErrorForAccount(statusCode 
 }
 
 func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(statusCode int, upstreamMsg string, upstreamBody []byte) bool {
+	if isOpenAIContextWindowError(upstreamMsg, upstreamBody) {
+		return false
+	}
 	if s.shouldFailoverUpstreamError(statusCode) {
 		return true
 	}
@@ -2986,6 +3087,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 	imageIntent := IsImageGenerationIntent(openAIResponsesEndpoint, reqModel, body)
 	codexCompactRequest := isOpenAIResponsesCompactPath(c) || (isCodexCLI && isCodexCompactRequest(body))
+	codexImageGenerationBridgeForced := s.codexImageGenerationBridgeForcedEnabled(ctx, account, apiKey)
 	codexImageGenerationBridgeEnabled := isCodexCLI &&
 		shouldEnableCodexImageGenerationBridge(c, body, reqModel, account, apiKey) &&
 		imageGenerationAllowed &&
@@ -3078,7 +3180,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		if decodeErr != nil {
 			return nil, decodeErr
 		}
-		codexImageBridgeShouldApply = codexImageGenerationBridgeShouldFire(decoded)
+		codexImageBridgeShouldApply = codexImageGenerationBridgeShouldFire(decoded) || codexImageGenerationBridgeForced
 	}
 	if imageGenerationAllowed && (codexImageBridgeShouldApply || isOpenAIImageGenerationModel(requestView.Model) || openAIRequestBodyImageGenerationToolNeedsNormalization(body) || isOpenAIImageGenerationModel(upstreamModel)) {
 		decoded, decodeErr := ensureReqBody()
@@ -4436,6 +4538,9 @@ func openAIStreamFailedEventShouldFailover(payload []byte, message string) bool 
 	// (e.g. "Selected model is at capacity" delivered via response.failed
 	// SSE event with type=invalid_request_error) should bypass the
 	// "invalid_request" non-retryable marker below and trigger failover.
+	if isOpenAIContextWindowError(message, payload) {
+		return false
+	}
 	if isOpenAITransientProcessingError(http.StatusBadRequest, message, payload) {
 		return true
 	}
@@ -4471,18 +4576,20 @@ func openAIStreamFailedEventShouldFailover(payload []byte, message string) bool 
 	return true
 }
 
-func (s *OpenAIGatewayService) newOpenAIStreamFailoverError(
+func (s *OpenAIGatewayService) recordOpenAIStreamUpstreamError(
 	c *gin.Context,
 	account *Account,
 	passthrough bool,
 	upstreamRequestID string,
+	kind string,
 	payload []byte,
 	message string,
-) *UpstreamFailoverError {
-	maskedSensitiveBackendError := containsOpenAICompatSensitiveBackendTerm(message, payload)
+) string {
+	contextWindowError := isOpenAIContextWindowError(message, payload)
+	maskedSensitiveBackendError := !contextWindowError && containsOpenAICompatSensitiveBackendTerm(message, payload)
 	message = sanitizeUpstreamErrorMessage(strings.TrimSpace(message))
 	if message == "" {
-		message = "OpenAI stream disconnected before completion"
+		message = "OpenAI upstream response failed"
 	}
 	if maskedSensitiveBackendError {
 		message = openAICompatSensitiveBackendErrorMessage
@@ -4502,7 +4609,7 @@ func (s *OpenAIGatewayService) newOpenAIStreamFailoverError(
 			UpstreamStatusCode: http.StatusBadGateway,
 			UpstreamRequestID:  strings.TrimSpace(upstreamRequestID),
 			Passthrough:        passthrough,
-			Kind:               "failover",
+			Kind:               kind,
 			Message:            message,
 			Detail:             detail,
 		}
@@ -4516,6 +4623,22 @@ func (s *OpenAIGatewayService) newOpenAIStreamFailoverError(
 		}
 		appendOpsUpstreamError(c, event)
 	}
+	return message
+}
+
+func (s *OpenAIGatewayService) newOpenAIStreamFailoverError(
+	c *gin.Context,
+	account *Account,
+	passthrough bool,
+	upstreamRequestID string,
+	payload []byte,
+	message string,
+) *UpstreamFailoverError {
+	message = sanitizeUpstreamErrorMessage(strings.TrimSpace(message))
+	if message == "" {
+		message = "OpenAI stream disconnected before completion"
+	}
+	message = s.recordOpenAIStreamUpstreamError(c, account, passthrough, upstreamRequestID, "failover", payload, message)
 	body, _ := json.Marshal(gin.H{
 		"error": gin.H{
 			"type":    "upstream_error",
@@ -5182,6 +5305,9 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		statusCode = http.StatusBadGateway
 		errType = "upstream_error"
 		errMsg = "Upstream request failed"
+	}
+	if isOpenAIContextWindowError(upstreamMsg, body) && upstreamMsg != "" {
+		errMsg = upstreamMsg
 	}
 
 	c.JSON(statusCode, gin.H{
