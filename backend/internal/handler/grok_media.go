@@ -105,7 +105,7 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 	}
 
 	reqLog = reqLog.With(zap.String("model", requestModel))
-	setOpsRequestContext(c, requestModel, false)
+	setOpsRequestContext(c, requestModel, false, body)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeSync))
 
 	if endpoint.IsGenerationRequest() {

@@ -517,6 +517,15 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		result, handleErr = s.handleAnthropicBufferedStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime, len(body), forceThinkingBlock, webSearchRequestLimit)
 	}
 
+	// cyber_policy：标记已设、error 已按 Anthropic 格式发给客户端。丢弃普通 result、返回哨兵，
+	// 使 handler 改用 RecordCyberPolicyUsageLog 依上游真实 token 计费，不 failover、不重复写响应。
+	if GetOpsCyberPolicy(c) != nil {
+		if handleErr == nil {
+			handleErr = errOpenAICyberPolicyForwarded
+		}
+		return nil, handleErr
+	}
+
 	// Propagate ServiceTier and ReasoningEffort to result for billing
 	if handleErr == nil && result != nil {
 		// 058 step 2: bind upstream response id under the prompt cache key
@@ -689,6 +698,15 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	if strings.TrimSpace(finalResponse.Status) == "failed" {
 		payload, _ := json.Marshal(gin.H{"type": "response.failed", "response": finalResponse})
 		message := openAICompatFailedResponseMessage(finalResponse)
+		if hit, code, msg := detectOpenAICyberPolicy(payload); hit {
+			MarkOpsCyberPolicy(c, CyberPolicyMark{
+				Code: code, Message: msg, Body: truncateString(string(payload), 4096),
+				UpstreamStatus: http.StatusOK, UpstreamInTok: usage.InputTokens, UpstreamOutTok: usage.OutputTokens,
+			})
+			clientMsg := cyberPolicyClientMessage(msg, payload)
+			writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", clientMsg)
+			return nil, fmt.Errorf("openai cyber_policy: %s", msg)
+		}
 		if openAIStreamFailedEventShouldFailover(payload, message) {
 			return nil, s.newOpenAIStreamFailoverError(c, account, false, requestID, payload, message, resp.Header)
 		}
@@ -801,6 +819,22 @@ func (s *OpenAIGatewayService) handleAnthropicJSONResponse(
 			writeAnthropicError(c, http.StatusBadGateway, "api_error", "Internal server error")
 		}
 		return nil, fmt.Errorf("parse responses json body: %w", err)
+	}
+
+	// API-key Responses backends may honor stream=false and return a terminal
+	// response.failed object directly as a 200 JSON response. This transport
+	// branch was added after the original cyber-policy implementation, which
+	// only covered SSE terminals. Detect it before the generic empty-output
+	// failover and preserve upstream usage for handler-side billing.
+	if hit, code, msg := detectOpenAICyberPolicy(respBody); hit {
+		usage := copyOpenAIUsageFromResponsesUsage(finalResponse.Usage)
+		MarkOpsCyberPolicy(c, CyberPolicyMark{
+			Code: code, Message: msg, Body: truncateString(string(respBody), 4096),
+			UpstreamStatus: http.StatusOK, UpstreamInTok: usage.InputTokens, UpstreamOutTok: usage.OutputTokens,
+		})
+		clientMsg := cyberPolicyClientMessage(msg, respBody)
+		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", clientMsg)
+		return nil, fmt.Errorf("openai cyber_policy: %s", msg)
 	}
 
 	if !responsesResponseHasVisibleOutput(&finalResponse) {
@@ -1689,6 +1723,21 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			if strings.TrimSpace(event.Type) == "response.failed" {
 				payloadBytes := []byte(payload)
 				message := extractOpenAISSEErrorMessage(payloadBytes)
+				if hit, code, msg := detectOpenAICyberPolicy(payloadBytes); hit {
+					MarkOpsCyberPolicy(c, CyberPolicyMark{
+						Code: code, Message: msg, Body: truncateString(payload, 4096),
+						UpstreamStatus: http.StatusOK, UpstreamInTok: usage.InputTokens, UpstreamOutTok: usage.OutputTokens,
+					})
+					if !clientDisconnected {
+						writeStreamHeader()
+						clientMsg := cyberPolicyClientMessage(msg, payloadBytes)
+						if _, err := fmt.Fprint(c.Writer, buildAnthropicStreamErrorSSE("invalid_request_error", clientMsg)); err == nil {
+							c.Writer.Flush()
+						}
+						clientDisconnected = true
+					}
+					return true
+				}
 				// Once Anthropic output has started, switching accounts would splice
 				// two model streams together. Surface a proper Anthropic error event
 				// instead of returning a failover error that the handler cannot retry.
