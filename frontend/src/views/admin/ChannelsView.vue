@@ -339,6 +339,21 @@
               </div>
             </div>
 
+            <!-- Bedrock CC Compatibility (Anthropic only) -->
+            <div v-if="section.platform === 'anthropic'" class="border-t border-gray-200 pt-3 dark:border-dark-600">
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <label class="text-xs font-medium text-gray-700 dark:text-gray-300">
+                    {{ t('admin.channels.form.bedrockCCCompat') }}
+                  </label>
+                  <p class="mt-0.5 text-[11px] text-amber-600 dark:text-amber-400">
+                    {{ t('admin.channels.form.bedrockCCCompatHint') }}
+                  </p>
+                </div>
+                <Toggle v-model="section.bedrock_cc_compat" />
+              </div>
+            </div>
+
             <!-- Model Mapping -->
             <div>
               <div class="mb-1 flex items-center justify-between">
@@ -643,6 +658,7 @@ interface PlatformSection {
   model_mapping: Record<string, string>
   model_pricing: PricingFormEntry[]
   web_search_emulation: boolean
+  bedrock_cc_compat: boolean
   account_stats_pricing_rules: FormPricingRule[]
 }
 
@@ -738,6 +754,7 @@ function addPlatformSection(platform: GroupPlatform) {
     model_mapping: {},
     model_pricing: [],
     web_search_emulation: false,
+    bedrock_cc_compat: false,
     account_stats_pricing_rules: [],
   })
 }
@@ -1047,7 +1064,28 @@ function formToAPI(): { group_ids: number[], model_pricing: ChannelModelPricing[
     delete featuresConfig.web_search_emulation
   }
 
+  const bedrockCCCompat: Record<string, boolean> = {}
+  for (const section of form.platforms) {
+    if (!section.enabled) continue
+    if (section.platform === 'anthropic') {
+      bedrockCCCompat[section.platform] = !!section.bedrock_cc_compat
+    }
+  }
+  if (Object.keys(bedrockCCCompat).length > 0) {
+    featuresConfig.bedrock_cc_compat = bedrockCCCompat
+  } else {
+    delete featuresConfig.bedrock_cc_compat
+  }
+
   return { group_ids, model_pricing, model_mapping, features_config: featuresConfig }
+}
+
+function readPlatformFeatureFlag(value: unknown, platform: GroupPlatform): boolean {
+  if (typeof value === 'boolean') return value
+  if (value && typeof value === 'object') {
+    return (value as Record<string, unknown>)[platform] === true
+  }
+  return false
 }
 
 function apiToForm(channel: Channel): PlatformSection[] {
@@ -1095,6 +1133,7 @@ function apiToForm(channel: Channel): PlatformSection[] {
     const fc = channel.features_config
     const wsEmulation = fc?.web_search_emulation as Record<string, boolean> | undefined
     const webSearchEnabled = wsEmulation?.[platform] === true
+    const bedrockCCCompatEnabled = readPlatformFeatureFlag(fc?.bedrock_cc_compat, platform)
 
     sections.push({
       platform,
@@ -1104,6 +1143,7 @@ function apiToForm(channel: Channel): PlatformSection[] {
       model_mapping: { ...mapping },
       model_pricing: pricing,
       web_search_emulation: webSearchEnabled,
+      bedrock_cc_compat: bedrockCCCompatEnabled,
       account_stats_pricing_rules: [],
     })
   }

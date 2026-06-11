@@ -249,12 +249,28 @@ func (c *Channel) IsWebSearchEmulationEnabled(platform string) bool {
 }
 
 // IsBedrockCCCompatEnabled 返回该渠道是否启用了 Bedrock CC 兼容模式。
+// 兼容两种历史配置形态：
+//   - bool: 渠道级总开关
+//   - map[string]any: 与 web_search_emulation 一样按平台存储
 func (c *Channel) IsBedrockCCCompatEnabled(platform string) bool {
 	if c == nil || c.FeaturesConfig == nil {
 		return false
 	}
-	enabled, ok := c.FeaturesConfig[featureKeyBedrockCCCompat].(bool)
-	return ok && enabled
+	value, ok := c.FeaturesConfig[featureKeyBedrockCCCompat]
+	if !ok {
+		return false
+	}
+	if enabled, ok := value.(bool); ok {
+		return enabled
+	}
+	if byPlatform, ok := value.(map[string]any); ok {
+		enabled, ok := byPlatform[platform].(bool)
+		return ok && enabled
+	}
+	if byPlatform, ok := value.(map[string]bool); ok {
+		return byPlatform[platform]
+	}
+	return false
 }
 
 // deepCopyFeaturesConfig creates a deep copy of FeaturesConfig to prevent cache pollution.
