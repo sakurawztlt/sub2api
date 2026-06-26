@@ -622,7 +622,9 @@ function reset(defaultKey: string) {
 function loadProvider(provider: ProviderInstance) {
   form.name = provider.name
   form.provider_key = provider.provider_key
-  form.supported_types = provider.supported_types
+  form.supported_types = Array.isArray(provider.supported_types)
+    ? [...provider.supported_types]
+    : []
   form.enabled = provider.enabled
   form.payment_mode = provider.payment_mode || (provider.provider_key === 'easypay' ? PAYMENT_MODE_QRCODE : '')
   form.refund_enabled = provider.refund_enabled

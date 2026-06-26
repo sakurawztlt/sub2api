@@ -465,17 +465,18 @@ func isNonRetryableRefreshError(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	nonRetryable := []string{
-		"invalid_grant",                // refresh_token 已失效
-		"invalid_client",               // 客户端配置错误
-		"unauthorized_client",          // 客户端未授权
-		"access_denied",                // 访问被拒绝
-		"missing_project_id",           // 缺少 project_id
+		"invalid_grant",       // refresh_token 已失效
+		"invalid_client",      // 客户端配置错误
+		"unauthorized_client", // 客户端未授权
+		"access_denied",       // 访问被拒绝
+		"missing_project_id",  // 缺少 project_id
 		"no refresh token available",
 		// 2026-05-06: refresh token reuse → permanent dead.
 		// strings.ToLower 已经把 REFRESH_TOKEN_REUSED → refresh_token_reused
 		// 所以只需要列小写形式; OpenAI 实际有时返 "refresh token has been
 		// reused" (空格) / "refresh token revoked", 都覆盖。
 		"refresh_token_reused",
+		"refresh_token_invalidated",
 		"refresh token has been reused",
 		"refresh token revoked",
 	}

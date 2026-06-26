@@ -71,6 +71,33 @@ func TestDetectOpenAIHTTP200SuspiciousUsageReason(t *testing.T) {
 	}
 }
 
+func TestSanitizeOpenAIResponseFailedEventForClient(t *testing.T) {
+	payload := []byte(`{"type":"response.failed","response":{"id":"resp_1","instructions":"You are GPT-5.5 running in Codex.","output":[{"type":"message"}],"usage":{"input_tokens":123},"metadata":{"debug":true},"error":{"code":"context_length_exceeded","message":"input exceeds the context window"}}}`)
+
+	got, sanitized := sanitizeOpenAIResponseFailedEventForClient(payload, "response.failed")
+
+	require.True(t, sanitized)
+	require.Contains(t, string(got), "context_length_exceeded")
+	require.NotContains(t, string(got), "GPT-5.5")
+	require.NotContains(t, string(got), `"instructions"`)
+	require.NotContains(t, string(got), `"output"`)
+	require.NotContains(t, string(got), `"usage"`)
+	require.NotContains(t, string(got), `"metadata"`)
+}
+
+func TestNormalizeOpenAIResponsesFunctionCallArgumentsDedupesRepeatedJSON(t *testing.T) {
+	args := `{"cmd":"echo hi","nested":{"ok":true}}`
+	payload := []byte(fmt.Sprintf(
+		`{"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_1","arguments":%q}}`,
+		args+args,
+	))
+
+	got, changed := normalizeOpenAIResponsesFunctionCallArguments(payload)
+
+	require.True(t, changed)
+	require.Equal(t, args, gjson.GetBytes(got, "item.arguments").String())
+}
+
 type stubOpenAIAccountRepo struct {
 	AccountRepository
 	accounts []Account
