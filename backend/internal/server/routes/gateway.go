@@ -36,6 +36,18 @@ func RegisterGatewayRoutes(
 	requireGroupAnthropic := middleware.RequireGroupAssignment(settingService, middleware.AnthropicErrorWriter)
 	requireGroupGoogle := middleware.RequireGroupAssignment(settingService, middleware.GoogleErrorWriter)
 
+	isOpenAIResponsesCompatibleGatewayPlatform := func(c *gin.Context) bool {
+		switch getGroupPlatform(c) {
+		case service.PlatformOpenAI, service.PlatformGrok:
+			return true
+		default:
+			return false
+		}
+	}
+	isOpenAIGatewayPlatform := func(c *gin.Context) bool {
+		return getGroupPlatform(c) == service.PlatformOpenAI
+	}
+
 	// API网关（Claude API兼容）
 	gateway := r.Group("/v1")
 	gateway.Use(bodyLimit)
@@ -54,9 +66,14 @@ func RegisterGatewayRoutes(
 			}
 			h.Gateway.Messages(c)
 		})
-		// /v1/messages/count_tokens: OpenAI groups get 404
+		// /v1/messages/count_tokens: OpenAI uses Anthropic-compat bridge; other
+		// OpenAI-compatible platforms keep the prior unsupported response.
 		gateway.POST("/messages/count_tokens", func(c *gin.Context) {
-			if getGroupPlatform(c) == service.PlatformOpenAI {
+			if isOpenAIGatewayPlatform(c) {
+				h.OpenAIGateway.CountTokens(c)
+				return
+			}
+			if isOpenAIResponsesCompatibleGatewayPlatform(c) {
 				service.MarkOpsClientBusinessLimited(c, service.OpsClientBusinessLimitedReasonLocalFeatureGate)
 				c.JSON(http.StatusNotFound, gin.H{
 					"type": "error",
