@@ -69,6 +69,14 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	require.NoError(t, tx.QueryRowContext(context.Background(), "SELECT to_regclass('public.security_secrets')").Scan(&securitySecretsRegclass))
 	require.True(t, securitySecretsRegclass.Valid, "expected security_secrets table to exist")
 
+	// scheduler_outbox pending dedup support
+	requireColumn(t, tx, "scheduler_outbox", "dedup_key", "text", 0, true)
+	requireIndex(t, tx, "scheduler_outbox", "idx_scheduler_outbox_pending_dedup_key")
+
+	// ops_system_logs: API key id index for operational log triage
+	requireColumn(t, tx, "ops_system_logs", "api_key_id", "bigint", 0, true)
+	requireIndex(t, tx, "ops_system_logs", "idx_ops_system_logs_api_key_id_created_at")
+
 	// user_allowed_groups table should exist
 	var uagRegclass sql.NullString
 	require.NoError(t, tx.QueryRowContext(context.Background(), "SELECT to_regclass('public.user_allowed_groups')").Scan(&uagRegclass))
