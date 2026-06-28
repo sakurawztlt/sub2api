@@ -479,6 +479,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		userAgent := c.GetHeader("User-Agent")
 		clientIP := ip.GetClientIP(c)
 		requestPayloadHash := service.HashUsageRequestPayload(body)
+		inboundEndpoint := GetInboundEndpoint(c)
+		upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
+		quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 
 		// 使用量记录通过有界 worker 池提交，避免请求热路径创建无界 goroutine。
 		h.submitOpenAIUsageRecordTask(c.Request.Context(), result, func(ctx context.Context) {
@@ -488,12 +491,13 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				User:               apiKey.User,
 				Account:            account,
 				Subscription:       subscription,
-				InboundEndpoint:    GetInboundEndpoint(c),
-				UpstreamEndpoint:   GetUpstreamEndpoint(c, account.Platform),
+				InboundEndpoint:    inboundEndpoint,
+				UpstreamEndpoint:   upstreamEndpoint,
 				UserAgent:          userAgent,
 				IPAddress:          clientIP,
 				RequestPayloadHash: requestPayloadHash,
 				APIKeyService:      h.apiKeyService,
+				QuotaPlatform:      quotaPlatform,
 				ChannelUsageFields: channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
 			}); err != nil {
 				logger.L().With(
@@ -973,6 +977,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		userAgent := c.GetHeader("User-Agent")
 		clientIP := ip.GetClientIP(c)
 		requestPayloadHash := service.HashUsageRequestPayload(body)
+		inboundEndpoint := GetInboundEndpoint(c)
+		upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
+		quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 
 		h.submitOpenAIUsageRecordTask(c.Request.Context(), result, func(ctx context.Context) {
 			if err := h.gatewayService.RecordUsage(ctx, &service.OpenAIRecordUsageInput{
@@ -981,12 +988,13 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				User:               apiKey.User,
 				Account:            account,
 				Subscription:       subscription,
-				InboundEndpoint:    GetInboundEndpoint(c),
-				UpstreamEndpoint:   GetUpstreamEndpoint(c, account.Platform),
+				InboundEndpoint:    inboundEndpoint,
+				UpstreamEndpoint:   upstreamEndpoint,
 				UserAgent:          userAgent,
 				IPAddress:          clientIP,
 				RequestPayloadHash: requestPayloadHash,
 				APIKeyService:      h.apiKeyService,
+				QuotaPlatform:      quotaPlatform,
 				ChannelUsageFields: channelMappingMsg.ToUsageFields(reqModel, result.UpstreamModel),
 			}); err != nil {
 				logger.L().With(
@@ -1562,6 +1570,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, result.FirstTokenMs)
 				inboundEndpoint := GetInboundEndpoint(c)
 				upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
+				quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 				h.submitOpenAIUsageRecordTask(ctx, result, func(taskCtx context.Context) {
 					if err := h.gatewayService.RecordUsage(taskCtx, &service.OpenAIRecordUsageInput{
 						Result:             result,
@@ -1575,6 +1584,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 						IPAddress:          clientIP,
 						RequestPayloadHash: requestPayloadHash,
 						APIKeyService:      h.apiKeyService,
+						QuotaPlatform:      quotaPlatform,
 						ChannelUsageFields: channelMappingWS.ToUsageFields(reqModel, result.UpstreamModel),
 					}); err != nil {
 						reqLog.Error("openai.websocket_record_usage_failed",

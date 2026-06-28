@@ -319,6 +319,9 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 		if parsed.Multipart {
 			requestPayloadHash = service.HashUsageRequestPayload([]byte(parsed.StickySessionSeed()))
 		}
+		inboundEndpoint := GetInboundEndpoint(c)
+		upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
+		quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 
 		upstreamModel := ""
 		if result != nil {
@@ -331,12 +334,13 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 				User:               apiKey.User,
 				Account:            account,
 				Subscription:       subscription,
-				InboundEndpoint:    GetInboundEndpoint(c),
-				UpstreamEndpoint:   GetUpstreamEndpoint(c, account.Platform),
+				InboundEndpoint:    inboundEndpoint,
+				UpstreamEndpoint:   upstreamEndpoint,
 				UserAgent:          userAgent,
 				IPAddress:          clientIP,
 				RequestPayloadHash: requestPayloadHash,
 				APIKeyService:      h.apiKeyService,
+				QuotaPlatform:      quotaPlatform,
 				ChannelUsageFields: channelMapping.ToUsageFields(requestModel, upstreamModel),
 			}); err != nil {
 				logger.L().With(
