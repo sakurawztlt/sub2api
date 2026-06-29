@@ -1,6 +1,10 @@
 package service
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
+)
 
 const (
 	// codex round54 fu64 (2026-05-21) Phase 1: Opus 升 gpt-5.5 ($5/$0.5/$30
@@ -110,6 +114,13 @@ func (g *Group) ResolveMessagesDispatchModel(requestedModel string) string {
 	}
 	requestedModel = strings.TrimSpace(requestedModel)
 	if requestedModel == "" {
+		return ""
+	}
+
+	if g.Platform == PlatformGrok {
+		if claudeMessagesDispatchFamily(requestedModel) != "" {
+			return xai.DefaultModelMapping()["grok"]
+		}
 		return ""
 	}
 
