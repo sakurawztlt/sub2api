@@ -358,7 +358,22 @@ func (h *AuthHandler) LinuxDoOAuthCallback(c *gin.Context) {
 			redirectOAuthTokenPair(c, frontendCallback, tokenPair, redirectTo)
 			return
 		}
-		if !errors.Is(err, service.ErrOAuthInvitationRequired) {
+		if errors.Is(err, service.ErrOAuthInvitationRequired) {
+			if err := h.createLinuxDoOAuthInvitationPendingSession(
+				c,
+				identityKey,
+				email,
+				redirectTo,
+				browserSessionKey,
+				upstreamClaims,
+			); err != nil {
+				redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth login", "")
+				return
+			}
+			redirectToFrontendCallback(c, frontendCallback)
+			return
+		}
+		if err != nil {
 			redirectOAuthError(c, frontendCallback, "session_error", infraerrors.Reason(err), infraerrors.Message(err))
 			return
 		}
@@ -373,6 +388,7 @@ func (h *AuthHandler) LinuxDoOAuthCallback(c *gin.Context) {
 		upstreamClaims,
 		compatEmail,
 		compatEmailUser,
+		emailVerificationRequired,
 		forceEmailOnSignup,
 	); err != nil {
 		redirectOAuthError(c, frontendCallback, "session_error", "failed to continue oauth login", "")
@@ -423,6 +439,7 @@ func (h *AuthHandler) createLinuxDoOAuthChoicePendingSession(
 	upstreamClaims map[string]any,
 	compatEmail string,
 	compatEmailUser *dbent.User,
+	emailVerificationRequired bool,
 	forceEmailOnSignup bool,
 ) error {
 	suggestionEmail := strings.TrimSpace(suggestedEmail)
@@ -462,6 +479,17 @@ func (h *AuthHandler) createLinuxDoOAuthChoicePendingSession(
 	}
 	if forceEmailOnSignup && compatEmailUser == nil {
 		completionResponse["choice_reason"] = "force_email_on_signup"
+	}
+	if (emailVerificationRequired || forceEmailOnSignup) && compatEmailUser == nil {
+		completionResponse["step"] = "create_account_required"
+		completionResponse["email_binding_required"] = true
+		completionResponse["force_email_on_signup"] = true
+		if emailVerificationRequired {
+			completionResponse["choice_reason"] = "email_verification_required"
+		}
+		delete(completionResponse, "email")
+		delete(completionResponse, "resolved_email")
+		resolvedChoiceEmail = ""
 	}
 
 	var targetUserID *int64
