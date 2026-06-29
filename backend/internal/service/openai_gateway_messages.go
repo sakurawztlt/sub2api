@@ -64,6 +64,8 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	applyOpenAICompatModelNormalization(&anthropicReq)
 	normalizedModel := anthropicReq.Model
 	clientStream := anthropicReq.Stream // client's original stream preference
+	forceThinkingBlock := anthropicThinkingEnabledForResponse(&anthropicReq)
+	webSearchRequestLimit := anthropicWebSearchRequestLimitForResponse(&anthropicReq)
 
 	// 2. Model mapping (computed early so 058 prompt-cache derivation can
 	// gate on the upstream model).
@@ -498,13 +500,13 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// codex round37 fu56 (2026-05-20): outbound signal — see field doc.
 	streamMeta.UpstreamTurnStateReturned = upstreamTurnState != ""
 	if clientStream {
-		result, handleErr = s.handleAnthropicStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime, len(body), streamMeta)
+		result, handleErr = s.handleAnthropicStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime, len(body), streamMeta, webSearchRequestLimit)
 	} else if !isStream && !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
-		result, handleErr = s.handleAnthropicJSONResponse(resp, c, originalModel, billingModel, upstreamModel, startTime)
+		result, handleErr = s.handleAnthropicJSONResponse(resp, c, originalModel, billingModel, upstreamModel, startTime, forceThinkingBlock, webSearchRequestLimit)
 	} else {
 		// Client wants JSON but upstream is streaming or ignored stream=false:
 		// buffer the streaming response and assemble a JSON reply.
-		result, handleErr = s.handleAnthropicBufferedStreamingResponse(resp, c, originalModel, billingModel, upstreamModel, startTime, len(body))
+		result, handleErr = s.handleAnthropicBufferedStreamingResponse(resp, c, originalModel, billingModel, upstreamModel, startTime, len(body), forceThinkingBlock, webSearchRequestLimit)
 	}
 
 	// Propagate ServiceTier and ReasoningEffort to result for billing
@@ -584,10 +586,14 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	upstreamModel string,
 	startTime time.Time,
 	inboundBodyLen int,
+	forceThinkingBlock bool,
+	webSearchRequestLimit int,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 	usageOpts := apicompat.AnthropicUsageEstimationOptions{
-		ExternalInputTokens: positiveIntHeader(c.Request, "X-GCR-Estimated-Tokens"),
+		ExternalInputTokens:  positiveIntHeader(c.Request, "X-GCR-Estimated-Tokens"),
+		ForceThinkingBlock:   forceThinkingBlock,
+		MaxWebSearchRequests: webSearchRequestLimit,
 	}
 
 	finalResponse, usage, acc, err := s.readOpenAICompatBufferedTerminal(c.Request.Context(), resp, "openai messages buffered", requestID, inboundBodyLen)
@@ -729,10 +735,14 @@ func (s *OpenAIGatewayService) handleAnthropicJSONResponse(
 	billingModel string,
 	upstreamModel string,
 	startTime time.Time,
+	forceThinkingBlock bool,
+	webSearchRequestLimit int,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 	usageOpts := apicompat.AnthropicUsageEstimationOptions{
-		ExternalInputTokens: positiveIntHeader(c.Request, "X-GCR-Estimated-Tokens"),
+		ExternalInputTokens:  positiveIntHeader(c.Request, "X-GCR-Estimated-Tokens"),
+		ForceThinkingBlock:   forceThinkingBlock,
+		MaxWebSearchRequests: webSearchRequestLimit,
 	}
 
 	respBody, err := io.ReadAll(resp.Body)
@@ -851,6 +861,79 @@ func positiveIntHeader(req *http.Request, name string) int {
 		return 0
 	}
 	return n
+}
+
+func anthropicThinkingEnabledForResponse(req *apicompat.AnthropicRequest) bool {
+	if req == nil || req.Thinking == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(req.Thinking.Type)) {
+	case "enabled", "adaptive":
+		return true
+	default:
+		return false
+	}
+}
+
+func anthropicWebSearchRequestLimitForResponse(req *apicompat.AnthropicRequest) int {
+	if req == nil || len(req.Tools) != 1 {
+		return 0
+	}
+	tool := req.Tools[0]
+	if !strings.HasPrefix(tool.Type, "web_search") && tool.Name != "web_search" {
+		return 0
+	}
+	text := strings.ToLower(strings.TrimSpace(latestAnthropicUserTextForGateway(req)))
+	if strings.Contains(text, "use the web_search tool first") &&
+		strings.Contains(text, "perform a web search for the query:") {
+		return 1
+	}
+	return 0
+}
+
+func latestAnthropicUserTextForGateway(req *apicompat.AnthropicRequest) string {
+	if req == nil {
+		return ""
+	}
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role != "user" {
+			continue
+		}
+		return latestAnthropicTextPartForGateway(req.Messages[i].Content)
+	}
+	return ""
+}
+
+func latestAnthropicTextPartForGateway(raw json.RawMessage) string {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return ""
+	}
+	if trimmed[0] == '"' {
+		var s string
+		if err := json.Unmarshal(trimmed, &s); err == nil {
+			return s
+		}
+		return ""
+	}
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(trimmed, &parts); err != nil {
+		return ""
+	}
+	for i := len(parts) - 1; i >= 0; i-- {
+		if parts[i].Type != "text" {
+			continue
+		}
+		text := strings.TrimSpace(parts[i].Text)
+		if text == "" || strings.HasPrefix(text, "<system-reminder>") {
+			continue
+		}
+		return text
+	}
+	return ""
 }
 
 func synthesizeResponsesUsageForBufferedFallback(req *http.Request, inboundBodyLen int, acc *apicompat.BufferedResponseAccumulator) *apicompat.ResponsesUsage {
@@ -1332,6 +1415,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	startTime time.Time,
 	inboundBodyLen int,
 	meta streamReqMeta,
+	webSearchRequestLimit int,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 
@@ -1357,6 +1441,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 
 	state := apicompat.NewResponsesEventToAnthropicState()
 	state.Model = originalModel
+	state.SetWebSearchRequestLimit(webSearchRequestLimit)
 	state.SetExternalInputTokenEstimate(positiveIntHeader(c.Request, "X-GCR-Estimated-Tokens"))
 	// 2026-05-12 cctest profile 项 5 (codex audit): message_start.usage.input_tokens
 	// 不能是 0, 用客户请求 body 长度粗估 token (bytes/4). 真 Claude 这里报

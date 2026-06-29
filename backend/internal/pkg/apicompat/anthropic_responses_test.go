@@ -2990,6 +2990,36 @@ func TestAnthropicToResponses_ToolsAsBackgroundGate_ToolSearchBuiltin(t *testing
 	assert.Equal(t, "none", tc)
 }
 
+func TestAnthropicToResponses_ToolsAsBackgroundGate_CreateProjectSkipsGate(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:     "claude-opus-4-8",
+		MaxTokens: 64000,
+		Messages: []AnthropicMessage{
+			{Role: "user", Content: json.RawMessage(`[
+				{"type":"text","text":"<system-reminder>Deferred tools are available via ToolSearch. Use ToolSearch with query select:Write.</system-reminder>"},
+				{"type":"text","text":"帮我创建一个test-golang 项目写一几个算法"}
+			]`)},
+		},
+		Tools: []AnthropicTool{
+			{Name: "Read", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			{Name: "ToolSearch", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			{Name: "Write", InputSchema: json.RawMessage(`{"type":"object"}`)},
+			{Name: "Bash", InputSchema: json.RawMessage(`{"type":"object"}`)},
+		},
+	}
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+	assert.Empty(t, resp.ToolChoice, "actual create/write project requests must not be forced to tool_choice=none")
+}
+
+func TestLatestAnthropicTextPart_IgnoresSystemReminder(t *testing.T) {
+	got := latestAnthropicTextPart(json.RawMessage(`[
+		{"type":"text","text":"<system-reminder>Use ToolSearch with query select:Write.</system-reminder>"},
+		{"type":"text","text":"帮我创建一个项目"}
+	]`))
+	assert.Equal(t, "帮我创建一个项目", got)
+}
+
 // 多轮请求 (有 history) — 真 agent loop, 不 gate.
 func TestAnthropicToResponses_ToolsAsBackgroundGate_MultiTurnSkipped(t *testing.T) {
 	req := &AnthropicRequest{
@@ -3107,6 +3137,56 @@ func TestStreamingUsage_ServerToolUseWebSearchCount(t *testing.T) {
 	assert.True(t, sawDelta, "no message_delta event emitted")
 }
 
+func TestStreamingUsage_WebSearchRequestLimit(t *testing.T) {
+	state := NewResponsesEventToAnthropicState()
+	state.SetWebSearchRequestLimit(1)
+
+	ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:     "response.created",
+		Response: &ResponsesResponse{ID: "resp_ws", Model: "gpt-5.2"},
+	}, state)
+
+	first := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:        "response.output_item.done",
+		OutputIndex: 0,
+		Item: &ResponsesOutput{
+			Type:   "web_search_call",
+			ID:     "ws_0",
+			Status: "completed",
+			Action: &WebSearchAction{Type: "search", Query: "x"},
+		},
+	}, state)
+	require.NotEmpty(t, first)
+
+	second := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:        "response.output_item.done",
+		OutputIndex: 1,
+		Item: &ResponsesOutput{
+			Type:   "web_search_call",
+			ID:     "ws_1",
+			Status: "completed",
+			Action: &WebSearchAction{Type: "search", Query: "y"},
+		},
+	}, state)
+	require.Empty(t, second)
+
+	events := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:     "response.completed",
+		Response: &ResponsesResponse{Status: "completed"},
+	}, state)
+
+	for _, e := range events {
+		if e.Type != "message_delta" {
+			continue
+		}
+		require.NotNil(t, e.Usage)
+		require.NotNil(t, e.Usage.ServerToolUse)
+		assert.Equal(t, 1, e.Usage.ServerToolUse.WebSearchRequests)
+		return
+	}
+	t.Fatal("no message_delta event emitted")
+}
+
 func TestCodeExecutionFunctionCall_StreamsAsServerToolUse(t *testing.T) {
 	state := NewResponsesEventToAnthropicState()
 	state.MessageStartSent = true
@@ -3155,6 +3235,38 @@ func TestCodeExecutionFunctionCall_StreamsAsServerToolUse(t *testing.T) {
 	assert.Equal(t, "end_turn", events[0].Delta.StopReason)
 }
 
+func TestCodeExecutionFunctionCall_SynthesizesResultFromCmdDelta(t *testing.T) {
+	state := NewResponsesEventToAnthropicState()
+	state.MessageStartSent = true
+
+	ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:        "response.output_item.added",
+		OutputIndex: 0,
+		Item: &ResponsesOutput{
+			Type:   "function_call",
+			ID:     "fc_code",
+			CallID: "call_code",
+			Name:   "code_execution",
+		},
+	}, state)
+
+	ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:        "response.function_call_arguments.delta",
+		OutputIndex: 0,
+		Delta:       `{"cmd":"python3 - <<'PY'\nprint('HELLO_CHECK')\nPY"}`,
+	}, state)
+
+	events := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:        "response.function_call_arguments.done",
+		OutputIndex: 0,
+	}, state)
+
+	require.Len(t, events, 3)
+	require.NotNil(t, events[1].ContentBlock)
+	assert.Equal(t, "code_execution_tool_result", events[1].ContentBlock.Type)
+	assert.Contains(t, string(events[1].ContentBlock.Content), "HELLO_CHECK")
+}
+
 func TestResponsesToAnthropic_CodeExecutionIsServerTool(t *testing.T) {
 	anth := ResponsesToAnthropic(&ResponsesResponse{
 		Status: "completed",
@@ -3175,6 +3287,49 @@ func TestResponsesToAnthropic_CodeExecutionIsServerTool(t *testing.T) {
 	assert.Equal(t, "code_execution_tool_result", anth.Content[1].Type)
 	assert.Equal(t, "end_turn", anth.StopReason)
 	assert.Contains(t, string(anth.Content[1].Content), "HELLO_CHECK")
+}
+
+func TestResponsesToAnthropic_CodeExecutionCmdIsServerToolResult(t *testing.T) {
+	anth := ResponsesToAnthropic(&ResponsesResponse{
+		Status: "completed",
+		Output: []ResponsesOutput{
+			{
+				Type:      "function_call",
+				ID:        "fc_code",
+				CallID:    "call_code",
+				Name:      "code_execution",
+				Arguments: `{"cmd":"python3 - <<'PY'\nprint('HELLO_CHECK')\nPY"}`,
+			},
+		},
+		Usage: &ResponsesUsage{InputTokens: 20, OutputTokens: 4},
+	}, "claude-opus-4-8")
+
+	require.Len(t, anth.Content, 2)
+	assert.Equal(t, "server_tool_use", anth.Content[0].Type)
+	assert.Equal(t, "code_execution_tool_result", anth.Content[1].Type)
+	assert.Contains(t, string(anth.Content[1].Content), "HELLO_CHECK")
+}
+
+func TestResponsesToAnthropic_ForceThinkingBlockForThinkingRequests(t *testing.T) {
+	anth := ResponsesToAnthropicWithUsageOptions(&ResponsesResponse{
+		Status: "completed",
+		Output: []ResponsesOutput{
+			{
+				Type: "message",
+				Content: []ResponsesContentPart{{
+					Type: "output_text",
+					Text: "2",
+				}},
+			},
+		},
+		Usage: &ResponsesUsage{InputTokens: 20, OutputTokens: 4},
+	}, "claude-opus-4-8", AnthropicUsageEstimationOptions{ForceThinkingBlock: true})
+
+	require.Len(t, anth.Content, 2)
+	assert.Equal(t, "thinking", anth.Content[0].Type)
+	assert.NotEmpty(t, anth.Content[0].Thinking)
+	assert.Equal(t, "text", anth.Content[1].Type)
+	assert.Equal(t, "2", anth.Content[1].Text)
 }
 
 // ---------------------------------------------------------------------------

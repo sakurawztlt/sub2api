@@ -152,7 +152,7 @@ func AnthropicToResponses(req *AnthropicRequest) (*ResponsesRequest, error) {
 	// 设 none (web_search 需要 GPT 主动调). env GCR_TOOLS_BACKGROUND_GATE
 	// 默认 on, =0 一键回老行为.
 	if len(req.ToolChoice) == 0 && os.Getenv("SUB2API_TOOLS_BACKGROUND_GATE") != "0" {
-		if shouldUseToolsAsBackground(req) {
+		if shouldUseToolsAsBackground(req) && !singleTurnPromptRequestsClaudeCodeToolUse(req) {
 			noneChoice := json.RawMessage(`"none"`)
 			out.ToolChoice = noneChoice
 		}
@@ -202,6 +202,101 @@ func shouldUseToolsAsBackground(req *AnthropicRequest) bool {
 		}
 	}
 	return true
+}
+
+// singleTurnPromptRequestsClaudeCodeToolUse detects the narrow cctest/Claude
+// Code shape where the latest user turn really asks the agent to create or
+// write something with loaded builtin tools. Those requests must not be forced
+// to tool_choice=none, otherwise GPT can only answer with text while real
+// Claude Code would select ToolSearch/Write/Bash.
+func singleTurnPromptRequestsClaudeCodeToolUse(req *AnthropicRequest) bool {
+	if req == nil || len(req.Messages) != 1 || len(req.Tools) == 0 {
+		return false
+	}
+	if !anthropicToolsContainAny(req.Tools, "Write", "Edit", "Bash", "ToolSearch") {
+		return false
+	}
+	text := strings.ToLower(strings.TrimSpace(latestAnthropicUserVisibleText(req)))
+	if text == "" {
+		return false
+	}
+	signals := []string{
+		"帮我创建",
+		"创建一个",
+		"创建项目",
+		"写一个",
+		"写一",
+		"create a",
+		"create an",
+		"create project",
+		"write a",
+		"write file",
+		"build a",
+	}
+	for _, signal := range signals {
+		if strings.Contains(text, signal) {
+			return true
+		}
+	}
+	return false
+}
+
+func anthropicToolsContainAny(tools []AnthropicTool, names ...string) bool {
+	want := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		want[name] = struct{}{}
+	}
+	for _, tool := range tools {
+		if _, ok := want[tool.Name]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func latestAnthropicUserVisibleText(req *AnthropicRequest) string {
+	if req == nil || len(req.Messages) == 0 {
+		return ""
+	}
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role != "user" {
+			continue
+		}
+		return latestAnthropicTextPart(req.Messages[i].Content)
+	}
+	return ""
+}
+
+func latestAnthropicTextPart(raw json.RawMessage) string {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return ""
+	}
+	if trimmed[0] == '"' {
+		var s string
+		if err := json.Unmarshal(trimmed, &s); err == nil {
+			return s
+		}
+		return ""
+	}
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(trimmed, &parts); err != nil {
+		return ""
+	}
+	for i := len(parts) - 1; i >= 0; i-- {
+		if parts[i].Type != "text" {
+			continue
+		}
+		text := strings.TrimSpace(parts[i].Text)
+		if text == "" || strings.HasPrefix(text, "<system-reminder>") {
+			continue
+		}
+		return text
+	}
+	return ""
 }
 
 // claudeCodeBuiltinToolNamesAtoR — mirrors cc-api's claudeCodeBuiltinToolNames

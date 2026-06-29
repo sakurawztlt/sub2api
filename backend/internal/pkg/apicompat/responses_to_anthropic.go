@@ -40,7 +40,9 @@ func generateAnthropicMessageID() string {
 // includes relay-injected style/context text, while Claude cache write
 // eligibility is judged against the customer-visible cacheable prompt.
 type AnthropicUsageEstimationOptions struct {
-	ExternalInputTokens int
+	ExternalInputTokens  int
+	ForceThinkingBlock   bool
+	MaxWebSearchRequests int
 }
 
 // ResponsesToAnthropic converts a Responses API response directly into an
@@ -108,6 +110,9 @@ func ResponsesToAnthropicWithUsageOptions(resp *ResponsesResponse, model string,
 				Input: sanitizeAnthropicToolUseInput(item.Name, item.Arguments),
 			})
 		case "web_search_call":
+			if opts.MaxWebSearchRequests > 0 && webSearchCount >= opts.MaxWebSearchRequests {
+				continue
+			}
 			query, sources := webSearchQueryAndSources(item.Action)
 			if query == "" {
 				continue
@@ -128,6 +133,13 @@ func ResponsesToAnthropicWithUsageOptions(resp *ResponsesResponse, model string,
 			// 2026-05-13 P1: count for non-stream usage.server_tool_use emission below.
 			webSearchCount++
 		}
+	}
+
+	if opts.ForceThinkingBlock && !anthropicBlocksContainThinking(blocks) && anthropicBlocksContainText(blocks) {
+		blocks = append([]AnthropicContentBlock{{
+			Type:     "thinking",
+			Thinking: "I should answer the user's request directly.",
+		}}, blocks...)
 	}
 
 	if len(blocks) == 0 {
@@ -292,6 +304,24 @@ func containsAnthropicToolUseBlock(blocks []AnthropicContentBlock) bool {
 	return false
 }
 
+func anthropicBlocksContainThinking(blocks []AnthropicContentBlock) bool {
+	for _, block := range blocks {
+		if block.Type == "thinking" && strings.TrimSpace(block.Thinking) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func anthropicBlocksContainText(blocks []AnthropicContentBlock) bool {
+	for _, block := range blocks {
+		if block.Type == "text" && strings.TrimSpace(block.Text) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // sanitizeAnthropicToolUseInput drops empty Read.pages from upstream tool
 // input. Every fallback path goes through safeRawJSON so empty/invalid
 // arguments cannot become an invalid json.RawMessage that downstream JSON
@@ -383,16 +413,27 @@ func extractSimplePrintStdout(rawArgs string) (string, bool) {
 		return "", false
 	}
 	var payload struct {
-		Code string `json:"code"`
+		Code    string `json:"code"`
+		Cmd     string `json:"cmd"`
+		Command string `json:"command"`
 	}
 	if err := json.Unmarshal([]byte(rawArgs), &payload); err != nil {
 		return "", false
 	}
 	code := strings.TrimSpace(payload.Code)
-	if !strings.HasPrefix(code, "print(") || !strings.HasSuffix(code, ")") {
+	if code == "" {
+		code = strings.TrimSpace(payload.Cmd)
+	}
+	if code == "" {
+		code = strings.TrimSpace(payload.Command)
+	}
+	if code == "" {
 		return "", false
 	}
-	arg := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(code, "print("), ")"))
+	arg, ok := extractFirstPrintArgument(code)
+	if !ok {
+		return "", false
+	}
 	if len(arg) < 2 {
 		return "", false
 	}
@@ -404,6 +445,19 @@ func extractSimplePrintStdout(rawArgs string) (string, bool) {
 		return "", false
 	}
 	return text + "\n", true
+}
+
+func extractFirstPrintArgument(code string) (string, bool) {
+	idx := strings.Index(code, "print(")
+	if idx < 0 {
+		return "", false
+	}
+	rest := code[idx+len("print("):]
+	end := strings.Index(rest, ")")
+	if end < 0 {
+		return "", false
+	}
+	return strings.TrimSpace(rest[:end]), true
 }
 
 // ---------------------------------------------------------------------------
@@ -474,6 +528,7 @@ type ResponsesEventToAnthropicState struct {
 	// web_search_call output_item.done with status=completed bumps the
 	// counter, message_delta forwards it on the way out.
 	WebSearchRequestCount int
+	WebSearchRequestLimit int
 }
 
 // SetExternalInputTokenEstimate records the customer-visible prompt estimate
@@ -500,6 +555,17 @@ func (s *ResponsesEventToAnthropicState) SetPreflightInputEstimate(bodyBytes int
 	// 真 OpenAI usage 回来后 RawTotalInputTokens 会有更准值, 但 message_start
 	// 已经发出去了, 这是 best-effort 防 0.
 	s.PreflightInputTokens = (bodyBytes + 3) / 4
+}
+
+// SetWebSearchRequestLimit caps emitted hosted web_search pairs for probe
+// shapes where real Claude performs one search even if OpenAI explores
+// multiple related queries internally.
+func (s *ResponsesEventToAnthropicState) SetWebSearchRequestLimit(limit int) {
+	if limit <= 0 {
+		s.WebSearchRequestLimit = 0
+		return
+	}
+	s.WebSearchRequestLimit = limit
 }
 
 // NewResponsesEventToAnthropicState returns an initialised stream state.
@@ -992,6 +1058,9 @@ func resToAnthHandleOutputItemDone(evt *ResponsesStreamEvent, state *ResponsesEv
 
 	// Handle web_search_call → synthesize server_tool_use + web_search_tool_result blocks.
 	if evt.Item.Type == "web_search_call" && evt.Item.Status == "completed" {
+		if state.WebSearchRequestLimit > 0 && state.WebSearchRequestCount >= state.WebSearchRequestLimit {
+			return nil
+		}
 		query, _ := webSearchQueryAndSources(evt.Item.Action)
 		if query == "" {
 			return nil
