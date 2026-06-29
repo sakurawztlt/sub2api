@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -87,6 +88,19 @@ func ResponsesToAnthropicWithUsageOptions(resp *ResponsesResponse, model string,
 				}
 			}
 		case "function_call":
+			if isCodeExecutionToolName(item.Name) {
+				toolUseID := serverToolUseIDFromResponsesItem(&item)
+				blocks = append(blocks, AnthropicContentBlock{
+					Type:  "server_tool_use",
+					ID:    toolUseID,
+					Name:  item.Name,
+					Input: sanitizeAnthropicToolUseInput(item.Name, item.Arguments),
+				})
+				if result := synthesizeSimpleCodeExecutionToolResult(toolUseID, item.Arguments); len(result.Content) > 0 {
+					blocks = append(blocks, result)
+				}
+				continue
+			}
 			blocks = append(blocks, AnthropicContentBlock{
 				Type:  "tool_use",
 				ID:    fromResponsesCallID(item.CallID),
@@ -94,16 +108,11 @@ func ResponsesToAnthropicWithUsageOptions(resp *ResponsesResponse, model string,
 				Input: sanitizeAnthropicToolUseInput(item.Name, item.Arguments),
 			})
 		case "web_search_call":
-			toolUseID := "srvtoolu_" + item.ID
-			query := ""
-			var sources []WebSearchSourceIn
-			if item.Action != nil {
-				query = item.Action.Query
-				if query == "" && len(item.Action.Queries) > 0 {
-					query = item.Action.Queries[0]
-				}
-				sources = item.Action.Sources
+			query, sources := webSearchQueryAndSources(item.Action)
+			if query == "" {
+				continue
 			}
+			toolUseID := "srvtoolu_" + item.ID
 			inputJSON, _ := json.Marshal(map[string]string{"query": query})
 			blocks = append(blocks, AnthropicContentBlock{
 				Type:  "server_tool_use",
@@ -309,6 +318,94 @@ func sanitizeAnthropicToolUseInput(name string, raw string) json.RawMessage {
 	return sanitized
 }
 
+func webSearchQueryAndSources(action *WebSearchAction) (string, []WebSearchSourceIn) {
+	if action == nil {
+		return "", nil
+	}
+	query := strings.TrimSpace(action.Query)
+	if query == "" {
+		for _, candidate := range action.Queries {
+			if q := strings.TrimSpace(candidate); q != "" {
+				query = q
+				break
+			}
+		}
+	}
+	return query, action.Sources
+}
+
+func isCodeExecutionToolName(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	return n == "code_execution" || strings.HasPrefix(n, "code_execution_")
+}
+
+func serverToolUseIDFromResponsesItem(item *ResponsesOutput) string {
+	if item == nil {
+		return "srvtoolu_unknown"
+	}
+	if id := strings.TrimSpace(item.ID); id != "" {
+		return "srvtoolu_" + id
+	}
+	if callID := strings.TrimSpace(item.CallID); callID != "" {
+		callID = strings.TrimPrefix(callID, "call_")
+		callID = strings.TrimPrefix(callID, "fc_")
+		return "srvtoolu_" + callID
+	}
+	return "srvtoolu_unknown"
+}
+
+func isEmptyJSONObject(raw string) bool {
+	trimmed := strings.TrimSpace(raw)
+	return trimmed == "" || trimmed == "{}"
+}
+
+func synthesizeSimpleCodeExecutionToolResult(toolUseID, rawArgs string) AnthropicContentBlock {
+	stdout, ok := extractSimplePrintStdout(rawArgs)
+	if !ok {
+		return AnthropicContentBlock{}
+	}
+	content, err := json.Marshal([]map[string]string{{
+		"type": "text",
+		"text": stdout,
+	}})
+	if err != nil {
+		return AnthropicContentBlock{}
+	}
+	return AnthropicContentBlock{
+		Type:      "code_execution_tool_result",
+		ToolUseID: toolUseID,
+		Content:   content,
+	}
+}
+
+func extractSimplePrintStdout(rawArgs string) (string, bool) {
+	if isEmptyJSONObject(rawArgs) {
+		return "", false
+	}
+	var payload struct {
+		Code string `json:"code"`
+	}
+	if err := json.Unmarshal([]byte(rawArgs), &payload); err != nil {
+		return "", false
+	}
+	code := strings.TrimSpace(payload.Code)
+	if !strings.HasPrefix(code, "print(") || !strings.HasSuffix(code, ")") {
+		return "", false
+	}
+	arg := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(code, "print("), ")"))
+	if len(arg) < 2 {
+		return "", false
+	}
+	if strings.HasPrefix(arg, "'") && strings.HasSuffix(arg, "'") {
+		return strings.TrimSuffix(strings.TrimPrefix(arg, "'"), "'") + "\n", true
+	}
+	text, err := strconv.Unquote(arg)
+	if err != nil {
+		return "", false
+	}
+	return text + "\n", true
+}
+
 // ---------------------------------------------------------------------------
 // Streaming: ResponsesStreamEvent → []AnthropicStreamEvent (stateful converter)
 // ---------------------------------------------------------------------------
@@ -323,8 +420,10 @@ type ResponsesEventToAnthropicState struct {
 	ContentBlockOpen    bool
 	CurrentBlockType    string // "text" | "thinking" | "tool_use"
 	CurrentToolName     string
+	CurrentToolUseID    string
 	CurrentToolArgs     string
 	CurrentToolHadDelta bool // 058 step 2: true once a function_call_arguments.delta has been forwarded for the current tool_use block.
+	CurrentToolIsServer bool // true for hosted Anthropic tools such as code_execution; these must not become client tool_use stops.
 	HasToolCall         bool // 058 step 2: true if any function_call output_item.added has been seen during this stream.
 
 	// OutputIndexToBlockIdx maps Responses output_index → Anthropic content block index.
@@ -632,18 +731,25 @@ func resToAnthHandleOutputItemAdded(evt *ResponsesStreamEvent, state *ResponsesE
 		idx := state.ContentBlockIndex
 		state.OutputIndexToBlockIdx[evt.OutputIndex] = idx
 		state.ContentBlockOpen = true
-		state.CurrentBlockType = "tool_use"
+		state.CurrentToolIsServer = isCodeExecutionToolName(evt.Item.Name)
+		if state.CurrentToolIsServer {
+			state.CurrentBlockType = "server_tool_use"
+			state.CurrentToolUseID = serverToolUseIDFromResponsesItem(evt.Item)
+		} else {
+			state.CurrentBlockType = "tool_use"
+			state.CurrentToolUseID = fromResponsesCallID(evt.Item.CallID)
+			state.HasToolCall = true
+		}
 		state.CurrentToolName = evt.Item.Name
 		state.CurrentToolArgs = ""
 		state.CurrentToolHadDelta = false
-		state.HasToolCall = true
 
 		events = append(events, AnthropicStreamEvent{
 			Type:  "content_block_start",
 			Index: &idx,
 			ContentBlock: &AnthropicContentBlock{
-				Type:  "tool_use",
-				ID:    fromResponsesCallID(evt.Item.CallID),
+				Type:  state.CurrentBlockType,
+				ID:    state.CurrentToolUseID,
 				Name:  evt.Item.Name,
 				Input: json.RawMessage("{}"),
 			},
@@ -712,9 +818,15 @@ func resToAnthHandleFuncArgsDelta(evt *ResponsesStreamEvent, state *ResponsesEve
 		state.CurrentToolArgs += evt.Delta
 		return nil
 	}
+	if state.CurrentToolIsServer && isCodeExecutionToolName(state.CurrentToolName) && isEmptyJSONObject(evt.Delta) {
+		return nil
+	}
+	if state.CurrentToolIsServer && isCodeExecutionToolName(state.CurrentToolName) {
+		state.CurrentToolArgs += evt.Delta
+	}
 	// 058 step 2: mark that a delta has been forwarded so the matching .done
 	// event does NOT re-emit the full Arguments JSON (would duplicate input).
-	if state.CurrentBlockType == "tool_use" {
+	if state.CurrentBlockType == "tool_use" || state.CurrentBlockType == "server_tool_use" {
 		state.CurrentToolHadDelta = true
 	}
 
@@ -734,7 +846,7 @@ func resToAnthHandleFuncArgsDelta(evt *ResponsesStreamEvent, state *ResponsesEve
 }
 
 func resToAnthHandleFuncArgsDone(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
-	if state.CurrentBlockType != "tool_use" {
+	if state.CurrentBlockType != "tool_use" && state.CurrentBlockType != "server_tool_use" {
 		return resToAnthHandleBlockDone(state)
 	}
 
@@ -748,8 +860,28 @@ func resToAnthHandleFuncArgsDone(evt *ResponsesStreamEvent, state *ResponsesEven
 	// synthesise a single input_json_delta carrying the entire payload so
 	// downstream Anthropic clients see the JSON. If a delta has already been
 	// streamed, just close the block — re-emitting would duplicate input.
+	isServerCode := state.CurrentToolIsServer && isCodeExecutionToolName(state.CurrentToolName)
+	toolUseID := state.CurrentToolUseID
 	if raw == "" || state.CurrentToolHadDelta {
-		return closeCurrentBlock(state)
+		events := closeCurrentBlock(state)
+		if isServerCode {
+			if result := synthesizeSimpleCodeExecutionToolResult(toolUseID, raw); len(result.Content) > 0 {
+				idx := state.ContentBlockIndex
+				events = append(events,
+					AnthropicStreamEvent{
+						Type:         "content_block_start",
+						Index:        &idx,
+						ContentBlock: &result,
+					},
+					AnthropicStreamEvent{
+						Type:  "content_block_stop",
+						Index: &idx,
+					},
+				)
+				state.ContentBlockIndex++
+			}
+		}
+		return events
 	}
 
 	if state.CurrentToolName == "Read" {
@@ -771,6 +903,23 @@ func resToAnthHandleFuncArgsDone(evt *ResponsesStreamEvent, state *ResponsesEven
 		},
 	}}
 	events = append(events, closeCurrentBlock(state)...)
+	if isServerCode {
+		if result := synthesizeSimpleCodeExecutionToolResult(toolUseID, raw); len(result.Content) > 0 {
+			idx := state.ContentBlockIndex
+			events = append(events,
+				AnthropicStreamEvent{
+					Type:         "content_block_start",
+					Index:        &idx,
+					ContentBlock: &result,
+				},
+				AnthropicStreamEvent{
+					Type:  "content_block_stop",
+					Index: &idx,
+				},
+			)
+			state.ContentBlockIndex++
+		}
+	}
 	return events
 }
 
@@ -843,6 +992,10 @@ func resToAnthHandleOutputItemDone(evt *ResponsesStreamEvent, state *ResponsesEv
 
 	// Handle web_search_call → synthesize server_tool_use + web_search_tool_result blocks.
 	if evt.Item.Type == "web_search_call" && evt.Item.Status == "completed" {
+		query, _ := webSearchQueryAndSources(evt.Item.Action)
+		if query == "" {
+			return nil
+		}
 		// 2026-05-13 P1: bump server_tool_use.web_search_requests counter.
 		state.WebSearchRequestCount++
 		return resToAnthHandleWebSearchDone(evt, state)
@@ -868,14 +1021,9 @@ func resToAnthHandleWebSearchDone(evt *ResponsesStreamEvent, state *ResponsesEve
 	events = append(events, closeCurrentBlock(state)...)
 
 	toolUseID := "srvtoolu_" + evt.Item.ID
-	query := ""
-	var sources []WebSearchSourceIn
-	if evt.Item.Action != nil {
-		query = evt.Item.Action.Query
-		if query == "" && len(evt.Item.Action.Queries) > 0 {
-			query = evt.Item.Action.Queries[0]
-		}
-		sources = evt.Item.Action.Sources
+	query, sources := webSearchQueryAndSources(evt.Item.Action)
+	if query == "" {
+		return nil
 	}
 
 	// Emit server_tool_use as start({}) + input_json_delta + stop, matching
@@ -1009,8 +1157,10 @@ func closeCurrentBlock(state *ResponsesEventToAnthropicState) []AnthropicStreamE
 	state.ContentBlockOpen = false
 	state.ContentBlockIndex++
 	state.CurrentToolName = ""
+	state.CurrentToolUseID = ""
 	state.CurrentToolArgs = ""
 	state.CurrentToolHadDelta = false
+	state.CurrentToolIsServer = false
 	return []AnthropicStreamEvent{{
 		Type:  "content_block_stop",
 		Index: &idx,

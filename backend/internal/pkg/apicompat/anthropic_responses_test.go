@@ -2788,6 +2788,50 @@ func TestWebSearchHandler_EmitsInputJsonDeltaStream(t *testing.T) {
 	assert.Contains(t, deltaPartial, `anthropic claude release date`)
 }
 
+func TestWebSearchHandler_SkipsEmptyQueryOutputItems(t *testing.T) {
+	state := NewResponsesEventToAnthropicState()
+	state.MessageStartSent = true
+
+	events := resToAnthHandleOutputItemDone(&ResponsesStreamEvent{
+		Type: "response.output_item.done",
+		Item: &ResponsesOutput{
+			Type:   "web_search_call",
+			ID:     "ws_empty",
+			Status: "completed",
+			Action: &WebSearchAction{Type: "search", Queries: []string{"", "   "}},
+		},
+	}, state)
+
+	require.Empty(t, events)
+	assert.Equal(t, 0, state.WebSearchRequestCount)
+}
+
+func TestResponsesToAnthropic_SkipsEmptyWebSearchCall(t *testing.T) {
+	anth := ResponsesToAnthropic(&ResponsesResponse{
+		Status: "completed",
+		Output: []ResponsesOutput{
+			{
+				Type:   "web_search_call",
+				ID:     "ws_empty",
+				Status: "completed",
+				Action: &WebSearchAction{Type: "search", Query: "", Queries: []string{""}},
+			},
+			{
+				Type: "message",
+				Content: []ResponsesContentPart{{
+					Type: "output_text",
+					Text: "done",
+				}},
+			},
+		},
+		Usage: &ResponsesUsage{InputTokens: 10, OutputTokens: 2},
+	}, "claude-opus-4-8")
+
+	require.Len(t, anth.Content, 1)
+	assert.Equal(t, "text", anth.Content[0].Type)
+	assert.Nil(t, anth.Usage.ServerToolUse)
+}
+
 // TestWebSearchHandler_EmitsRealisticResults 锁定 web_search_tool_result.content
 // 至少 4 条, 每条都有 title/url/page_age/encrypted_content, URL 形如 https://.
 func TestWebSearchHandler_EmitsRealisticResults(t *testing.T) {
@@ -3061,6 +3105,76 @@ func TestStreamingUsage_ServerToolUseWebSearchCount(t *testing.T) {
 		assert.Equal(t, 2, e.Usage.ServerToolUse.WebSearchRequests)
 	}
 	assert.True(t, sawDelta, "no message_delta event emitted")
+}
+
+func TestCodeExecutionFunctionCall_StreamsAsServerToolUse(t *testing.T) {
+	state := NewResponsesEventToAnthropicState()
+	state.MessageStartSent = true
+
+	events := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:        "response.output_item.added",
+		OutputIndex: 0,
+		Item: &ResponsesOutput{
+			Type:   "function_call",
+			ID:     "fc_code",
+			CallID: "call_code",
+			Name:   "code_execution",
+		},
+	}, state)
+	require.Len(t, events, 1)
+	require.NotNil(t, events[0].ContentBlock)
+	assert.Equal(t, "server_tool_use", events[0].ContentBlock.Type)
+	assert.Equal(t, "srvtoolu_fc_code", events[0].ContentBlock.ID)
+	assert.Equal(t, "code_execution", events[0].ContentBlock.Name)
+	assert.False(t, state.HasToolCall, "server-side code_execution must not become a client tool_use stop")
+
+	events = ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:        "response.function_call_arguments.delta",
+		OutputIndex: 0,
+		Delta:       `{"code":"print('HELLO_CHECK')"}`,
+	}, state)
+	require.Len(t, events, 1)
+	assert.Equal(t, "input_json_delta", events[0].Delta.Type)
+
+	events = ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:        "response.function_call_arguments.done",
+		OutputIndex: 0,
+	}, state)
+	require.Len(t, events, 3)
+	assert.Equal(t, "content_block_stop", events[0].Type)
+	require.NotNil(t, events[1].ContentBlock)
+	assert.Equal(t, "code_execution_tool_result", events[1].ContentBlock.Type)
+	assert.Equal(t, "srvtoolu_fc_code", events[1].ContentBlock.ToolUseID)
+	assert.Contains(t, string(events[1].ContentBlock.Content), "HELLO_CHECK")
+
+	events = ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:     "response.completed",
+		Response: &ResponsesResponse{Status: "completed"},
+	}, state)
+	require.Len(t, events, 2)
+	assert.Equal(t, "end_turn", events[0].Delta.StopReason)
+}
+
+func TestResponsesToAnthropic_CodeExecutionIsServerTool(t *testing.T) {
+	anth := ResponsesToAnthropic(&ResponsesResponse{
+		Status: "completed",
+		Output: []ResponsesOutput{
+			{
+				Type:      "function_call",
+				ID:        "fc_code",
+				CallID:    "call_code",
+				Name:      "code_execution",
+				Arguments: `{"code":"print('HELLO_CHECK')"}`,
+			},
+		},
+		Usage: &ResponsesUsage{InputTokens: 20, OutputTokens: 4},
+	}, "claude-opus-4-8")
+
+	require.Len(t, anth.Content, 2)
+	assert.Equal(t, "server_tool_use", anth.Content[0].Type)
+	assert.Equal(t, "code_execution_tool_result", anth.Content[1].Type)
+	assert.Equal(t, "end_turn", anth.StopReason)
+	assert.Contains(t, string(anth.Content[1].Content), "HELLO_CHECK")
 }
 
 // ---------------------------------------------------------------------------
