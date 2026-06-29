@@ -25,6 +25,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 	"github.com/cespare/xxhash/v2"
@@ -461,6 +462,7 @@ type OpenAIGatewayService struct {
 	httpUpstream          HTTPUpstream
 	deferredService       *DeferredService
 	openAITokenProvider   *OpenAITokenProvider
+	grokTokenProvider     *GrokTokenProvider
 	toolCorrector         *CodexToolCorrector
 	openaiWSResolver      OpenAIWSProtocolResolver
 	resolver              *ModelPricingResolver
@@ -518,6 +520,7 @@ func NewOpenAIGatewayService(
 	httpUpstream HTTPUpstream,
 	deferredService *DeferredService,
 	openAITokenProvider *OpenAITokenProvider,
+	grokTokenProvider *GrokTokenProvider,
 	resolver *ModelPricingResolver,
 	channelService *ChannelService,
 	balanceNotifyService *BalanceNotifyService,
@@ -548,6 +551,7 @@ func NewOpenAIGatewayService(
 		httpUpstream:          httpUpstream,
 		deferredService:       deferredService,
 		openAITokenProvider:   openAITokenProvider,
+		grokTokenProvider:     grokTokenProvider,
 		toolCorrector:         NewCodexToolCorrector(),
 		openaiWSResolver:      NewOpenAIWSProtocolResolver(cfg),
 		resolver:              resolver,
@@ -1603,6 +1607,13 @@ func (s *OpenAIGatewayService) SelectAccountForModelWithExclusions(ctx context.C
 
 // noAvailableOpenAISelectionError builds the standard "no account available" error
 // while preserving the compact-specific error when applicable.
+func normalizeOpenAICompatiblePlatform(platform string) string {
+	if platform == PlatformGrok {
+		return PlatformGrok
+	}
+	return PlatformOpenAI
+}
+
 func noAvailableOpenAISelectionError(requestedModel string, compactBlocked bool) error {
 	if compactBlocked {
 		return ErrNoAvailableCompactAccounts
@@ -1631,20 +1642,34 @@ func openAICompactSupportTier(account *Account) int {
 
 // isOpenAIAccountEligibleForRequest centralises the schedulable / OpenAI / model /
 // compact-support checks used during account selection.
-func isOpenAIAccountEligibleForRequest(ctx context.Context, account *Account, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability) bool {
-	if account == nil || !account.IsOpenAI() || !account.IsSchedulableForModelWithContext(ctx, requestedModel) {
+func isOpenAICompatibleAccountEligibleForRequest(ctx context.Context, account *Account, platform string, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability) bool {
+	platform = normalizeOpenAICompatiblePlatform(platform)
+	if account == nil || account.Platform != platform || !account.IsOpenAICompatible() || !account.IsSchedulableForModelWithContext(ctx, requestedModel) {
 		return false
 	}
-	if paused, reason := shouldAutoPauseOpenAIAccountByQuota(ctx, account); paused {
-		// Debug level: this fires per-candidate on the scheduling hot path, so Info
-		// would amplify into log spam once several accounts cross the threshold.
-		slog.Debug("account_auto_paused_by_quota",
-			"account_id", account.ID,
-			"window", reason.window,
-			"threshold", reason.threshold,
-			"utilization", reason.utilization,
-		)
-		return false
+	if account.IsOpenAI() {
+		if paused, reason := shouldAutoPauseOpenAIAccountByQuota(ctx, account); paused {
+			// Debug level: this fires per-candidate on the scheduling hot path, so Info
+			// would amplify into log spam once several accounts cross the threshold.
+			slog.Debug("account_auto_paused_by_quota",
+				"account_id", account.ID,
+				"window", reason.window,
+				"threshold", reason.threshold,
+				"utilization", reason.utilization,
+			)
+			return false
+		}
+	}
+	if account.IsGrok() {
+		if paused, reason := shouldAutoPauseGrokAccountByQuota(account); paused {
+			slog.Debug("grok_account_auto_paused_by_quota",
+				"account_id", account.ID,
+				"window", reason.window,
+				"threshold", reason.threshold,
+				"utilization", reason.utilization,
+			)
+			return false
+		}
 	}
 	if requestedModel != "" && !account.IsModelSupported(requestedModel) {
 		return false
@@ -1658,10 +1683,78 @@ func isOpenAIAccountEligibleForRequest(ctx context.Context, account *Account, re
 	return true
 }
 
+func isOpenAIAccountEligibleForRequest(ctx context.Context, account *Account, requestedModel string, requireCompact bool, requiredCapability OpenAIEndpointCapability) bool {
+	return isOpenAICompatibleAccountEligibleForRequest(ctx, account, PlatformOpenAI, requestedModel, requireCompact, requiredCapability)
+}
+
 type openAIQuotaAutoPauseDecision struct {
 	window      string
 	threshold   float64
 	utilization float64
+}
+
+func shouldAutoPauseGrokAccountByQuota(account *Account) (bool, openAIQuotaAutoPauseDecision) {
+	if account == nil || !account.IsGrok() || account.Type != AccountTypeOAuth {
+		return false, openAIQuotaAutoPauseDecision{}
+	}
+	snapshot, err := grokQuotaSnapshotFromExtra(account.Extra)
+	if err != nil || snapshot == nil {
+		return false, openAIQuotaAutoPauseDecision{}
+	}
+	now := time.Now()
+	if grokQuotaSnapshotStaleForPause(snapshot, now) {
+		return false, openAIQuotaAutoPauseDecision{}
+	}
+	if grokQuotaRetryAfterActive(snapshot, now) {
+		return true, openAIQuotaAutoPauseDecision{window: "retry_after", threshold: 1, utilization: 1}
+	}
+	if paused, decision := shouldAutoPauseGrokQuotaWindow("requests", snapshot.Requests, now); paused {
+		return true, decision
+	}
+	if paused, decision := shouldAutoPauseGrokQuotaWindow("tokens", snapshot.Tokens, now); paused {
+		return true, decision
+	}
+	return false, openAIQuotaAutoPauseDecision{}
+}
+
+func grokQuotaRetryAfterActive(snapshot *xai.QuotaSnapshot, now time.Time) bool {
+	if snapshot == nil || snapshot.RetryAfterSeconds == nil || *snapshot.RetryAfterSeconds <= 0 {
+		return false
+	}
+	if strings.TrimSpace(snapshot.UpdatedAt) == "" {
+		return true
+	}
+	updatedAt, err := parseTime(snapshot.UpdatedAt)
+	if err != nil {
+		return true
+	}
+	retryAfterUntil := updatedAt.Add(time.Duration(*snapshot.RetryAfterSeconds) * time.Second)
+	return now.Before(retryAfterUntil)
+}
+
+func shouldAutoPauseGrokQuotaWindow(name string, window *xai.QuotaWindow, now time.Time) (bool, openAIQuotaAutoPauseDecision) {
+	if window == nil || window.Limit == nil || window.Remaining == nil || *window.Limit <= 0 {
+		return false, openAIQuotaAutoPauseDecision{}
+	}
+	if window.ResetUnix != nil && *window.ResetUnix > 0 && !now.Before(time.Unix(*window.ResetUnix, 0)) {
+		return false, openAIQuotaAutoPauseDecision{}
+	}
+	utilization := float64(*window.Limit-*window.Remaining) / float64(*window.Limit)
+	if *window.Remaining <= 0 || utilization >= 1 {
+		return true, openAIQuotaAutoPauseDecision{window: name, threshold: 1, utilization: utilization}
+	}
+	return false, openAIQuotaAutoPauseDecision{}
+}
+
+func grokQuotaSnapshotStaleForPause(snapshot *xai.QuotaSnapshot, now time.Time) bool {
+	if snapshot == nil || strings.TrimSpace(snapshot.UpdatedAt) == "" {
+		return false
+	}
+	updatedAt, err := parseTime(snapshot.UpdatedAt)
+	if err != nil {
+		return false
+	}
+	return now.Sub(updatedAt) >= openAICodexAutoPauseStaleAfter
 }
 
 func shouldAutoPauseOpenAIAccountByQuota(ctx context.Context, account *Account) (bool, openAIQuotaAutoPauseDecision) {
@@ -2824,6 +2917,20 @@ func (s *OpenAIGatewayService) schedulingConfig() config.GatewaySchedulingConfig
 func (s *OpenAIGatewayService) GetAccessToken(ctx context.Context, account *Account) (string, string, error) {
 	switch account.Type {
 	case AccountTypeOAuth:
+		if account.Platform == PlatformGrok {
+			if s.grokTokenProvider != nil {
+				accessToken, err := s.grokTokenProvider.GetAccessToken(ctx, account)
+				if err != nil {
+					return "", "", err
+				}
+				return accessToken, "oauth", nil
+			}
+			accessToken := strings.TrimSpace(account.GetGrokAccessToken())
+			if accessToken == "" {
+				return "", "", errors.New("access_token not found in credentials")
+			}
+			return accessToken, "oauth", nil
+		}
 		// 使用 TokenProvider 获取缓存的 token
 		if s.openAITokenProvider != nil {
 			accessToken, err := s.openAITokenProvider.GetAccessToken(ctx, account)
@@ -2839,6 +2946,13 @@ func (s *OpenAIGatewayService) GetAccessToken(ctx context.Context, account *Acco
 		}
 		return accessToken, "oauth", nil
 	case AccountTypeAPIKey:
+		if account.Platform == PlatformGrok {
+			apiKey := strings.TrimSpace(account.GetCredential("api_key"))
+			if apiKey == "" {
+				return "", "", errors.New("api_key not found in credentials")
+			}
+			return apiKey, "apikey", nil
+		}
 		apiKey := account.GetOpenAIApiKey()
 		if apiKey == "" {
 			return "", "", errors.New("api_key not found in credentials")
@@ -2975,6 +3089,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	compatMessagesBridge := isOpenAICompatMessagesBridgeBody(body)
 	setOpenAICompatMessagesBridgeContext(c, compatMessagesBridge)
 
+	if account.Platform == PlatformGrok {
+		_ = promptCacheKey
+		return s.forwardGrokResponses(ctx, c, account, body, originalModel, reqStream, startTime)
+	}
+
 	isCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) || (s.cfg != nil && s.cfg.Gateway.ForceCodexCLI)
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
 	clientTransport := GetOpenAIClientTransport(c)
@@ -3088,6 +3207,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	imageIntent := IsImageGenerationIntent(openAIResponsesEndpoint, reqModel, body)
 	codexCompactRequest := isOpenAIResponsesCompactPath(c) || (isCodexCLI && isCodexCompactRequest(body))
 	codexImageGenerationBridgeForced := s.codexImageGenerationBridgeForcedEnabled(ctx, account, apiKey)
+	if !codexImageGenerationBridgeForced && s != nil && s.cfg != nil && s.cfg.Gateway.CodexImageGenerationBridgeEnabled {
+		codexImageGenerationBridgeForced = true
+	}
 	codexImageGenerationBridgeEnabled := isCodexCLI &&
 		shouldEnableCodexImageGenerationBridge(c, body, reqModel, account, apiKey) &&
 		imageGenerationAllowed &&

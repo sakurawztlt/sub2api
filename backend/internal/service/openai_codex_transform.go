@@ -107,6 +107,7 @@ const (
 	codexImageGenerationBridgeText   = codexImageGenerationBridgeMarker + "\nWhen the user asks for raster image generation or editing, use the OpenAI Responses native `image_generation` tool attached to this request. The local Codex client may not expose an `image_gen` namespace, but that does not mean image generation is unavailable. Do not ask the user to switch to CLI fallback solely because `image_gen` is absent.\n</sub2api-codex-image-generation>"
 	codexSparkImageUnsupportedMarker = "<sub2api-codex-spark-image-unsupported>"
 	codexSparkImageUnsupportedText   = codexSparkImageUnsupportedMarker + "\nThe current model is gpt-5.3-codex-spark, which does not support image generation, image editing, image input, the `image_generation` tool, or Codex `image_gen`/`$imagegen` workflows. If the user asks for image generation or image editing, clearly explain this model limitation and ask them to switch to a non-Spark Codex model such as gpt-5.3-codex or gpt-5.4. Do not claim that the local environment merely lacks image_gen tooling, and do not suggest CLI fallback as the primary fix while the model remains Spark.\n</sub2api-codex-spark-image-unsupported>"
+	codexGPT55Instructions           = "You are Codex, a coding agent based on GPT-5. You and the user share one workspace, and your job is to collaborate with them until their goal is genuinely handled."
 )
 
 var openAIChatGPTInternalUnsupportedFields = []string{
@@ -1309,8 +1310,21 @@ func applyInstructions(reqBody map[string]any, isCodexCLI bool) bool {
 	if !isInstructionsEmpty(reqBody) {
 		return false
 	}
-	reqBody["instructions"] = "You are a helpful coding assistant."
+	if isCodexCLI {
+		reqBody["instructions"] = defaultCodexOAuthInstructions(reqBody)
+	} else {
+		reqBody["instructions"] = "You are a helpful coding assistant."
+	}
 	return true
+}
+
+func defaultCodexOAuthInstructions(reqBody map[string]any) string {
+	model, _ := reqBody["model"].(string)
+	model = strings.ToLower(strings.TrimSpace(model))
+	if strings.HasPrefix(model, "gpt-5.5") || strings.HasPrefix(model, "gpt-5.4") || model == "" {
+		return codexGPT55Instructions
+	}
+	return codexGPT55Instructions
 }
 
 // isInstructionsEmpty 检查 instructions 字段是否为空

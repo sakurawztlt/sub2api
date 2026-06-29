@@ -77,7 +77,7 @@ func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 	preferredMappedModel := resolveOpenAIMessagesDispatchMappedModel(apiKey, reqModel)
 	reqLog = reqLog.With(zap.String("model", reqModel), zap.Bool("stream", parsedReq.Stream))
 
-	setOpsRequestContext(c, reqModel, false)
+	setOpsRequestContext(c, reqModel, false, body)
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(false, false)))
 
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)

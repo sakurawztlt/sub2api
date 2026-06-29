@@ -2500,9 +2500,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
+	forceHTTPBridge := account.Platform == PlatformGrok
 	modeRouterV2Enabled := s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.ModeRouterV2Enabled
 	ingressMode := OpenAIWSIngressModeCtxPool
-	if modeRouterV2Enabled {
+	if modeRouterV2Enabled && !forceHTTPBridge {
 		ingressMode = account.ResolveOpenAIResponsesWebSocketV2Mode(s.cfg.Gateway.OpenAIWS.IngressModeDefault)
 		if ingressMode == OpenAIWSIngressModeOff {
 			return NewOpenAIWSClientCloseError(
@@ -2536,20 +2537,27 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			)
 		}
 	}
-	if wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2 {
+	if !forceHTTPBridge && wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2 {
 		return fmt.Errorf("websocket ingress requires ws_v2 transport, got=%s", wsDecision.Transport)
 	}
 	dedicatedMode := modeRouterV2Enabled && ingressMode == OpenAIWSIngressModeDedicated
 
-	wsURL, err := s.buildOpenAIResponsesWSURL(account)
-	if err != nil {
-		return fmt.Errorf("build ws url: %w", err)
-	}
+	wsURL := ""
 	wsHost := "-"
 	wsPath := "-"
-	if parsedURL, parseErr := url.Parse(wsURL); parseErr == nil && parsedURL != nil {
-		wsHost = normalizeOpenAIWSLogValue(parsedURL.Host)
-		wsPath = normalizeOpenAIWSLogValue(parsedURL.Path)
+	if forceHTTPBridge {
+		wsHost = "xai-http-bridge"
+		wsPath = "/v1/responses"
+	} else {
+		var err error
+		wsURL, err = s.buildOpenAIResponsesWSURL(account)
+		if err != nil {
+			return fmt.Errorf("build ws url: %w", err)
+		}
+		if parsedURL, parseErr := url.Parse(wsURL); parseErr == nil && parsedURL != nil {
+			wsHost = normalizeOpenAIWSLogValue(parsedURL.Host)
+			wsPath = normalizeOpenAIWSLogValue(parsedURL.Path)
+		}
 	}
 	debugEnabled := isOpenAIWSModeDebugEnabled()
 	isCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) || (s.cfg != nil && s.cfg.Gateway.ForceCodexCLI)
@@ -2957,7 +2965,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 	}
 
-	if s.shouldBridgeOpenAIWSHTTP(firstPayload.payloadBytes, firstPayload.previousResponseID) {
+	if s.shouldBridgeOpenAIWSHTTP(account, firstPayload.payloadBytes, firstPayload.previousResponseID) {
 		return runHTTPBridge(firstPayload, nil, false, 1, false)
 	}
 

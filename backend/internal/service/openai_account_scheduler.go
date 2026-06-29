@@ -1218,7 +1218,9 @@ func (s *OpenAIGatewayService) SelectAccountWithSchedulerForCapability(
 	requiredTransport OpenAIUpstreamTransport,
 	requiredCapability OpenAIEndpointCapability,
 	requireCompact bool,
+	platformOverride ...string,
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+	_ = platformOverride
 	return s.selectAccountWithScheduler(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, "", requireCompact)
 }
 

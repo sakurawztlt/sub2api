@@ -131,6 +131,13 @@ func NewOpenAIGatewayHandler(
 	}
 }
 
+func openAICompatibleRequestPlatform(apiKey *service.APIKey) string {
+	if apiKey != nil && apiKey.Group != nil && apiKey.Group.Platform == service.PlatformGrok {
+		return service.PlatformGrok
+	}
+	return service.PlatformOpenAI
+}
+
 // Responses handles OpenAI Responses API endpoint
 // POST /openai/v1/responses
 func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
@@ -1399,6 +1406,11 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	}
 
 	subscription, _ := middleware2.GetSubscriptionFromContext(c)
+	requestPlatform := openAICompatibleRequestPlatform(apiKey)
+	requiredTransport := service.OpenAIUpstreamTransportResponsesWebsocketV2
+	if requestPlatform == service.PlatformGrok {
+		requiredTransport = service.OpenAIUpstreamTransportHTTPSSE
+	}
 	if err := h.billingCacheService.CheckBillingEligibility(ctx, apiKey.User, apiKey, apiKey.Group, subscription, service.QuotaPlatform(c.Request.Context(), apiKey)); err != nil {
 		reqLog.Info("openai.websocket_billing_eligibility_check_failed", zap.Error(err))
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "billing check failed")
@@ -1424,9 +1436,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			sessionHash,
 			reqModel,
 			failedAccountIDs,
-			service.OpenAIUpstreamTransportResponsesWebsocketV2,
+			requiredTransport,
 			service.OpenAIEndpointCapabilityChatCompletions,
 			false,
+			requestPlatform,
 		)
 		if err != nil {
 			reqLog.Warn("openai.websocket_account_select_failed",

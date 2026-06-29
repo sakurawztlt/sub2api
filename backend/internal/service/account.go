@@ -14,6 +14,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
 
 type Account struct {
@@ -76,6 +77,21 @@ const (
 )
 
 const openAIEndpointCapabilitiesCredentialKey = "openai_capabilities"
+
+const (
+	OpenAIAuthModePersonalAccessToken = "personalAccessToken"
+	openAIAuthModeCredentialKey       = "auth_mode"
+	openAIAuthModeLegacyCredentialKey = "openai_auth_mode"
+)
+
+func isOpenAIPersonalAccessTokenAuthMode(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "personalaccesstoken", "personal_access_token":
+		return true
+	default:
+		return false
+	}
+}
 
 type TempUnschedulableRule struct {
 	ErrorCode       int      `json:"error_code"`
@@ -180,6 +196,18 @@ func (a *Account) IsPrivacySet() bool {
 
 func (a *Account) IsGemini() bool {
 	return a.Platform == PlatformGemini
+}
+
+func (a *Account) IsGrok() bool {
+	return a.Platform == PlatformGrok
+}
+
+func (a *Account) IsGrokOAuth() bool {
+	return a.IsGrok() && a.Type == AccountTypeOAuth
+}
+
+func (a *Account) IsOpenAICompatible() bool {
+	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok)
 }
 
 func (a *Account) GeminiOAuthType() string {
@@ -500,6 +528,9 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 		if a.Platform == domain.PlatformAntigravity {
 			return domain.DefaultAntigravityModelMapping
 		}
+		if a.Platform == domain.PlatformGrok {
+			return xai.DefaultModelMapping()
+		}
 		// Bedrock 默认映射由 forwardBedrock 统一处理（需配合 region prefix 调整）
 		return nil
 	}
@@ -507,6 +538,9 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 		// Antigravity 平台使用默认映射
 		if a.Platform == domain.PlatformAntigravity {
 			return domain.DefaultAntigravityModelMapping
+		}
+		if a.Platform == domain.PlatformGrok {
+			return xai.DefaultModelMapping()
 		}
 		return nil
 	}
@@ -531,6 +565,9 @@ func (a *Account) resolveModelMapping(rawMapping map[string]any) map[string]stri
 	// Antigravity 平台使用默认映射
 	if a.Platform == domain.PlatformAntigravity {
 		return domain.DefaultAntigravityModelMapping
+	}
+	if a.Platform == domain.PlatformGrok {
+		return xai.DefaultModelMapping()
 	}
 	return nil
 }
@@ -1067,6 +1104,14 @@ func (a *Account) IsOpenAIOAuth() bool {
 	return a.IsOpenAI() && a.Type == AccountTypeOAuth
 }
 
+func (a *Account) IsOpenAIPersonalAccessToken() bool {
+	if !a.IsOpenAIOAuth() {
+		return false
+	}
+	return isOpenAIPersonalAccessTokenAuthMode(a.GetCredential(openAIAuthModeCredentialKey)) ||
+		isOpenAIPersonalAccessTokenAuthMode(a.GetCredential(openAIAuthModeLegacyCredentialKey))
+}
+
 func (a *Account) IsOpenAIApiKey() bool {
 	return a.IsOpenAI() && a.Type == AccountTypeAPIKey
 }
@@ -1093,6 +1138,31 @@ func (a *Account) GetOpenAIAccessToken() string {
 
 func (a *Account) GetOpenAIRefreshToken() string {
 	if !a.IsOpenAIOAuth() {
+		return ""
+	}
+	return a.GetCredential("refresh_token")
+}
+
+func (a *Account) GetGrokBaseURL() string {
+	if !a.IsGrok() {
+		return ""
+	}
+	baseURL := strings.TrimSpace(a.GetCredential("base_url"))
+	if baseURL != "" {
+		return baseURL
+	}
+	return xai.DefaultBaseURL
+}
+
+func (a *Account) GetGrokAccessToken() string {
+	if !a.IsGrok() {
+		return ""
+	}
+	return a.GetCredential("access_token")
+}
+
+func (a *Account) GetGrokRefreshToken() string {
+	if !a.IsGrokOAuth() {
 		return ""
 	}
 	return a.GetCredential("refresh_token")
@@ -1147,8 +1217,11 @@ func (a *Account) SupportsOpenAIEndpointCapability(capability OpenAIEndpointCapa
 	if capability == "" {
 		return true
 	}
-	if !a.IsOpenAI() {
+	if !a.IsOpenAICompatible() {
 		return false
+	}
+	if a.IsGrok() {
+		return capability == OpenAIEndpointCapabilityChatCompletions
 	}
 	switch capability {
 	case OpenAIEndpointCapabilityChatCompletions:
