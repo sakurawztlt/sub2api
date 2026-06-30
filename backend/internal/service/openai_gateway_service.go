@@ -25,6 +25,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
@@ -7412,6 +7413,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		}
 		multiplier = resolver.Resolve(ctx, user.ID, *apiKey.GroupID, apiKey.Group.RateMultiplier)
 	}
+	// 文本倍率叠加高峰因子（仅文本，图片倍率不受影响）。高峰因子按请求时刻现算，
+	// 不并入上面的 Resolve，以免污染 user:group 倍率缓存。
+	multiplier, imageMultiplier := computePeakAwareMultipliers(apiKey, multiplier, timezone.Now())
 
 	var cost *CostBreakdown
 	var err error
@@ -7430,7 +7434,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 		serviceTier = strings.TrimSpace(*result.ServiceTier)
 	}
 	for _, candidate := range usageBillingModelCandidates(billingModel, result.UpstreamModel, result.Model) {
-		cost, err = s.calculateOpenAIRecordUsageCost(ctx, result, apiKey, candidate, multiplier, tokens, serviceTier)
+		cost, err = s.calculateOpenAIRecordUsageCost(ctx, result, apiKey, candidate, multiplier, imageMultiplier, tokens, serviceTier)
 		if err == nil {
 			billingModel = candidate
 			break
@@ -7587,11 +7591,11 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 	apiKey *APIKey,
 	billingModel string,
 	multiplier float64,
+	imageMultiplier float64,
 	tokens UsageTokens,
 	serviceTier string,
 ) (*CostBreakdown, error) {
 	if result != nil && result.ImageCount > 0 {
-		imageMultiplier := resolveImageRateMultiplier(apiKey, multiplier)
 		return s.calculateOpenAIImageCost(ctx, billingModel, apiKey, result, imageMultiplier), nil
 	}
 	if s.resolver != nil && apiKey.Group != nil {
