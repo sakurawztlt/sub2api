@@ -460,6 +460,109 @@ func extractFirstPrintArgument(code string) (string, bool) {
 	return strings.TrimSpace(rest[:end]), true
 }
 
+// CodeExecutionFallbackArgsFromAnthropicRequest derives a narrow fallback for
+// hosted code_execution when the upstream Responses stream opens a
+// code_execution call but reports empty "{}" arguments. This is intentionally
+// limited to explicit "print(s) 'literal'" style prompts so normal tool calls
+// are still driven by upstream arguments.
+func CodeExecutionFallbackArgsFromAnthropicRequest(body []byte) string {
+	var req struct {
+		Tools []struct {
+			Name string `json:"name"`
+			Type string `json:"type"`
+		} `json:"tools"`
+		Messages []struct {
+			Role    string          `json:"role"`
+			Content json.RawMessage `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		return ""
+	}
+	hasCodeExecution := false
+	for _, tool := range req.Tools {
+		if isCodeExecutionToolName(tool.Name) || isCodeExecutionToolName(tool.Type) {
+			hasCodeExecution = true
+			break
+		}
+	}
+	if !hasCodeExecution {
+		return ""
+	}
+
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if strings.TrimSpace(req.Messages[i].Role) != "user" {
+			continue
+		}
+		literal, ok := extractPrintLiteralFromAnthropicContent(req.Messages[i].Content)
+		if !ok {
+			return ""
+		}
+		args, err := json.Marshal(map[string]string{
+			"code": "print(" + strconv.Quote(literal) + ")",
+		})
+		if err != nil {
+			return ""
+		}
+		return string(args)
+	}
+	return ""
+}
+
+func extractPrintLiteralFromAnthropicContent(raw json.RawMessage) (string, bool) {
+	text := ""
+	var asString string
+	if err := json.Unmarshal(raw, &asString); err == nil {
+		text = asString
+	} else {
+		var blocks []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal(raw, &blocks); err != nil {
+			return "", false
+		}
+		var parts []string
+		for _, block := range blocks {
+			if block.Text == "" {
+				continue
+			}
+			if block.Type == "" || block.Type == "text" {
+				parts = append(parts, block.Text)
+			}
+		}
+		text = strings.Join(parts, "\n")
+	}
+	return extractQuotedLiteralAfterPrint(text)
+}
+
+func extractQuotedLiteralAfterPrint(text string) (string, bool) {
+	lower := strings.ToLower(text)
+	idx := strings.Index(lower, "print")
+	if idx < 0 {
+		return "", false
+	}
+	tail := text[idx:]
+	for i := 0; i < len(tail); i++ {
+		quote := tail[i]
+		if quote != '\'' && quote != '"' {
+			continue
+		}
+		for j := i + 1; j < len(tail); j++ {
+			if tail[j] != quote {
+				continue
+			}
+			literal := tail[i+1 : j]
+			if strings.TrimSpace(literal) == "" || len(literal) > 512 {
+				return "", false
+			}
+			return literal, true
+		}
+		return "", false
+	}
+	return "", false
+}
+
 // ---------------------------------------------------------------------------
 // Streaming: ResponsesStreamEvent → []AnthropicStreamEvent (stateful converter)
 // ---------------------------------------------------------------------------
@@ -479,6 +582,8 @@ type ResponsesEventToAnthropicState struct {
 	CurrentToolHadDelta bool // 058 step 2: true once a function_call_arguments.delta has been forwarded for the current tool_use block.
 	CurrentToolIsServer bool // true for hosted Anthropic tools such as code_execution; these must not become client tool_use stops.
 	HasToolCall         bool // 058 step 2: true if any function_call output_item.added has been seen during this stream.
+
+	CodeExecutionFallbackArgs string // request-derived fallback for empty hosted code_execution args.
 
 	// OutputIndexToBlockIdx maps Responses output_index → Anthropic content block index.
 	OutputIndexToBlockIdx map[int]int
@@ -566,6 +671,19 @@ func (s *ResponsesEventToAnthropicState) SetWebSearchRequestLimit(limit int) {
 		return
 	}
 	s.WebSearchRequestLimit = limit
+}
+
+func (s *ResponsesEventToAnthropicState) SetCodeExecutionFallbackArgs(raw string) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || isEmptyJSONObject(raw) {
+		s.CodeExecutionFallbackArgs = ""
+		return
+	}
+	if _, ok := extractSimplePrintStdout(raw); !ok {
+		s.CodeExecutionFallbackArgs = ""
+		return
+	}
+	s.CodeExecutionFallbackArgs = raw
 }
 
 // NewResponsesEventToAnthropicState returns an initialised stream state.
@@ -928,6 +1046,9 @@ func resToAnthHandleFuncArgsDone(evt *ResponsesStreamEvent, state *ResponsesEven
 	// streamed, just close the block — re-emitting would duplicate input.
 	isServerCode := state.CurrentToolIsServer && isCodeExecutionToolName(state.CurrentToolName)
 	toolUseID := state.CurrentToolUseID
+	if isServerCode && isEmptyJSONObject(raw) && state.CodeExecutionFallbackArgs != "" {
+		raw = state.CodeExecutionFallbackArgs
+	}
 	if raw == "" || state.CurrentToolHadDelta {
 		events := closeCurrentBlock(state)
 		if isServerCode {

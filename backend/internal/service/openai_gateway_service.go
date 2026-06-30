@@ -268,12 +268,13 @@ type OpenAIUsage struct {
 // 耗时 / messages 数 / prompt cache key / continuation 状态). 客户慢请求
 // 排查的核心字段一次到位.
 type streamReqMeta struct {
-	Account               *Account
-	TimeToHeadersMs       int    // 从 httpUpstream.Do() 到 resp.Header 返回
-	MessagesCount         int    // gjson 数 body.messages 长度
-	ToolsCount            int    // gjson 数 body.tools 长度
-	PromptCacheKeySha256  string // sha256(promptCacheKey) hex 前 16 位
-	HasPreviousResponseID bool
+	Account                   *Account
+	TimeToHeadersMs           int    // 从 httpUpstream.Do() 到 resp.Header 返回
+	MessagesCount             int    // gjson 数 body.messages 长度
+	ToolsCount                int    // gjson 数 body.tools 长度
+	CodeExecutionFallbackArgs string // request-derived fallback for empty hosted code_execution args
+	PromptCacheKeySha256      string // sha256(promptCacheKey) hex 前 16 位
+	HasPreviousResponseID     bool
 
 	// HasTurnState — codex round37 fu56 (2026-05-20): clarified semantics.
 	// This field reflects whether the INBOUND cache lookup

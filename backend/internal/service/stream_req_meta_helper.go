@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/tidwall/gjson"
 )
 
@@ -28,14 +29,15 @@ func computeStreamReqMeta(
 	timeToHeadersMs int,
 ) streamReqMeta {
 	return streamReqMeta{
-		Account:               account,
-		TimeToHeadersMs:       timeToHeadersMs,
-		MessagesCount:         countMessagesInBody(body),
-		ToolsCount:            countToolsInBody(body),
-		PromptCacheKeySha256:  shortSHA256(promptCacheKey),
-		HasPreviousResponseID: strings.TrimSpace(previousResponseID) != "",
-		HasTurnState:          strings.TrimSpace(turnState) != "",
-		ProxyHash:             proxyURLHash(proxyURL),
+		Account:                   account,
+		TimeToHeadersMs:           timeToHeadersMs,
+		MessagesCount:             countMessagesInBody(body),
+		ToolsCount:                countToolsInBody(body),
+		CodeExecutionFallbackArgs: apicompat.CodeExecutionFallbackArgsFromAnthropicRequest(body),
+		PromptCacheKeySha256:      shortSHA256(promptCacheKey),
+		HasPreviousResponseID:     strings.TrimSpace(previousResponseID) != "",
+		HasTurnState:              strings.TrimSpace(turnState) != "",
+		ProxyHash:                 proxyURLHash(proxyURL),
 	}
 }
 

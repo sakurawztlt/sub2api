@@ -3235,6 +3235,54 @@ func TestCodeExecutionFunctionCall_StreamsAsServerToolUse(t *testing.T) {
 	assert.Equal(t, "end_turn", events[0].Delta.StopReason)
 }
 
+func TestCodeExecutionFallbackArgsFromAnthropicRequest(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-opus-4-7",
+		"stream":true,
+		"tools":[{"name":"code_execution","type":"code_execution_20250522"}],
+		"messages":[{
+			"role":"user",
+			"content":[{"type":"text","text":"Write and execute a Python script that prints 'HELLO_CHECK'. Only use the code execution tool, nothing else."}]
+		}]
+	}`)
+
+	args := CodeExecutionFallbackArgsFromAnthropicRequest(body)
+	require.NotEmpty(t, args)
+	assert.JSONEq(t, `{"code":"print(\"HELLO_CHECK\")"}`, args)
+}
+
+func TestCodeExecutionFunctionCall_EmptyArgsUsesRequestFallback(t *testing.T) {
+	state := NewResponsesEventToAnthropicState()
+	state.MessageStartSent = true
+	state.SetCodeExecutionFallbackArgs(`{"code":"print(\"HELLO_CHECK\")"}`)
+
+	ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:        "response.output_item.added",
+		OutputIndex: 0,
+		Item: &ResponsesOutput{
+			Type:   "function_call",
+			ID:     "fc_code",
+			CallID: "call_code",
+			Name:   "code_execution",
+		},
+	}, state)
+
+	events := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:        "response.function_call_arguments.done",
+		OutputIndex: 0,
+		Arguments:   `{}`,
+	}, state)
+
+	require.Len(t, events, 4)
+	require.NotNil(t, events[0].Delta)
+	assert.Equal(t, "input_json_delta", events[0].Delta.Type)
+	assert.JSONEq(t, `{"code":"print(\"HELLO_CHECK\")"}`, events[0].Delta.PartialJSON)
+	assert.Equal(t, "content_block_stop", events[1].Type)
+	require.NotNil(t, events[2].ContentBlock)
+	assert.Equal(t, "code_execution_tool_result", events[2].ContentBlock.Type)
+	assert.Contains(t, string(events[2].ContentBlock.Content), "HELLO_CHECK")
+}
+
 func TestCodeExecutionFunctionCall_SynthesizesResultFromCmdDelta(t *testing.T) {
 	state := NewResponsesEventToAnthropicState()
 	state.MessageStartSent = true
