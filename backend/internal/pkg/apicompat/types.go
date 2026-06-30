@@ -229,6 +229,9 @@ type AnthropicDelta struct {
 	// text_delta
 	Text string `json:"text,omitempty"`
 
+	// citations_delta
+	Citation json.RawMessage `json:"citation,omitempty"`
+
 	// input_json_delta
 	PartialJSON string `json:"partial_json,omitempty"`
 

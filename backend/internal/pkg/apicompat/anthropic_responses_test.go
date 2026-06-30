@@ -2876,6 +2876,45 @@ func TestWebSearchHandler_EmitsRealisticResults(t *testing.T) {
 	assert.GreaterOrEqual(t, len(seenURLs), 2, "expected URL variety across results")
 }
 
+func TestWebSearchHandler_EmitsCitationDeltaOnFirstText(t *testing.T) {
+	state := NewResponsesEventToAnthropicState()
+	state.MessageStartSent = true
+
+	_ = resToAnthHandleOutputItemDone(&ResponsesStreamEvent{
+		Type: "response.output_item.done",
+		Item: &ResponsesOutput{
+			Type:   "web_search_call",
+			ID:     "ws_cite",
+			Status: "completed",
+			Action: &WebSearchAction{
+				Type:  "search",
+				Query: "latest AI news 2026-06-30",
+				Sources: []WebSearchSourceIn{{
+					URL: "https://www.reuters.com/technology/artificial-intelligence/",
+				}},
+			},
+		},
+	}, state)
+
+	events := resToAnthHandleTextDelta(&ResponsesStreamEvent{
+		Type:  "response.output_text.delta",
+		Delta: "Here is a concise roundup.",
+	}, state)
+
+	var sawCitation bool
+	for _, e := range events {
+		if e.Type == "content_block_delta" && e.Delta != nil && e.Delta.Type == "citations_delta" {
+			sawCitation = true
+			var citation map[string]string
+			require.NoError(t, json.Unmarshal(e.Delta.Citation, &citation))
+			assert.Equal(t, "web_search_result_location", citation["type"])
+			assert.Equal(t, "https://www.reuters.com/technology/artificial-intelligence/", citation["url"])
+			assert.NotEmpty(t, citation["encrypted_index"])
+		}
+	}
+	require.True(t, sawCitation, "first text delta after web_search must include citations_delta")
+}
+
 // TestSynthesizeWebSearchResults_EmptyQuery 空 query 不能 panic 或出空 URL.
 func TestSynthesizeWebSearchResults_EmptyQuery(t *testing.T) {
 	content := synthesizeWebSearchToolResultContent("", nil)
