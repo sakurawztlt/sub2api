@@ -459,7 +459,9 @@ func provideCleanup(
 				return nil
 			}},
 			{"GrokOAuthService", func() error {
-				grokOAuth.Stop()
+				if grokOAuth != nil {
+					grokOAuth.Stop()
+				}
 				return nil
 			}},
 			{"OpenAIWSPool", func() error {
