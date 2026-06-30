@@ -527,9 +527,8 @@ type ResponsesEventToAnthropicState struct {
 	// OpenAI's usage doesn't carry this so we count locally — every
 	// web_search_call output_item.done with status=completed bumps the
 	// counter, message_delta forwards it on the way out.
-	WebSearchRequestCount    int
-	WebSearchRequestLimit    int
-	PendingWebSearchCitation json.RawMessage
+	WebSearchRequestCount int
+	WebSearchRequestLimit int
 }
 
 // SetExternalInputTokenEstimate records the customer-visible prompt estimate
@@ -873,17 +872,6 @@ func resToAnthHandleTextDelta(evt *ResponsesStreamEvent, state *ResponsesEventTo
 			Text: evt.Delta,
 		},
 	})
-	if len(state.PendingWebSearchCitation) > 0 {
-		events = append(events, AnthropicStreamEvent{
-			Type:  "content_block_delta",
-			Index: &idx,
-			Delta: &AnthropicDelta{
-				Type:     "citations_delta",
-				Citation: state.PendingWebSearchCitation,
-			},
-		})
-		state.PendingWebSearchCitation = nil
-	}
 	return events
 }
 
@@ -1137,15 +1125,13 @@ func resToAnthHandleWebSearchDone(evt *ResponsesStreamEvent, state *ResponsesEve
 	state.ContentBlockIndex++
 
 	idx2 := state.ContentBlockIndex
-	resultContent := synthesizeWebSearchToolResultContent(query, sources)
-	state.PendingWebSearchCitation = synthesizeWebSearchCitation(resultContent, query)
 	events = append(events, AnthropicStreamEvent{
 		Type:  "content_block_start",
 		Index: &idx2,
 		ContentBlock: &AnthropicContentBlock{
 			Type:      "web_search_tool_result",
 			ToolUseID: toolUseID,
-			Content:   resultContent,
+			Content:   synthesizeWebSearchToolResultContent(query, sources),
 		},
 	})
 	events = append(events, AnthropicStreamEvent{
@@ -1389,38 +1375,6 @@ func synthesizeWebSearchToolResultContent(query string, realSources []WebSearchS
 	out, err := json.Marshal(items)
 	if err != nil {
 		return json.RawMessage(`[]`)
-	}
-	return out
-}
-
-func synthesizeWebSearchCitation(resultContent json.RawMessage, query string) json.RawMessage {
-	var items []map[string]string
-	if err := json.Unmarshal(resultContent, &items); err != nil || len(items) == 0 {
-		return nil
-	}
-	first := items[0]
-	url := first["url"]
-	title := first["title"]
-	if url == "" || title == "" {
-		return nil
-	}
-	citedText := query
-	if citedText == "" {
-		citedText = title
-	}
-	encryptedIndex := first["encrypted_content"]
-	if encryptedIndex == "" {
-		encryptedIndex = fakeEncryptedContent()
-	}
-	out, err := json.Marshal(map[string]string{
-		"type":            "web_search_result_location",
-		"url":             url,
-		"title":           title,
-		"cited_text":      citedText,
-		"encrypted_index": encryptedIndex,
-	})
-	if err != nil {
-		return nil
 	}
 	return out
 }
