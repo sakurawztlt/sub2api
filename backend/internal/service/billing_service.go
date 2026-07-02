@@ -813,19 +813,15 @@ func (s *BillingService) CalculateCostWithConfig(model string, tokens UsageToken
 // 拆分计费的契约, 不是 multiplier 模型). 若 future 决定补一致, 注意 Gemini
 // 计费定价契约可能受影响, 跟 codex 商.
 func (s *BillingService) CalculateCostWithLongContext(model string, tokens UsageTokens, rateMultiplier float64, threshold int, extraMultiplier float64) (*CostBreakdown, error) {
-	return s.calculateCostWithLongContext(model, tokens, rateMultiplier, threshold, extraMultiplier)
-}
-
-func (s *BillingService) calculateCostWithLongContext(model string, tokens UsageTokens, rateMultiplier float64, threshold int, extraMultiplier float64) (*CostBreakdown, error) {
 	// 未启用长上下文计费，直接走正常计费
 	if threshold <= 0 || extraMultiplier <= 1 {
-		return s.calculateCostInternal(model, tokens, rateMultiplier, "", nil)
+		return s.CalculateCost(model, tokens, rateMultiplier)
 	}
 
 	// 计算总输入 token（缓存读取 + 新输入）
 	total := tokens.CacheReadTokens + tokens.InputTokens
 	if total <= threshold {
-		return s.calculateCostInternal(model, tokens, rateMultiplier, "", nil)
+		return s.CalculateCost(model, tokens, rateMultiplier)
 	}
 
 	// 拆分成范围内和范围外
@@ -856,7 +852,7 @@ func (s *BillingService) calculateCostWithLongContext(model string, tokens Usage
 		CacheCreation1hTokens: tokens.CacheCreation1hTokens,
 		ImageOutputTokens:     tokens.ImageOutputTokens,
 	}
-	inRangeCost, err := s.calculateCostInternal(model, inRangeTokens, rateMultiplier, "", nil)
+	inRangeCost, err := s.CalculateCost(model, inRangeTokens, rateMultiplier)
 	if err != nil {
 		return nil, err
 	}
@@ -866,7 +862,7 @@ func (s *BillingService) calculateCostWithLongContext(model string, tokens Usage
 		InputTokens:     outRangeInputTokens,
 		CacheReadTokens: outRangeCacheTokens,
 	}
-	outRangeCost, err := s.calculateCostInternal(model, outRangeTokens, rateMultiplier*extraMultiplier, "", nil)
+	outRangeCost, err := s.CalculateCost(model, outRangeTokens, rateMultiplier*extraMultiplier)
 	if err != nil {
 		return inRangeCost, fmt.Errorf("out-range cost: %w", err)
 	}
