@@ -3297,7 +3297,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return nil, errors.New("image generation disabled for group")
 	}
 
-	if codexImageGenerationBridgeEnabled {
+	// /responses/compact 是会话压缩请求：上游不接受 tool_choice（400 unknown_parameter），
+	// 注入 image_generation 工具也没有意义，整块豁免。
+	if codexImageGenerationBridgeEnabled && !isCompactRequest {
 		decoded, decodeErr := ensureReqBody()
 		if decodeErr != nil {
 			return nil, decodeErr
@@ -3313,7 +3315,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			markDecodedModified()
 			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Injected /responses image_generation tool for Codex client")
 		}
-		if codexImageGenerationBridgeEnabled && ensureOpenAIResponsesImageGenerationToolChoiceAuto(decoded) {
+		if codexImageGenerationBridgeEnabled && !isCompactRequest && ensureOpenAIResponsesImageGenerationToolChoiceAuto(decoded) {
 			markDecodedModified()
 			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Set /responses image_generation tool_choice=auto for Codex client")
 		}
