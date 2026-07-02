@@ -83,6 +83,12 @@ func TestAntigravityGatewayService_GetMappedModel(t *testing.T) {
 			expected:       "claude-fable-5",
 		},
 		{
+			name:           "默认映射透传 - claude-sonnet-5",
+			requestedModel: "claude-sonnet-5",
+			accountMapping: nil,
+			expected:       "claude-sonnet-5",
+		},
+		{
 			name:           "默认映射透传 - claude-sonnet-4-6",
 			requestedModel: "claude-sonnet-4-6",
 			accountMapping: nil,

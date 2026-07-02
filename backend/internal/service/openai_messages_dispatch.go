@@ -19,9 +19,11 @@ const (
 	// 客户绕过 gcr 直打 sub2api 的 Anthropic-shape 请求也走相同路径.
 	// Group.MessagesDispatchModelConfig.OpusMappedModel / ExactModelMappings
 	// 仍优先 (DB 可显式覆盖此默认值).
-	defaultOpenAIMessagesDispatchOpusMappedModel   = "gpt-5.5"
-	defaultOpenAIMessagesDispatchSonnetMappedModel = "gpt-5.4"
-	defaultOpenAIMessagesDispatchHaikuMappedModel  = "gpt-5.4-mini"
+	defaultOpenAIMessagesDispatchOpusMappedModel         = "gpt-5.5"
+	defaultOpenAIMessagesDispatchSonnetFiveMappedModel   = "gpt-5.5"
+	defaultOpenAIMessagesDispatchSonnetFiveFallbackModel = "gpt-5.4"
+	defaultOpenAIMessagesDispatchSonnetMappedModel       = "gpt-5.4"
+	defaultOpenAIMessagesDispatchHaikuMappedModel        = "gpt-5.4-mini"
 )
 
 func normalizeOpenAIMessagesDispatchMappedModel(model string) string {
@@ -76,8 +78,44 @@ func isClaudeSonnetFourMessagesModel(model string) bool {
 	return strings.HasPrefix(normalized, "claude-sonnet-4")
 }
 
+func isClaudeSonnetFiveMessagesModel(model string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	return strings.HasPrefix(normalized, "claude-sonnet-5")
+}
+
+func isLegacySonnetFiveDispatchModel(mappedModel string) bool {
+	switch strings.ToLower(strings.TrimSpace(mappedModel)) {
+	case "", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.3-codex-high", "gpt-5.3-codex-xhigh", "gpt-5.3":
+		return true
+	default:
+		return false
+	}
+}
+
+// FallbackSonnetFiveMessagesDispatchModel returns the backup dispatch model for
+// Sonnet 5 Anthropic-shaped Messages requests after the primary gpt-5.5 route
+// has failed before writing any client-visible bytes.
+func FallbackSonnetFiveMessagesDispatchModel(requestedModel, currentMappedModel string) string {
+	if !isClaudeSonnetFiveMessagesModel(requestedModel) {
+		return ""
+	}
+	currentMappedModel = normalizeOpenAIMessagesDispatchMappedModel(currentMappedModel)
+	switch currentMappedModel {
+	case "", defaultOpenAIMessagesDispatchSonnetFiveMappedModel:
+		return defaultOpenAIMessagesDispatchSonnetFiveFallbackModel
+	default:
+		return ""
+	}
+}
+
 func guardSonnetMessagesDispatchMappedModel(requestedModel, mappedModel string) string {
 	mappedModel = strings.TrimSpace(mappedModel)
+	if isClaudeSonnetFiveMessagesModel(requestedModel) {
+		if isLegacySonnetFiveDispatchModel(mappedModel) {
+			return defaultOpenAIMessagesDispatchSonnetFiveMappedModel
+		}
+		return mappedModel
+	}
 	if !isClaudeSonnetFourMessagesModel(requestedModel) {
 		return mappedModel
 	}
@@ -146,6 +184,9 @@ func (g *Group) ResolveMessagesDispatchModel(requestedModel string) string {
 		}
 		if groupDefault != "" {
 			return guardSonnetMessagesDispatchMappedModel(requestedModel, groupDefault)
+		}
+		if isClaudeSonnetFiveMessagesModel(requestedModel) {
+			return defaultOpenAIMessagesDispatchSonnetFiveMappedModel
 		}
 		return defaultOpenAIMessagesDispatchSonnetMappedModel
 	case "haiku":

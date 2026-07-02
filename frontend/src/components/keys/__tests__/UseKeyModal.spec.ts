@@ -92,4 +92,46 @@ describe('UseKeyModal', () => {
     expect(fable.options.thinking).toEqual({ type: 'adaptive' })
     expect(fable.options.thinking).not.toHaveProperty('budgetTokens')
   })
+
+  it('renders Claude Sonnet 5 OpenCode config with adaptive thinking', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-test',
+        baseUrl: 'https://example.com/v1',
+        platform: 'antigravity'
+      },
+      global: {
+        stubs: {
+          BaseDialog: {
+            template: '<div><slot /><slot name="footer" /></div>'
+          },
+          Icon: {
+            template: '<span />'
+          }
+        }
+      }
+    })
+
+    const opencodeTab = wrapper.findAll('button').find((button) =>
+      button.text().includes('keys.useKeyModal.cliTabs.opencode')
+    )
+
+    expect(opencodeTab).toBeDefined()
+    await opencodeTab!.trigger('click')
+    await nextTick()
+
+    const claudeConfig = wrapper.findAll('pre code')
+      .map((code) => code.text())
+      .find((content) => content.includes('"antigravity-claude"'))
+
+    expect(claudeConfig).toBeDefined()
+    const parsed = JSON.parse(claudeConfig!)
+    const sonnet = parsed.provider['antigravity-claude'].models['claude-sonnet-5']
+
+    expect(sonnet.name).toBe('Claude Sonnet 5')
+    expect(sonnet.limit).toEqual({ context: 1048576, output: 128000 })
+    expect(sonnet.options.thinking).toEqual({ type: 'adaptive' })
+    expect(sonnet.options.thinking).not.toHaveProperty('budgetTokens')
+  })
 })

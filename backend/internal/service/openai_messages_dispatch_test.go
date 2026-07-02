@@ -101,6 +101,53 @@ func TestResolveMessagesDispatchModel_GroupDefaultFallback(t *testing.T) {
 			want:           "gpt-5.4",
 		},
 		{
+			name:           "no config at all: sonnet 5 hard-coded default",
+			group:          &Group{},
+			requestedModel: "claude-sonnet-5",
+			want:           "gpt-5.5",
+		},
+		{
+			name: "sonnet 5 legacy family mapping is upgraded",
+			group: &Group{
+				MessagesDispatchModelConfig: OpenAIMessagesDispatchModelConfig{
+					SonnetMappedModel: "gpt-5.4",
+				},
+			},
+			requestedModel: "claude-sonnet-5",
+			want:           "gpt-5.5",
+		},
+		{
+			name: "sonnet 5 legacy group default is upgraded",
+			group: &Group{
+				DefaultMappedModel: "gpt-5.4",
+			},
+			requestedModel: "claude-sonnet-5",
+			want:           "gpt-5.5",
+		},
+		{
+			name: "sonnet 5 explicit gpt-5.5 family mapping is preserved",
+			group: &Group{
+				MessagesDispatchModelConfig: OpenAIMessagesDispatchModelConfig{
+					SonnetMappedModel: "gpt-5.5",
+				},
+			},
+			requestedModel: "claude-sonnet-5",
+			want:           "gpt-5.5",
+		},
+		{
+			name: "sonnet 5 exact mapping beats family guard",
+			group: &Group{
+				MessagesDispatchModelConfig: OpenAIMessagesDispatchModelConfig{
+					SonnetMappedModel: "gpt-5.4",
+					ExactModelMappings: map[string]string{
+						"claude-sonnet-5": "gpt-5.5-pro",
+					},
+				},
+			},
+			requestedModel: "claude-sonnet-5",
+			want:           "gpt-5.5-pro",
+		},
+		{
 			name: "sonnet 4 legacy codex family mapping is guarded",
 			group: &Group{
 				MessagesDispatchModelConfig: OpenAIMessagesDispatchModelConfig{
@@ -149,4 +196,52 @@ func TestGroupResolveMessagesDispatchModel_GrokMapsClaudeFamilyToGrok(t *testing
 	require.Equal(t, "grok-4.3", group.ResolveMessagesDispatchModel("claude-haiku-4-5"))
 	require.Empty(t, group.ResolveMessagesDispatchModel("grok"))
 	require.Empty(t, group.ResolveMessagesDispatchModel("gpt-5.3-codex"))
+}
+
+func TestFallbackSonnetFiveMessagesDispatchModel(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name           string
+		requestedModel string
+		currentMapped  string
+		want           string
+	}{
+		{
+			name:           "sonnet 5 primary gpt-5.5 falls back to gpt-5.4",
+			requestedModel: "claude-sonnet-5",
+			currentMapped:  "gpt-5.5",
+			want:           "gpt-5.4",
+		},
+		{
+			name:           "sonnet 5 empty current mapping falls back",
+			requestedModel: "claude-sonnet-5",
+			currentMapped:  "",
+			want:           "gpt-5.4",
+		},
+		{
+			name:           "sonnet 5 explicit non-default mapping is preserved",
+			requestedModel: "claude-sonnet-5",
+			currentMapped:  "gpt-5.5-pro",
+			want:           "",
+		},
+		{
+			name:           "sonnet 4 does not use sonnet 5 fallback",
+			requestedModel: "claude-sonnet-4-6",
+			currentMapped:  "gpt-5.5",
+			want:           "",
+		},
+		{
+			name:           "opus does not use sonnet 5 fallback",
+			requestedModel: "claude-opus-4-8",
+			currentMapped:  "gpt-5.5",
+			want:           "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := FallbackSonnetFiveMessagesDispatchModel(tc.requestedModel, tc.currentMapped)
+			require.Equal(t, tc.want, got)
+		})
+	}
 }

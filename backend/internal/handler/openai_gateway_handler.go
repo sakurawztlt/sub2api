@@ -797,6 +797,31 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	}
 	var lastFailoverErr *service.UpstreamFailoverError
 	effectiveMappedModel := preferredMappedModel
+	sonnetFiveDispatchFallbackTried := false
+	trySonnetFiveDispatchFallback := func(reason string, err error) bool {
+		if sonnetFiveDispatchFallbackTried {
+			return false
+		}
+		fallbackModel := service.FallbackSonnetFiveMessagesDispatchModel(reqModel, effectiveMappedModel)
+		if fallbackModel == "" {
+			return false
+		}
+		previousModel := strings.TrimSpace(effectiveMappedModel)
+		sonnetFiveDispatchFallbackTried = true
+		effectiveMappedModel = fallbackModel
+		failedAccountIDs = make(map[int64]struct{})
+		sameAccountRetryCount = make(map[int64]int)
+		perReasonSwitchCount = make(map[string]int)
+		lastFailoverErr = nil
+		switchCount = 0
+		reqLog.Warn("openai_messages.sonnet5_dispatch_fallback",
+			zap.String("from_model", previousModel),
+			zap.String("to_model", fallbackModel),
+			zap.String("reason", reason),
+			zap.Error(err),
+		)
+		return true
+	}
 
 	for {
 		currentRoutingModel := routingModel
@@ -820,6 +845,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				zap.Error(err),
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
+			if trySonnetFiveDispatchFallback("account_select_failed", err) {
+				continue
+			}
 			if len(failedAccountIDs) == 0 {
 				if err != nil {
 					cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, currentRoutingModel, reqModel, service.PlatformOpenAI)
@@ -839,6 +867,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			}
 		}
 		if selection == nil || selection.Account == nil {
+			if trySonnetFiveDispatchFallback("no_available_accounts", nil) {
+				continue
+			}
 			cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, currentRoutingModel, reqModel, service.PlatformOpenAI)
 			if !cls.ModelNotFound {
 				markOpsRoutingCapacityLimited(c)
@@ -933,6 +964,11 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 					h.gatewayService.RecordOpenAIAccountSwitch()
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr
+					if failoverErr.StatusCode == http.StatusBadGateway || failoverErr.StatusCode == http.StatusServiceUnavailable {
+						if trySonnetFiveDispatchFallback("upstream_"+strconv.Itoa(failoverErr.StatusCode), failoverErr) {
+							continue
+						}
+					}
 					// 5/10 codex audit: per-reason cap (e.g. first_meaningful_timeout
 					// 限 1 次 switch 防烧账号). 共享全局 switchCount 也起作用.
 					if reason := failoverErr.Reason; reason != "" {
