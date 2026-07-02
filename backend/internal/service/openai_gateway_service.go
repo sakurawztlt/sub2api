@@ -3322,7 +3322,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 		codexImageBridgeShouldApply = codexImageGenerationBridgeShouldFire(decoded) || codexImageGenerationBridgeForced
 	}
-	if imageGenerationAllowed && (codexImageBridgeShouldApply || isOpenAIImageGenerationModel(requestView.Model) || openAIRequestBodyImageGenerationToolNeedsNormalization(body) || isOpenAIImageGenerationModel(upstreamModel)) {
+	if imageGenerationAllowed && !isCompactRequest && (codexImageBridgeShouldApply || isOpenAIImageGenerationModel(requestView.Model) || openAIRequestBodyImageGenerationToolNeedsNormalization(body) || isOpenAIImageGenerationModel(upstreamModel)) {
 		decoded, decodeErr := ensureReqBody()
 		if decodeErr != nil {
 			return nil, decodeErr
