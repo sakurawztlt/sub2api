@@ -194,6 +194,7 @@ func TestGetFallbackPricing_FamilyMatching(t *testing.T) {
 		// $5/$0.5/$30 fallback pricing. 防 gcr Opus 升 5.5 后 NewAPI 报表
 		// 跟 OpenAI 实际账单偏离 2x.
 		{name: "openai gpt5.5 uses gpt5.5 fallback (not gpt5.4)", model: "gpt-5.5", expectedInput: 5e-6},
+		{name: "openai gpt5.5 pro uses gpt5.5 fallback", model: "gpt-5.5-pro", expectedInput: 5e-6},
 		{name: "openai gpt5.5 high variant", model: "gpt-5.5-high", expectedInput: 5e-6},
 		{name: "openai gpt5.5 xhigh variant", model: "gpt-5.5-xhigh", expectedInput: 5e-6},
 		{name: "openai legacy gpt5.1 falls back to gpt5.4", model: "gpt-5.1", expectedInput: 2.5e-6},
@@ -617,6 +618,20 @@ func TestRound56_GPT55FallbackProvidesCompletePriorityPricing(t *testing.T) {
 	require.Equal(t, 272000, pricing.LongContextInputThreshold)
 	require.InDelta(t, 2.0, pricing.LongContextInputMultiplier, 1e-12)
 	require.InDelta(t, 1.5, pricing.LongContextOutputMultiplier, 1e-12)
+}
+
+func TestGPT55ProFallbackUsesGPT55Pricing(t *testing.T) {
+	svc := newTestBillingService()
+
+	proPricing, err := svc.GetModelPricing("gpt-5.5-pro")
+	require.NoError(t, err)
+	basePricing, err := svc.GetModelPricing("gpt-5.5")
+	require.NoError(t, err)
+
+	require.Equal(t, basePricing.InputPricePerToken, proPricing.InputPricePerToken)
+	require.Equal(t, basePricing.OutputPricePerToken, proPricing.OutputPricePerToken)
+	require.Equal(t, basePricing.CacheReadPricePerToken, proPricing.CacheReadPricePerToken)
+	require.Equal(t, basePricing.LongContextInputThreshold, proPricing.LongContextInputThreshold)
 }
 
 // codex round57 fu67 (2026-05-21): shouldApplySessionLongContextPricing

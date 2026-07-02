@@ -8,6 +8,7 @@ import (
 
 var codexModelMap = map[string]string{
 	"gpt-5.5":                    "gpt-5.5",
+	"gpt-5.5-pro":                "gpt-5.5-pro",
 	"gpt-5.4":                    "gpt-5.4",
 	"gpt-5.4-mini":               "gpt-5.4-mini",
 	"gpt-5.4-none":               "gpt-5.4",
@@ -47,6 +48,7 @@ var codexModelMap = map[string]string{
 	"gpt-5.1-codex-mini":         "gpt-5.3-codex",
 	"gpt-5.2-codex":              "gpt-5.2",
 	"codex-mini-latest":          "gpt-5.3-codex",
+	"codex-auto-review":          "codex-auto-review",
 	"gpt-5-codex":                "gpt-5.3-codex",
 }
 
@@ -58,6 +60,7 @@ var codexVersionModelPrefixes = []struct {
 	{prefix: "gpt-5.3-codex", target: "gpt-5.3-codex"},
 	{prefix: "gpt-5.4-mini", target: "gpt-5.4-mini"},
 	{prefix: "gpt-5.4-nano", target: "gpt-5.4-nano"},
+	{prefix: "gpt-5.5-pro", target: "gpt-5.5-pro"},
 	{prefix: "gpt-5.5", target: "gpt-5.5"},
 	{prefix: "gpt-5.4", target: "gpt-5.4"},
 	{prefix: "gpt-5.2", target: "gpt-5.2"},

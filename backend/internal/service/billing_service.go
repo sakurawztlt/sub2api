@@ -304,6 +304,8 @@ func (s *BillingService) initFallbackPricing() {
 		LongContextInputMultiplier:         openAIGPT54LongContextInputMultiplier,
 		LongContextOutputMultiplier:        openAIGPT54LongContextOutputMultiplier,
 	}
+	// gpt-5.5-pro 是 Codex/OAuth 侧显式模型名，计费口径跟本地 gpt-5.5 保持一致。
+	s.fallbackPrices["gpt-5.5-pro"] = s.fallbackPrices["gpt-5.5"]
 
 	s.fallbackPrices["gpt-5.4-mini"] = &ModelPricing{
 		InputPricePerToken:     7.5e-7,
@@ -388,7 +390,7 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	if strings.Contains(modelLower, "gpt-5") || strings.Contains(modelLower, "codex") {
 		normalized := normalizeCodexModel(modelLower)
 		switch normalized {
-		case "gpt-5.5":
+		case "gpt-5.5", "gpt-5.5-pro":
 			return s.fallbackPrices["gpt-5.5"]
 		case "gpt-5.4-mini":
 			return s.fallbackPrices["gpt-5.4-mini"]
@@ -768,7 +770,7 @@ func isOpenAIGPT54Model(model string) bool {
 		return false
 	}
 	normalized := normalizeCodexModel(trimmed)
-	return normalized == "gpt-5.4" || normalized == "gpt-5.5"
+	return normalized == "gpt-5.4" || normalized == "gpt-5.5" || normalized == "gpt-5.5-pro"
 }
 
 // CalculateCostWithConfig 使用配置中的默认倍率计算费用
