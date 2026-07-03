@@ -86,6 +86,16 @@ function close() {
   emit('update:show', false)
 }
 
+const sortBy = ref('created_at')
+const sortOrder = ref<'asc' | 'desc'>('desc')
+
+function onSort(nextSortBy: string, nextSortOrder: 'asc' | 'desc') {
+  sortBy.value = nextSortBy
+  sortOrder.value = nextSortOrder
+  page.value = 1
+  void fetchErrorLogs()
+}
+
 async function fetchErrorLogs() {
   if (!props.show) return
 
@@ -95,7 +105,9 @@ async function fetchErrorLogs() {
       page: page.value,
       page_size: pageSize.value,
       time_range: props.timeRange,
-      view: viewMode.value
+      view: viewMode.value,
+      sort_by: sortBy.value,
+      sort_order: sortOrder.value
     }
 
     if (props.timeRange === 'custom') {
@@ -266,6 +278,7 @@ watch(
             :page="page"
             :page-size="pageSize"
             @openErrorDetail="emit('openErrorDetail', $event)"
+            @sort="onSort"
 
             @update:page="page = $event"
             @update:pageSize="pageSize = $event"
