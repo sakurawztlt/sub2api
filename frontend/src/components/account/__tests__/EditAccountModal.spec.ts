@@ -1,10 +1,11 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
 import { mount } from '@vue/test-utils'
 
-const { updateAccountMock, checkMixedChannelRiskMock } = vi.hoisted(() => ({
+const { updateAccountMock, checkMixedChannelRiskMock, authIsSimpleMode } = vi.hoisted(() => ({
   updateAccountMock: vi.fn(),
-  checkMixedChannelRiskMock: vi.fn()
+  checkMixedChannelRiskMock: vi.fn(),
+  authIsSimpleMode: { value: true }
 }))
 
 vi.mock('@/stores/app', () => ({
@@ -17,7 +18,9 @@ vi.mock('@/stores/app', () => ({
 
 vi.mock('@/stores/auth', () => ({
   useAuthStore: () => ({
-    isSimpleMode: true
+    get isSimpleMode() {
+      return authIsSimpleMode.value
+    }
   })
 }))
 
@@ -115,6 +118,26 @@ const SelectStub = defineComponent({
   `
 })
 
+const GroupSelectorStub = defineComponent({
+  name: 'GroupSelector',
+  props: {
+    modelValue: {
+      type: Array,
+      default: () => []
+    }
+  },
+  emits: ['update:modelValue'],
+  template: `
+    <button
+      type="button"
+      data-testid="set-shadow-group"
+      @click="$emit('update:modelValue', [7])"
+    >
+      set group
+    </button>
+  `
+})
+
 function buildAccount() {
   return {
     id: 1,
@@ -141,6 +164,118 @@ function buildAccount() {
   } as any
 }
 
+function buildOpenAISparkShadowAccount() {
+  const account = buildAccount()
+  return {
+    ...account,
+    id: 4,
+    name: 'OpenAI Spark Shadow',
+    type: 'oauth',
+    parent_account_id: 1,
+    credentials: {
+      access_token: 'parent-access-token',
+      refresh_token: 'parent-refresh-token',
+      api_key: 'sk-parent',
+      base_url: 'https://api.openai.com',
+      model_mapping: {
+        'gpt-5.3-codex-spark': 'gpt-5.3-codex-spark'
+      },
+      compact_model_mapping: {
+        'gpt-5.3-codex-spark': 'gpt-5.3-codex-spark-compact'
+      }
+    },
+    group_ids: []
+  } as any
+}
+
+function buildVertexAccount() {
+  return {
+    id: 2,
+    name: 'Vertex SA',
+    notes: '',
+    platform: 'gemini',
+    type: 'service_account',
+    credentials: {
+      service_account_json: '{"type":"service_account","client_email":"sa@example.iam.gserviceaccount.com","private_key":"-----BEGIN PRIVATE KEY-----\\nMIIE\\n-----END PRIVATE KEY-----\\n"}',
+      project_id: 'demo-project',
+      client_email: 'sa@example.iam.gserviceaccount.com',
+      location: 'us-central1',
+      tier_id: 'vertex'
+    },
+    extra: {},
+    proxy_id: null,
+    concurrency: 1,
+    priority: 1,
+    rate_multiplier: 1,
+    status: 'active',
+    group_ids: [],
+    expires_at: null,
+    auto_pause_on_expired: false
+  } as any
+}
+
+function buildAntigravityAccount(projectId = 'configured-project') {
+  return {
+    id: 3,
+    name: 'Antigravity OAuth',
+    notes: '',
+    platform: 'antigravity',
+    type: 'oauth',
+    credentials: {
+      antigravity_project_id: projectId,
+      model_mapping: {
+        'gemini-2.5-flash': 'gemini-2.5-flash'
+      }
+    },
+    extra: {},
+    proxy_id: null,
+    concurrency: 1,
+    priority: 1,
+    rate_multiplier: 1,
+    status: 'active',
+    group_ids: [],
+    expires_at: null,
+    auto_pause_on_expired: false
+  } as any
+}
+
+function buildGrokOAuthAccount() {
+  return {
+    id: 5,
+    name: 'Grok OAuth',
+    notes: '',
+    platform: 'grok',
+    type: 'oauth',
+    credentials: {
+      refresh_token: 'grok-rt',
+      base_url: 'https://api.x.ai/v1',
+      model_mapping: {
+        'grok-latest': 'grok-4.3'
+      }
+    },
+    extra: {},
+    proxy_id: null,
+    concurrency: 1,
+    priority: 1,
+    rate_multiplier: 1,
+    status: 'active',
+    group_ids: [],
+    expires_at: null,
+    auto_pause_on_expired: false
+  } as any
+}
+
+function buildOpenAISetupTokenAccount() {
+  return {
+    ...buildAccount(),
+    type: 'setup-token',
+    extra: {
+      openai_oauth_responses_websockets_v2_mode: 'ctx_pool',
+      openai_oauth_responses_websockets_v2_enabled: true
+    }
+  } as any
+}
+
 function mountModal(account = buildAccount()) {
   return mount(EditAccountModal, {
     props: {
@@ -155,7 +290,7 @@ function mountModal(account = buildAccount()) {
         Select: SelectStub,
         Icon: true,
         ProxySelector: true,
-        GroupSelector: true,
+        GroupSelector: GroupSelectorStub,
         ModelWhitelistSelector: ModelWhitelistSelectorStub
       }
     }
@@ -163,6 +298,10 @@ function mountModal(account = buildAccount()) {
 }
 
 describe('EditAccountModal', () => {
+  beforeEach(() => {
+    authIsSimpleMode.value = true
+  })
+
   it('reopening the same account rehydrates the OpenAI whitelist from props', async () => {
     const account = buildAccount()
     updateAccountMock.mockReset()
@@ -239,6 +378,61 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_compact_mode).toBe('force_on')
     expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.compact_model_mapping).toEqual({
       'gpt-5.4': 'gpt-5.4-openai-compact'
+    })
+  })
+
+  it('loads and submits Grok OAuth model mapping edits', async () => {
+    const account = buildGrokOAuthAccount()
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+    expect(wrapper.text()).toContain('Imagine Image')
+    expect(wrapper.text()).toContain('Imagine Video')
+
+    const inputWithValue = (value: string) => {
+      const input = wrapper
+        .findAll('input')
+        .find((input) => (input.element as HTMLInputElement).value === value)
+      expect(input).toBeTruthy()
+      return input!
+    }
+
+    await inputWithValue('grok-latest').setValue('grok')
+    await inputWithValue('grok-4.3').setValue('grok-build-0.1')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials?.model_mapping).toEqual({
+      grok: 'grok-build-0.1'
+    })
+  })
+
+  it('only submits model mapping credentials when saving an OpenAI spark shadow account', async () => {
+    authIsSimpleMode.value = false
+    const account = buildOpenAISparkShadowAccount()
+    updateAccountMock.mockReset()
+    checkMixedChannelRiskMock.mockReset()
+    checkMixedChannelRiskMock.mockResolvedValue({ has_risk: false })
+    updateAccountMock.mockResolvedValue(account)
+
+    const wrapper = mountModal(account)
+
+    await wrapper.get('[data-testid="set-shadow-group"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const payload = updateAccountMock.mock.calls[0]?.[1]
+    expect(payload?.group_ids).toEqual([7])
+    expect(payload?.credentials).toEqual({
+      model_mapping: {
+        'gpt-5.3-codex-spark': 'gpt-5.3-codex-spark'
+      },
+      compact_model_mapping: {
+        'gpt-5.3-codex-spark': 'gpt-5.3-codex-spark-compact'
+      }
     })
   })
 
