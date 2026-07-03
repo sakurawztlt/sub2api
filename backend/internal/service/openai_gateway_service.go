@@ -3204,13 +3204,29 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	if apiKey != nil {
 		imageGenerationAllowed = GroupAllowsImageGeneration(apiKey.Group)
 	}
+	codexImageGenerationExplicitToolPolicy := codexImageGenerationExplicitToolPolicyAllow
+	if isCodexCLI {
+		codexImageGenerationExplicitToolPolicy = account.CodexImageGenerationExplicitToolPolicy()
+	}
 	imageIntent := IsImageGenerationIntent(openAIResponsesEndpoint, reqModel, body)
+	if isCodexCLI && codexImageGenerationExplicitToolPolicy == codexImageGenerationExplicitToolPolicyStrip {
+		decoded, decodeErr := ensureReqBody()
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		if stripOpenAIImageGenerationTools(decoded) {
+			markDecodedModified()
+			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Stripped /responses image_generation tool for Codex client by account policy")
+		}
+		imageIntent = IsImageGenerationIntentMap(openAIResponsesEndpoint, reqModel, decoded)
+	}
 	codexCompactRequest := isOpenAIResponsesCompactPath(c) || (isCodexCLI && isCodexCompactRequest(body))
 	codexImageGenerationBridgeForced := s.codexImageGenerationBridgeForcedEnabled(ctx, account, apiKey)
 	if !codexImageGenerationBridgeForced && s != nil && s.cfg != nil && s.cfg.Gateway.CodexImageGenerationBridgeEnabled {
 		codexImageGenerationBridgeForced = true
 	}
 	codexImageGenerationBridgeEnabled := isCodexCLI &&
+		codexImageGenerationExplicitToolPolicy != codexImageGenerationExplicitToolPolicyStrip &&
 		shouldEnableCodexImageGenerationBridge(c, body, reqModel, account, apiKey) &&
 		imageGenerationAllowed &&
 		s.isCodexImageGenerationBridgeEnabled(ctx, account, apiKey)
