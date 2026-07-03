@@ -1112,6 +1112,14 @@ type GatewayOpenAIWSSchedulerScoreWeights struct {
 	Queue     float64 `mapstructure:"queue"`
 	ErrorRate float64 `mapstructure:"error_rate"`
 	TTFT      float64 `mapstructure:"ttft"`
+	// Reset 倾向「会话窗口最早重置」的账号（use-it-or-lose-it）。
+	// >0 时，剩余重置时间越短的账号得分越高，从而被优先用尽。默认 0（关闭，不改变原有行为）。
+	Reset float64 `mapstructure:"reset"`
+	// QuotaHeadroom 倾向 7d 剩余额度更健康的账号；默认 0（关闭，不改变原有行为）。
+	QuotaHeadroom float64 `mapstructure:"quota_headroom"`
+	// PreviousResponse/SessionSticky 仅在开启 OpenAI 高级调度的粘性加权时生效。
+	PreviousResponse float64 `mapstructure:"previous_response"`
+	SessionSticky    float64 `mapstructure:"session_sticky"`
 }
 
 // GatewayOpenAISchedulerConfig OpenAI 高级调度器配置。
@@ -2063,6 +2071,10 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.queue", 0.7)
 	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.error_rate", 0.8)
 	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.ttft", 0.5)
+	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.reset", 0.0)
+	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.quota_headroom", 0.0)
+	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.previous_response", 5.0)
+	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.session_sticky", 3.0)
 	// OpenAI HTTP upstream protocol strategy
 	viper.SetDefault("gateway.openai_http2.enabled", true)
 	viper.SetDefault("gateway.openai_http2.allow_proxy_fallback_to_http1", true)
@@ -2892,7 +2904,11 @@ func (c *Config) Validate() error {
 		c.Gateway.OpenAIWS.SchedulerScoreWeights.Load < 0 ||
 		c.Gateway.OpenAIWS.SchedulerScoreWeights.Queue < 0 ||
 		c.Gateway.OpenAIWS.SchedulerScoreWeights.ErrorRate < 0 ||
-		c.Gateway.OpenAIWS.SchedulerScoreWeights.TTFT < 0 {
+		c.Gateway.OpenAIWS.SchedulerScoreWeights.TTFT < 0 ||
+		c.Gateway.OpenAIWS.SchedulerScoreWeights.Reset < 0 ||
+		c.Gateway.OpenAIWS.SchedulerScoreWeights.QuotaHeadroom < 0 ||
+		c.Gateway.OpenAIWS.SchedulerScoreWeights.PreviousResponse < 0 ||
+		c.Gateway.OpenAIWS.SchedulerScoreWeights.SessionSticky < 0 {
 		return fmt.Errorf("gateway.openai_ws.scheduler_score_weights.* must be non-negative")
 	}
 	weightSum := c.Gateway.OpenAIWS.SchedulerScoreWeights.Priority +

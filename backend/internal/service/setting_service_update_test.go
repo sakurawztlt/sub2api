@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
@@ -45,6 +46,77 @@ func (s *settingUpdateRepoStub) GetAll(ctx context.Context) (map[string]string, 
 }
 
 func (s *settingUpdateRepoStub) Delete(ctx context.Context, key string) error {
+	panic("unexpected Delete call")
+}
+
+type settingGetAllRepoStub struct {
+	values map[string]string
+}
+
+func (s *settingGetAllRepoStub) Get(ctx context.Context, key string) (*Setting, error) {
+	panic("unexpected Get call")
+}
+
+func (s *settingGetAllRepoStub) GetValue(ctx context.Context, key string) (string, error) {
+	panic("unexpected GetValue call")
+}
+
+func (s *settingGetAllRepoStub) Set(ctx context.Context, key, value string) error {
+	panic("unexpected Set call")
+}
+
+func (s *settingGetAllRepoStub) GetMultiple(ctx context.Context, keys []string) (map[string]string, error) {
+	panic("unexpected GetMultiple call")
+}
+
+func (s *settingGetAllRepoStub) SetMultiple(ctx context.Context, settings map[string]string) error {
+	panic("unexpected SetMultiple call")
+}
+
+func (s *settingGetAllRepoStub) GetAll(ctx context.Context) (map[string]string, error) {
+	out := make(map[string]string, len(s.values))
+	for key, value := range s.values {
+		out[key] = value
+	}
+	return out, nil
+}
+
+func (s *settingGetAllRepoStub) Delete(ctx context.Context, key string) error {
+	panic("unexpected Delete call")
+}
+
+type settingAntigravityUARepoStub struct {
+	values map[string]string
+}
+
+func (s *settingAntigravityUARepoStub) Get(ctx context.Context, key string) (*Setting, error) {
+	panic("unexpected Get call")
+}
+
+func (s *settingAntigravityUARepoStub) GetValue(ctx context.Context, key string) (string, error) {
+	if value, ok := s.values[key]; ok {
+		return value, nil
+	}
+	return "", ErrSettingNotFound
+}
+
+func (s *settingAntigravityUARepoStub) Set(ctx context.Context, key, value string) error {
+	panic("unexpected Set call")
+}
+
+func (s *settingAntigravityUARepoStub) GetMultiple(ctx context.Context, keys []string) (map[string]string, error) {
+	panic("unexpected GetMultiple call")
+}
+
+func (s *settingAntigravityUARepoStub) SetMultiple(ctx context.Context, settings map[string]string) error {
+	panic("unexpected SetMultiple call")
+}
+
+func (s *settingAntigravityUARepoStub) GetAll(ctx context.Context) (map[string]string, error) {
+	panic("unexpected GetAll call")
+}
+
+func (s *settingAntigravityUARepoStub) Delete(ctx context.Context, key string) error {
 	panic("unexpected Delete call")
 }
 
@@ -258,15 +330,30 @@ func TestSettingService_ParseSettings_DefaultProxyID(t *testing.T) {
 }
 
 func TestSettingService_UpdateSettings_PaymentVisibleMethodsAndAdvancedScheduler(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+	defer resetOpenAIAdvancedSchedulerSettingCacheForTest()
+
 	repo := &settingUpdateRepoStub{}
 	svc := NewSettingService(repo, &config.Config{})
 
 	err := svc.UpdateSettings(context.Background(), &SystemSettings{
-		PaymentVisibleMethodAlipaySource:  "alipay",
-		PaymentVisibleMethodWxpaySource:   "easypay",
-		PaymentVisibleMethodAlipayEnabled: true,
-		PaymentVisibleMethodWxpayEnabled:  false,
-		OpenAIAdvancedSchedulerEnabled:    true,
+		PaymentVisibleMethodAlipaySource:                   "alipay",
+		PaymentVisibleMethodWxpaySource:                    "easypay",
+		PaymentVisibleMethodAlipayEnabled:                  true,
+		PaymentVisibleMethodWxpayEnabled:                   false,
+		OpenAIAdvancedSchedulerEnabled:                     true,
+		OpenAIAdvancedSchedulerStickyWeightedEnabled:       true,
+		OpenAIAdvancedSchedulerSubscriptionPriorityEnabled: true,
+		OpenAIAdvancedSchedulerLBTopK:                      " 3 ",
+		OpenAIAdvancedSchedulerWeightPriority:              "2.50",
+		OpenAIAdvancedSchedulerWeightLoad:                  "0",
+		OpenAIAdvancedSchedulerWeightQueue:                 "0.75",
+		OpenAIAdvancedSchedulerWeightErrorRate:             "1.25",
+		OpenAIAdvancedSchedulerWeightTTFT:                  "0.5",
+		OpenAIAdvancedSchedulerWeightReset:                 "",
+		OpenAIAdvancedSchedulerWeightQuotaHeadroom:         "0.2",
+		OpenAIAdvancedSchedulerWeightPreviousResponse:      "8",
+		OpenAIAdvancedSchedulerWeightSessionSticky:         "4",
 	})
 	require.NoError(t, err)
 	require.Equal(t, VisibleMethodSourceOfficialAlipay, repo.updates[SettingPaymentVisibleMethodAlipaySource])
@@ -274,6 +361,108 @@ func TestSettingService_UpdateSettings_PaymentVisibleMethodsAndAdvancedScheduler
 	require.Equal(t, "true", repo.updates[SettingPaymentVisibleMethodAlipayEnabled])
 	require.Equal(t, "false", repo.updates[SettingPaymentVisibleMethodWxpayEnabled])
 	require.Equal(t, "true", repo.updates[openAIAdvancedSchedulerSettingKey])
+	require.Equal(t, "true", repo.updates[SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled])
+	require.Equal(t, "true", repo.updates[SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled])
+	require.Equal(t, "3", repo.updates[SettingKeyOpenAIAdvancedSchedulerLBTopK])
+	require.Equal(t, "2.5", repo.updates[SettingKeyOpenAIAdvancedSchedulerWeightPriority])
+	require.Equal(t, "0", repo.updates[SettingKeyOpenAIAdvancedSchedulerWeightLoad])
+	require.Equal(t, "0.75", repo.updates[SettingKeyOpenAIAdvancedSchedulerWeightQueue])
+	require.Equal(t, "1.25", repo.updates[SettingKeyOpenAIAdvancedSchedulerWeightErrorRate])
+	require.Equal(t, "0.5", repo.updates[SettingKeyOpenAIAdvancedSchedulerWeightTTFT])
+	require.Equal(t, "", repo.updates[SettingKeyOpenAIAdvancedSchedulerWeightReset])
+	require.Equal(t, "0.2", repo.updates[SettingKeyOpenAIAdvancedSchedulerWeightQuotaHeadroom])
+	require.Equal(t, "8", repo.updates[SettingKeyOpenAIAdvancedSchedulerWeightPreviousResponse])
+	require.Equal(t, "4", repo.updates[SettingKeyOpenAIAdvancedSchedulerWeightSessionSticky])
+}
+
+func TestSettingService_GetAllSettings_OpenAIAdvancedSchedulerEffectiveValuesUseConfig(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.LBTopK = 13
+	cfg.Gateway.OpenAIWS.SchedulerScoreWeights = config.GatewayOpenAIWSSchedulerScoreWeights{
+		Priority:         2,
+		Load:             3,
+		Queue:            4,
+		ErrorRate:        5,
+		TTFT:             6,
+		Reset:            7,
+		QuotaHeadroom:    8,
+		PreviousResponse: 9,
+		SessionSticky:    10,
+	}
+	svc := NewSettingService(&settingGetAllRepoStub{values: map[string]string{
+		SettingKeyOpenAIAdvancedSchedulerLBTopK:              "3",
+		SettingKeyOpenAIAdvancedSchedulerWeightPriority:      "99",
+		SettingKeyOpenAIAdvancedSchedulerWeightSessionSticky: "88",
+	}}, cfg)
+
+	settings, err := svc.GetAllSettings(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "3", settings.OpenAIAdvancedSchedulerLBTopK)
+	require.Equal(t, "99", settings.OpenAIAdvancedSchedulerWeightPriority)
+	require.Equal(t, "88", settings.OpenAIAdvancedSchedulerWeightSessionSticky)
+	require.Equal(t, "13", settings.OpenAIAdvancedSchedulerEffectiveLBTopK)
+	require.Equal(t, "2", settings.OpenAIAdvancedSchedulerEffectiveWeightPriority)
+	require.Equal(t, "3", settings.OpenAIAdvancedSchedulerEffectiveWeightLoad)
+	require.Equal(t, "10", settings.OpenAIAdvancedSchedulerEffectiveWeightSessionSticky)
+}
+
+func TestSettingService_UpdateSettings_AntigravityUserAgentVersion(t *testing.T) {
+	repo := &settingUpdateRepoStub{}
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.UpdateSettings(context.Background(), &SystemSettings{
+		AntigravityUserAgentVersion: "1.23.2",
+	})
+	require.NoError(t, err)
+	require.Equal(t, "1.23.2", repo.updates[SettingKeyAntigravityUserAgentVersion])
+}
+
+func TestSettingService_UpdateSettings_APIKeyACLTrustForwardedIPRefreshesConfig(t *testing.T) {
+	repo := &settingUpdateRepoStub{}
+	cfg := &config.Config{}
+	svc := NewSettingService(repo, cfg)
+
+	err := svc.UpdateSettings(context.Background(), &SystemSettings{
+		APIKeyACLTrustForwardedIP: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "true", repo.updates[SettingKeyAPIKeyACLTrustForwardedIP])
+	require.True(t, cfg.Security.TrustForwardedIPForAPIKeyACL)
+	require.True(t, cfg.TrustForwardedIPForAPIKeyACL())
+}
+
+func TestSettingService_ParseSettings_APIKeyACLTrustForwardedIPFallsBackToConfigWhenMissing(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Security.TrustForwardedIPForAPIKeyACL = true
+	svc := NewSettingService(&settingUpdateRepoStub{}, cfg)
+
+	got := svc.parseSettings(map[string]string{})
+
+	require.True(t, got.APIKeyACLTrustForwardedIP)
+}
+
+func TestSettingService_GetAntigravityUserAgentVersion_Precedence(t *testing.T) {
+	t.Run("后台设置优先", func(t *testing.T) {
+		svc := NewSettingService(&settingAntigravityUARepoStub{values: map[string]string{
+			SettingKeyAntigravityUserAgentVersion: "1.24.0",
+		}}, &config.Config{})
+
+		require.Equal(t, "1.24.0", svc.GetAntigravityUserAgentVersion(context.Background()))
+	})
+
+	t.Run("空值回退配置默认值", func(t *testing.T) {
+		svc := NewSettingService(&settingAntigravityUARepoStub{values: map[string]string{
+			SettingKeyAntigravityUserAgentVersion: "",
+		}}, &config.Config{})
+
+		require.Equal(t, antigravity.GetDefaultUserAgentVersion(), svc.GetAntigravityUserAgentVersion(context.Background()))
+	})
+
+	t.Run("缺失回退配置默认值", func(t *testing.T) {
+		svc := NewSettingService(&settingAntigravityUARepoStub{values: map[string]string{}}, &config.Config{})
+
+		require.Equal(t, antigravity.GetDefaultUserAgentVersion(), svc.GetAntigravityUserAgentVersion(context.Background()))
+	})
 }
 
 func TestSettingService_UpdateSettings_RejectsInvalidPaymentVisibleMethodSource(t *testing.T) {
