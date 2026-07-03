@@ -840,6 +840,7 @@ func buildCodexImportIdentityKeys(accountID, userID, email, accessToken, refresh
 
 // buildCodexStoredIdentityKeys 生成存量账号索引键，保留 user/account 维度，
 // 让 accessToken-only 账号后续升级为完整 OAuth 时仍能命中并更新原账号。
+// account: 是同一 ChatGPT 团队共享键，必须排在最后并经过跨用户校验。
 func buildCodexStoredIdentityKeys(accountID, userID, email, accessToken string) []string {
 	keys := make([]string, 0, 3)
 	accountID = strings.TrimSpace(accountID)

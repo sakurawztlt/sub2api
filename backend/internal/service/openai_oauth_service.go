@@ -313,10 +313,6 @@ func shouldApplyChatGPTAccountInfoPlanType(current, candidate string) bool {
 	return strings.TrimSpace(candidate) != "" && strings.TrimSpace(current) == ""
 }
 
-func shouldApplyChatGPTAccountInfoPlanType(current, candidate string) bool {
-	return strings.TrimSpace(candidate) != "" && strings.TrimSpace(current) == ""
-}
-
 func resolveChatGPTSubscriptionAccountID(tokenInfo *OpenAITokenInfo, orgID string) string {
 	for _, candidate := range []string{
 		tokenInfo.ChatGPTAccountID,
