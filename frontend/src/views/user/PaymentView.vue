@@ -577,6 +577,7 @@ const methodOptions = computed<PaymentMethodOption[]>(() =>
     const ml = visibleMethods.value[type]
     return {
       type,
+      display_name: ml?.display_name,
       fee_rate: ml?.fee_rate ?? 0,
       available: ml?.available !== false && amountFitsMethod(validAmount.value, type),
     }
@@ -646,6 +647,7 @@ const subMethodOptions = computed<PaymentMethodOption[]>(() => {
     const currency = normalizePaymentCurrency(ml?.currency)
     return {
       type,
+      display_name: ml?.display_name,
       fee_rate: ml?.fee_rate ?? 0,
       available: ml?.available !== false && amountFitsMethod(subscriptionTotalAmountForCurrency(price, currency), type),
     }
