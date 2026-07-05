@@ -24,7 +24,7 @@
             ? 'border-primary-400 bg-primary-50/70 dark:border-primary-500 dark:bg-primary-900/20'
             : 'border-gray-300 bg-gray-50 dark:border-dark-600 dark:bg-dark-800'"
           @dragenter.prevent="handleDragEnter"
-          @dragover.prevent="handleDragOver"
+          @dragover.prevent
           @dragleave.prevent="handleDragLeave"
           @drop.prevent="handleDrop"
         >
@@ -121,8 +121,9 @@ const appStore = useAppStore()
 
 const importing = ref(false)
 const files = ref<File[]>([])
-const dragActive = ref(false)
 const dragDepth = ref(0)
+const dragActive = computed(() => dragDepth.value > 0)
+const hasCreatedData = ref(false)
 const result = ref<AdminDataImportResult | null>(null)
 
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -140,8 +141,8 @@ watch(
   (open) => {
     if (open) {
       files.value = []
-      dragActive.value = false
       dragDepth.value = 0
+      hasCreatedData.value = false
       result.value = null
       if (fileInput.value) {
         fileInput.value.value = ''
@@ -157,10 +158,15 @@ const openFilePicker = () => {
 const handleFileChange = (event: Event) => {
   const target = event.target as HTMLInputElement
   setSelectedFiles(target.files)
+  target.value = ''
 }
 
 const handleClose = () => {
   if (importing.value) return
+  if (hasCreatedData.value) {
+    hasCreatedData.value = false
+    emit('imported')
+  }
   emit('close')
 }
 
@@ -171,11 +177,16 @@ const isJsonFile = (sourceFile: File) => {
 
 const setSelectedFiles = (sourceFiles: FileList | File[] | null | undefined) => {
   if (importing.value) return
-  const picked = Array.from(sourceFiles || []).filter(isJsonFile)
+  const incoming = Array.from(sourceFiles || [])
+  const picked = incoming.filter(isJsonFile)
   if (!picked.length) {
-    files.value = []
     appStore.showError(t('admin.accounts.dataImportSelectFile'))
     return
+  }
+  if (picked.length < incoming.length) {
+    appStore.showWarning(
+      t('admin.accounts.dataImportIgnoredFiles', { count: incoming.length - picked.length })
+    )
   }
   files.value = picked
   result.value = null
@@ -184,26 +195,15 @@ const setSelectedFiles = (sourceFiles: FileList | File[] | null | undefined) => 
 const handleDragEnter = () => {
   if (importing.value) return
   dragDepth.value += 1
-  dragActive.value = true
-}
-
-const handleDragOver = () => {
-  if (importing.value) return
-  dragActive.value = true
 }
 
 const handleDragLeave = () => {
-  if (importing.value) return
   dragDepth.value = Math.max(0, dragDepth.value - 1)
-  if (dragDepth.value === 0) {
-    dragActive.value = false
-  }
 }
 
 const handleDrop = (event: DragEvent) => {
-  if (importing.value) return
   dragDepth.value = 0
-  dragActive.value = false
+  if (importing.value) return
   setSelectedFiles(event.dataTransfer?.files)
 }
 
@@ -233,12 +233,24 @@ const handleImport = async () => {
 
   importing.value = true
   try {
-    const payloads = await Promise.all(
-      files.value.map(async (file) => {
-        const text = await readFileAsText(file)
-        return normalizeAccountImportPayload(JSON.parse(text))
-      })
-    )
+    const payloads = []
+    for (const sourceFile of files.value) {
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(await readFileAsText(sourceFile))
+      } catch {
+        appStore.showError(
+          t('admin.accounts.dataImportParseFailedFile', { name: sourceFile.name })
+        )
+        return
+      }
+      try {
+        payloads.push(normalizeAccountImportPayload(parsed))
+      } catch {
+        appStore.showError(t('admin.accounts.dataImportInvalidFile', { name: sourceFile.name }))
+        return
+      }
+    }
     const dataPayload = mergeAccountImportPayloads(payloads)
 
     const res = await adminAPI.accounts.importData({
@@ -256,17 +268,17 @@ const handleImport = async () => {
       proxy_failed: res.proxy_failed,
     }
     if (res.account_failed > 0 || res.proxy_failed > 0) {
+      // 部分成功也创建了数据;弹窗关闭时通过 imported 通知父组件刷新列表
+      if (res.account_created > 0 || res.proxy_created > 0) {
+        hasCreatedData.value = true
+      }
       appStore.showError(t('admin.accounts.dataImportCompletedWithErrors', msgParams))
     } else {
       appStore.showSuccess(t('admin.accounts.dataImportSuccess', msgParams))
       emit('imported')
     }
   } catch (error: any) {
-    if (error instanceof SyntaxError) {
-      appStore.showError(t('admin.accounts.dataImportParseFailed'))
-    } else {
-      appStore.showError(error?.message || t('admin.accounts.dataImportFailed'))
-    }
+    appStore.showError(error?.message || t('admin.accounts.dataImportFailed'))
   } finally {
     importing.value = false
   }
