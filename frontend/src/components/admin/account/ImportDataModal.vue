@@ -19,13 +19,23 @@
       <div>
         <label class="input-label">{{ t('admin.accounts.dataImportFile') }}</label>
         <div
-          class="flex items-center justify-between gap-3 rounded-lg border border-dashed border-gray-300 bg-gray-50 px-4 py-3 dark:border-dark-600 dark:bg-dark-800"
+          class="flex items-center justify-between gap-3 rounded-lg border border-dashed px-4 py-3 transition-colors"
+          :class="dragActive
+            ? 'border-primary-400 bg-primary-50/70 dark:border-primary-500 dark:bg-primary-900/20'
+            : 'border-gray-300 bg-gray-50 dark:border-dark-600 dark:bg-dark-800'"
+          @dragenter.prevent="handleDragEnter"
+          @dragover.prevent="handleDragOver"
+          @dragleave.prevent="handleDragLeave"
+          @drop.prevent="handleDrop"
         >
           <div class="min-w-0">
-            <div class="truncate text-sm text-gray-700 dark:text-dark-200">
-              {{ fileName || t('admin.accounts.dataImportSelectFile') }}
+            <div class="truncate text-sm text-gray-700 dark:text-dark-200" :title="fileListTitle">
+              {{ selectedFilesLabel || t('admin.accounts.dataImportSelectFile') }}
             </div>
-            <div class="text-xs text-gray-500 dark:text-dark-400">JSON (.json)</div>
+            <div class="text-xs text-gray-500 dark:text-dark-400">
+              JSON (.json)
+              <span v-if="files.length > 1"> · {{ fileListTitle }}</span>
+            </div>
           </div>
           <button type="button" class="btn btn-secondary shrink-0" @click="openFilePicker">
             {{ t('common.chooseFile') }}
@@ -111,14 +121,17 @@ const appStore = useAppStore()
 
 const importing = ref(false)
 const files = ref<File[]>([])
+const dragActive = ref(false)
+const dragDepth = ref(0)
 const result = ref<AdminDataImportResult | null>(null)
 
 const fileInput = ref<HTMLInputElement | null>(null)
-const fileName = computed(() => {
+const selectedFilesLabel = computed(() => {
   if (files.value.length === 0) return ''
-  if (files.value.length === 1) return files.value[0].name
-  return t('admin.accounts.dataImportSelectedFiles', { count: files.value.length })
+  if (files.value.length === 1) return files.value[0]?.name || ''
+  return t('admin.accounts.selectedCount', { count: files.value.length })
 })
+const fileListTitle = computed(() => files.value.map((item) => item.name).join(', '))
 
 const errorItems = computed(() => result.value?.errors || [])
 
@@ -127,6 +140,8 @@ watch(
   (open) => {
     if (open) {
       files.value = []
+      dragActive.value = false
+      dragDepth.value = 0
       result.value = null
       if (fileInput.value) {
         fileInput.value.value = ''
@@ -141,12 +156,55 @@ const openFilePicker = () => {
 
 const handleFileChange = (event: Event) => {
   const target = event.target as HTMLInputElement
-  files.value = Array.from(target.files || [])
+  setSelectedFiles(target.files)
 }
 
 const handleClose = () => {
   if (importing.value) return
   emit('close')
+}
+
+const isJsonFile = (sourceFile: File) => {
+  const name = sourceFile.name.toLowerCase()
+  return name.endsWith('.json') || sourceFile.type === 'application/json'
+}
+
+const setSelectedFiles = (sourceFiles: FileList | File[] | null | undefined) => {
+  if (importing.value) return
+  const picked = Array.from(sourceFiles || []).filter(isJsonFile)
+  if (!picked.length) {
+    files.value = []
+    appStore.showError(t('admin.accounts.dataImportSelectFile'))
+    return
+  }
+  files.value = picked
+  result.value = null
+}
+
+const handleDragEnter = () => {
+  if (importing.value) return
+  dragDepth.value += 1
+  dragActive.value = true
+}
+
+const handleDragOver = () => {
+  if (importing.value) return
+  dragActive.value = true
+}
+
+const handleDragLeave = () => {
+  if (importing.value) return
+  dragDepth.value = Math.max(0, dragDepth.value - 1)
+  if (dragDepth.value === 0) {
+    dragActive.value = false
+  }
+}
+
+const handleDrop = (event: DragEvent) => {
+  if (importing.value) return
+  dragDepth.value = 0
+  dragActive.value = false
+  setSelectedFiles(event.dataTransfer?.files)
 }
 
 const readFileAsText = async (sourceFile: File): Promise<string> => {
