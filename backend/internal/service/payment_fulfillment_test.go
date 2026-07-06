@@ -6,11 +6,15 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strconv"
 	"testing"
+	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/ent/paymentauditlog"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type paymentFulfillmentTestProvider struct {
@@ -418,3 +422,179 @@ func TestPaymentAmountToleranceForThreeDecimalCurrency(t *testing.T) {
 	assert.Equal(t, amountToleranceCNY, paymentAmountToleranceForCurrency("JPY"))
 	assert.InDelta(t, 0.0005, paymentAmountToleranceForCurrency("KWD"), 1e-12)
 }
+
+func TestExecuteSubscriptionFulfillmentAppliesAffiliateRebate(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	ensurePaymentAuditOrderActionUniqueIndex(t, ctx, client)
+
+	user, err := client.User.Create().
+		SetEmail("subscription-affiliate@example.com").
+		SetPasswordHash("hash").
+		SetUsername("subscription-affiliate-user").
+		Save(ctx)
+	require.NoError(t, err)
+
+	order, err := client.PaymentOrder.Create().
+		SetUserID(user.ID).
+		SetUserEmail(user.Email).
+		SetUserName(user.Username).
+		SetAmount(9.99).
+		SetPayAmount(71.36).
+		SetFeeRate(0).
+		SetRechargeCode("PAY-SUB-AFFILIATE").
+		SetOutTradeNo("sub2_subscription_affiliate").
+		SetPaymentType(payment.TypeAlipay).
+		SetPaymentTradeNo("trade-sub-affiliate").
+		SetOrderType(payment.OrderTypeSubscription).
+		SetPlanID(99).
+		SetSubscriptionGroupID(7).
+		SetSubscriptionDays(30).
+		SetStatus(OrderStatusPaid).
+		SetExpiresAt(time.Now().Add(time.Hour)).
+		SetClientIP("127.0.0.1").
+		SetSrcHost("api.example.com").
+		Save(ctx)
+	require.NoError(t, err)
+
+	inviterID := int64(9001)
+	affiliateRepo := &paymentFulfillmentAffiliateRepoStub{
+		inviteeSummary: &AffiliateSummary{
+			UserID:    user.ID,
+			AffCode:   "INVITEE",
+			InviterID: &inviterID,
+			CreatedAt: time.Now().Add(-24 * time.Hour),
+		},
+		inviterSummary: &AffiliateSummary{
+			UserID:    inviterID,
+			AffCode:   "INVITER",
+			CreatedAt: time.Now().Add(-48 * time.Hour),
+		},
+	}
+	settingSvc := NewSettingService(&paymentFulfillmentSettingRepoStub{values: map[string]string{
+		SettingKeyAffiliateEnabled:           "true",
+		SettingKeyAffiliateRebateRate:        "15",
+		SettingKeyAffiliateRebateFreezeHours: "0",
+	}}, nil)
+	subRepo := newSubscriptionUserSubRepoStub()
+	subscriptionSvc := NewSubscriptionService(&subscriptionGroupRepoStub{
+		group: &Group{ID: 7, Status: payment.EntityStatusActive, SubscriptionType: SubscriptionTypeSubscription},
+	}, subRepo, nil, nil, nil)
+	svc := &PaymentService{
+		entClient:        client,
+		groupRepo:        &subscriptionGroupRepoStub{group: &Group{ID: 7, Status: payment.EntityStatusActive, SubscriptionType: SubscriptionTypeSubscription}},
+		subscriptionSvc:  subscriptionSvc,
+		affiliateService: NewAffiliateService(affiliateRepo, settingSvc, nil, nil),
+	}
+
+	err = svc.ExecuteSubscriptionFulfillment(ctx, order.ID)
+	require.NoError(t, err)
+
+	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusCompleted, reloaded.Status)
+	require.Len(t, affiliateRepo.accrueCalls, 1)
+	require.Equal(t, inviterID, affiliateRepo.accrueCalls[0].inviterID)
+	require.Equal(t, user.ID, affiliateRepo.accrueCalls[0].inviteeUserID)
+	require.InDelta(t, 1.4985, affiliateRepo.accrueCalls[0].amount, 0.00000001)
+	require.NotNil(t, affiliateRepo.accrueCalls[0].sourceOrderID)
+	require.Equal(t, order.ID, *affiliateRepo.accrueCalls[0].sourceOrderID)
+	require.Equal(t, 1, subRepo.createCalls)
+
+	applied, err := client.PaymentAuditLog.Query().
+		Where(paymentauditlog.OrderIDEQ(strconv.FormatInt(order.ID, 10)), paymentauditlog.ActionEQ("AFFILIATE_REBATE_APPLIED")).
+		Only(ctx)
+	require.NoError(t, err)
+	require.Contains(t, applied.Detail, `"baseAmount":9.99`)
+	require.Contains(t, applied.Detail, `"rebateAmount":1.4985`)
+}
+
+func TestExecuteSubscriptionFulfillmentDoesNotDuplicateWorkAfterLegacySuccessAudit(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentConfigServiceTestClient(t)
+	ensurePaymentAuditOrderActionUniqueIndex(t, ctx, client)
+
+	user, err := client.User.Create().
+		SetEmail("subscription-affiliate-idempotent@example.com").
+		SetPasswordHash("hash").
+		SetUsername("subscription-affiliate-idempotent-user").
+		Save(ctx)
+	require.NoError(t, err)
+
+	order, err := client.PaymentOrder.Create().
+		SetUserID(user.ID).
+		SetUserEmail(user.Email).
+		SetUserName(user.Username).
+		SetAmount(80).
+		SetPayAmount(80).
+		SetFeeRate(0).
+		SetRechargeCode("PAY-SUB-AFFILIATE-IDEMPOTENT").
+		SetOutTradeNo("sub2_subscription_affiliate_idempotent").
+		SetPaymentType(payment.TypeAlipay).
+		SetPaymentTradeNo("trade-sub-affiliate-idempotent").
+		SetOrderType(payment.OrderTypeSubscription).
+		SetPlanID(100).
+		SetSubscriptionGroupID(7).
+		SetSubscriptionDays(30).
+		SetStatus(OrderStatusPaid).
+		SetExpiresAt(time.Now().Add(time.Hour)).
+		SetClientIP("127.0.0.1").
+		SetSrcHost("api.example.com").
+		Save(ctx)
+	require.NoError(t, err)
+	_, err = client.PaymentAuditLog.Create().
+		SetOrderID(strconv.FormatInt(order.ID, 10)).
+		SetAction("SUBSCRIPTION_SUCCESS").
+		SetDetail(`{"groupID":7,"validityDays":30}`).
+		SetOperator("system").
+		Save(ctx)
+	require.NoError(t, err)
+	_, err = client.PaymentAuditLog.Create().
+		SetOrderID(strconv.FormatInt(order.ID, 10)).
+		SetAction("AFFILIATE_REBATE_APPLIED").
+		SetDetail(`{"baseAmount":80,"rebateAmount":16}`).
+		SetOperator("system").
+		Save(ctx)
+	require.NoError(t, err)
+
+	inviterID := int64(9001)
+	affiliateRepo := &paymentFulfillmentAffiliateRepoStub{
+		inviteeSummary: &AffiliateSummary{
+			UserID:    user.ID,
+			AffCode:   "INVITEE",
+			InviterID: &inviterID,
+			CreatedAt: time.Now().Add(-24 * time.Hour),
+		},
+		inviterSummary: &AffiliateSummary{
+			UserID:    inviterID,
+			AffCode:   "INVITER",
+			CreatedAt: time.Now().Add(-48 * time.Hour),
+		},
+	}
+	settingSvc := NewSettingService(&paymentFulfillmentSettingRepoStub{values: map[string]string{
+		SettingKeyAffiliateEnabled:    "true",
+		SettingKeyAffiliateRebateRate: "20",
+	}}, nil)
+	subRepo := newSubscriptionUserSubRepoStub()
+	subscriptionSvc := NewSubscriptionService(&subscriptionGroupRepoStub{
+		group: &Group{ID: 7, Status: payment.EntityStatusActive, SubscriptionType: SubscriptionTypeSubscription},
+	}, subRepo, nil, nil, nil)
+	svc := &PaymentService{
+		entClient:        client,
+		groupRepo:        &subscriptionGroupRepoStub{group: &Group{ID: 7, Status: payment.EntityStatusActive, SubscriptionType: SubscriptionTypeSubscription}},
+		subscriptionSvc:  subscriptionSvc,
+		affiliateService: NewAffiliateService(affiliateRepo, settingSvc, nil, nil),
+	}
+
+	err = svc.ExecuteSubscriptionFulfillment(ctx, order.ID)
+	require.NoError(t, err)
+
+	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusCompleted, reloaded.Status)
+	require.Empty(t, affiliateRepo.accrueCalls)
+	require.Zero(t, subRepo.createCalls)
+}
+
+var _ AffiliateRepository = (*paymentFulfillmentAffiliateRepoStub)(nil)
+var _ SettingRepository = (*paymentFulfillmentSettingRepoStub)(nil)
