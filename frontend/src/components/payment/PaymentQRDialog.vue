@@ -79,7 +79,7 @@ import { usePaymentStore } from '@/stores/payment'
 import { useAppStore } from '@/stores'
 import { paymentAPI } from '@/api/payment'
 import { extractI18nErrorMessage } from '@/utils/apiError'
-import { getPaymentPopupFeatures } from '@/components/payment/providerConfig'
+import { getPaymentPopupFeatures, isBuiltInAlipayMethod, isBuiltInWxpayMethod } from '@/components/payment/providerConfig'
 import type { PaymentOrder } from '@/types/payment'
 import { currencySymbol } from '@/components/payment/currency'
 import QRCode from 'qrcode'
@@ -117,8 +117,8 @@ const creditedAmountSymbol = currencySymbol('USD')
 let pollTimer: ReturnType<typeof setInterval> | null = null
 let countdownTimer: ReturnType<typeof setInterval> | null = null
 
-const isAlipay = computed(() => props.paymentType.includes('alipay'))
-const isWxpay = computed(() => props.paymentType.includes('wxpay'))
+const isAlipay = computed(() => isBuiltInAlipayMethod(props.paymentType))
+const isWxpay = computed(() => isBuiltInWxpayMethod(props.paymentType))
 
 const dialogTitle = computed(() => {
   if (success.value) return t('payment.result.success')
