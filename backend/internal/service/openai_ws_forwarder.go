@@ -1204,6 +1204,9 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 		enforceCodexIdentityHeaders(headers)
 	}
 
+	// 账号级请求头覆写仅对 OpenAI API key 账号生效，OAuth 路径为 no-op。
+	account.ApplyHeaderOverrides(headers)
+
 	return headers, sessionResolution
 }
 

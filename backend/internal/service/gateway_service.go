@@ -5765,6 +5765,9 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 	}
 	syncClaudeCodeSessionHeader(req, body, shouldInjectClaudeCodeSessionHeader(c, "apikey", body))
 
+	// 账号级请求头覆写（最终生效，覆盖上面所有来源的同名头）
+	account.ApplyHeaderOverrides(req.Header)
+
 	return req, body, nil
 }
 
@@ -6774,6 +6777,10 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	// 同步 X-Claude-Code-Session-Id 头：取 body 中已处理的 metadata.user_id 的 session_id 覆盖。
 	// 2026-04-24：OAuth/Claude Code 链路下主动注入（原来只"有就同步"），真 CLI 每请求都带。
 	syncClaudeCodeSessionHeader(req, body, shouldInjectClaudeCodeSessionHeader(c, tokenType, body))
+
+	// 账号级请求头覆写（仅 anthropic/openai api_key 账号启用时生效；OAuth 路径 no-op）。
+	// 放在所有 header 逻辑之后，确保配置值对同名头拥有最终决定权。
+	account.ApplyHeaderOverrides(req.Header)
 
 	// === DEBUG: 打印上游转发请求（headers + body 摘要），与 CLIENT_ORIGINAL 对比 ===
 	s.debugLogGatewaySnapshot("UPSTREAM_FORWARD", req.Header, body, map[string]string{
@@ -10293,6 +10300,9 @@ func (s *GatewayService) buildCountTokensRequestAnthropicAPIKeyPassthrough(
 	}
 	syncClaudeCodeSessionHeader(req, body, shouldInjectClaudeCodeSessionHeader(c, "apikey", body))
 
+	// 账号级请求头覆写（最终生效，覆盖上面所有来源的同名头）
+	account.ApplyHeaderOverrides(req.Header)
+
 	return req, nil
 }
 
@@ -10423,6 +10433,9 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	// 同步 X-Claude-Code-Session-Id 头：取 body 中已处理的 metadata.user_id 的 session_id 覆盖。
 	// 2026-04-24：OAuth/Claude Code 链路下主动注入（原来只"有就同步"），真 CLI 每请求都带。
 	syncClaudeCodeSessionHeader(req, body, shouldInjectClaudeCodeSessionHeader(c, tokenType, body))
+
+	// 账号级请求头覆写（仅 anthropic/openai api_key 账号启用时生效；OAuth 路径 no-op）
+	account.ApplyHeaderOverrides(req.Header)
 
 	if c != nil && tokenType == "oauth" {
 		c.Set(claudeMimicDebugInfoKey, buildClaudeMimicDebugLine(req, body, account, tokenType, mimicClaudeCode))
