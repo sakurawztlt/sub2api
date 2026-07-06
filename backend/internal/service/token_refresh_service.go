@@ -264,9 +264,17 @@ func (s *TokenRefreshService) processRefresh() {
 	}
 }
 
-// listActiveAccounts 获取所有active状态的账号
-// 使用ListActive确保刷新所有活跃账号的token（包括临时禁用的）
+type oauthRefreshCandidateRepository interface {
+	ListOAuthRefreshCandidates(context.Context) ([]Account, error)
+}
+
+// listActiveAccounts 获取需要参与后台 OAuth 刷新的候选账号。
+// 新仓库优先走窄查询，避免把无 refresh_token、非 OAuth 平台或处于刷新冷却的账号扫进来；
+// 老仓库实现没有候选查询时回退 ListActive，保持兼容。
 func (s *TokenRefreshService) listActiveAccounts(ctx context.Context) ([]Account, error) {
+	if repo, ok := s.accountRepo.(oauthRefreshCandidateRepository); ok {
+		return repo.ListOAuthRefreshCandidates(ctx)
+	}
 	return s.accountRepo.ListActive(ctx)
 }
 
@@ -333,9 +341,6 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 					)
 				}
 			}
-			// 刷新失败但 access_token 可能仍有效，尝试设置隐私
-			s.ensureOpenAIPrivacy(ctx, account)
-			s.ensureAntigravityPrivacy(ctx, account)
 			return err
 		}
 
@@ -362,10 +367,6 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 		"max_retries", s.cfg.MaxRetries,
 		"error", lastErr,
 	)
-
-	// 刷新失败但 access_token 可能仍有效，尝试设置隐私
-	s.ensureOpenAIPrivacy(ctx, account)
-	s.ensureAntigravityPrivacy(ctx, account)
 
 	// 设置临时不可调度 10 分钟（不标记 error，保持 status=active 让下个刷新周期能继续尝试）
 	until := time.Now().Add(tokenRefreshTempUnschedDuration)

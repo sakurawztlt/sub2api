@@ -219,11 +219,14 @@ type CreateGroupInput struct {
 	WeeklyLimitUSD   *float64 // 周限额 (USD)
 	MonthlyLimitUSD  *float64 // 月限额 (USD)
 	// 图片生成计费配置（仅 antigravity 平台使用）
-	ImagePrice1K    *float64
-	ImagePrice2K    *float64
-	ImagePrice4K    *float64
-	ClaudeCodeOnly  bool   // 仅允许 Claude Code 客户端
-	FallbackGroupID *int64 // 降级分组 ID
+	ImagePrice1K         *float64
+	ImagePrice2K         *float64
+	ImagePrice4K         *float64
+	AllowImageGeneration bool
+	ImageRateIndependent bool
+	ImageRateMultiplier  *float64
+	ClaudeCodeOnly       bool   // 仅允许 Claude Code 客户端
+	FallbackGroupID      *int64 // 降级分组 ID
 	// 无效请求兜底分组 ID（仅 anthropic 平台使用）
 	FallbackGroupIDOnInvalidRequest *int64
 	// 模型路由配置（仅 anthropic 平台使用）
@@ -257,11 +260,14 @@ type UpdateGroupInput struct {
 	WeeklyLimitUSD   *float64 // 周限额 (USD)
 	MonthlyLimitUSD  *float64 // 月限额 (USD)
 	// 图片生成计费配置（仅 antigravity 平台使用）
-	ImagePrice1K    *float64
-	ImagePrice2K    *float64
-	ImagePrice4K    *float64
-	ClaudeCodeOnly  *bool  // 仅允许 Claude Code 客户端
-	FallbackGroupID *int64 // 降级分组 ID
+	ImagePrice1K         *float64
+	ImagePrice2K         *float64
+	ImagePrice4K         *float64
+	AllowImageGeneration *bool
+	ImageRateIndependent *bool
+	ImageRateMultiplier  *float64
+	ClaudeCodeOnly       *bool  // 仅允许 Claude Code 客户端
+	FallbackGroupID      *int64 // 降级分组 ID
 	// 无效请求兜底分组 ID（仅 anthropic 平台使用）
 	FallbackGroupIDOnInvalidRequest *int64
 	// 模型路由配置（仅 anthropic 平台使用）
@@ -1953,6 +1959,13 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	imagePrice1K := normalizePrice(input.ImagePrice1K)
 	imagePrice2K := normalizePrice(input.ImagePrice2K)
 	imagePrice4K := normalizePrice(input.ImagePrice4K)
+	imageRateMultiplier := 1.0
+	if input.ImageRateMultiplier != nil {
+		imageRateMultiplier = *input.ImageRateMultiplier
+	}
+	if imageRateMultiplier < 0 {
+		return nil, errors.New("image_rate_multiplier must be >= 0")
+	}
 
 	// 校验降级分组
 	if input.FallbackGroupID != nil {
@@ -2237,6 +2250,18 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	}
 	if input.ImagePrice4K != nil {
 		group.ImagePrice4K = normalizePrice(input.ImagePrice4K)
+	}
+	if input.AllowImageGeneration != nil {
+		group.AllowImageGeneration = *input.AllowImageGeneration
+	}
+	if input.ImageRateIndependent != nil {
+		group.ImageRateIndependent = *input.ImageRateIndependent
+	}
+	if input.ImageRateMultiplier != nil {
+		if *input.ImageRateMultiplier < 0 {
+			return nil, errors.New("image_rate_multiplier must be >= 0")
+		}
+		group.ImageRateMultiplier = *input.ImageRateMultiplier
 	}
 
 	// Claude Code 客户端限制

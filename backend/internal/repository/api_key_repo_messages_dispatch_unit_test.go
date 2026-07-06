@@ -34,6 +34,26 @@ func TestGroupEntityToService_PreservesMessagesDispatchModelConfig(t *testing.T)
 	require.Equal(t, group.MessagesDispatchModelConfig, got.MessagesDispatchModelConfig)
 }
 
+func TestGroupEntityToService_PreservesImageGenerationControls(t *testing.T) {
+	group := &dbent.Group{
+		ID:                   2,
+		Name:                 "openai-image",
+		Platform:             service.PlatformOpenAI,
+		Status:               service.StatusActive,
+		SubscriptionType:     service.SubscriptionTypeStandard,
+		RateMultiplier:       1,
+		AllowImageGeneration: true,
+		ImageRateIndependent: true,
+		ImageRateMultiplier:  0.5,
+	}
+
+	got := groupEntityToService(group)
+	require.NotNil(t, got)
+	require.True(t, got.AllowImageGeneration)
+	require.True(t, got.ImageRateIndependent)
+	require.InDelta(t, 0.5, got.ImageRateMultiplier, 1e-12)
+}
+
 func TestAPIKeyRepository_GetByKeyForAuth_PreservesMessagesDispatchModelConfig_SQLite(t *testing.T) {
 	repo, client := newAPIKeyRepoSQLite(t)
 	ctx := context.Background()

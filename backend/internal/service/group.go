@@ -26,13 +26,13 @@ type Group struct {
 	MonthlyLimitUSD     *float64
 	DefaultValidityDays int
 
-	// 图片生成计费配置（antigravity 和 gemini 平台使用）
-	ImagePrice1K *float64
-	ImagePrice2K *float64
-	ImagePrice4K *float64
-	// OpenAI 图片生成权限。当前本地仓尚未完整接入 upstream 的 DB/UI 开关，
-	// 只用于已显式构造的请求上下文和测试 fixture。
+	// 图片生成计费配置（OpenAI/Gemini/Antigravity/Grok 平台使用）
 	AllowImageGeneration bool
+	ImageRateIndependent bool
+	ImageRateMultiplier  float64
+	ImagePrice1K         *float64
+	ImagePrice2K         *float64
+	ImagePrice4K         *float64
 
 	// Claude Code 客户端限制
 	ClaudeCodeOnly  bool

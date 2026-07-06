@@ -807,6 +807,35 @@
           <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">
             {{ t("admin.groups.imagePricing.description") }}
           </p>
+          <div class="mb-3 grid gap-3 md:grid-cols-3">
+            <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+              <input
+                v-model="createForm.allow_image_generation"
+                type="checkbox"
+                class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              />
+              <span>允许生图</span>
+            </label>
+            <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+              <input
+                v-model="createForm.image_rate_independent"
+                type="checkbox"
+                class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              />
+              <span>独立倍率</span>
+            </label>
+            <div>
+              <label class="input-label">图片倍率</label>
+              <input
+                v-model.number="createForm.image_rate_multiplier"
+                type="number"
+                step="0.01"
+                min="0"
+                class="input"
+                :disabled="!createForm.image_rate_independent"
+              />
+            </div>
+          </div>
           <div class="grid grid-cols-3 gap-3">
             <div>
               <label class="input-label">1K ($)</label>
@@ -2047,6 +2076,35 @@
           <p class="text-xs text-gray-500 dark:text-gray-400 mb-3">
             {{ t("admin.groups.imagePricing.description") }}
           </p>
+          <div class="mb-3 grid gap-3 md:grid-cols-3">
+            <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+              <input
+                v-model="editForm.allow_image_generation"
+                type="checkbox"
+                class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              />
+              <span>允许生图</span>
+            </label>
+            <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+              <input
+                v-model="editForm.image_rate_independent"
+                type="checkbox"
+                class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+              />
+              <span>独立倍率</span>
+            </label>
+            <div>
+              <label class="input-label">图片倍率</label>
+              <input
+                v-model.number="editForm.image_rate_multiplier"
+                type="number"
+                step="0.01"
+                min="0"
+                class="input"
+                :disabled="!editForm.image_rate_independent"
+              />
+            </div>
+          </div>
           <div class="grid grid-cols-3 gap-3">
             <div>
               <label class="input-label">1K ($)</label>
@@ -3367,7 +3425,10 @@ const createForm = reactive({
   daily_limit_usd: null as number | null,
   weekly_limit_usd: null as number | null,
   monthly_limit_usd: null as number | null,
-  // 图片生成计费配置（仅 antigravity 平台使用）
+  // 图片生成计费配置
+  allow_image_generation: false,
+  image_rate_independent: false,
+  image_rate_multiplier: 1,
   image_price_1k: null as number | null,
   image_price_2k: null as number | null,
   image_price_4k: null as number | null,
@@ -3692,7 +3753,10 @@ const editForm = reactive({
   daily_limit_usd: null as number | null,
   weekly_limit_usd: null as number | null,
   monthly_limit_usd: null as number | null,
-  // 图片生成计费配置（仅 antigravity 平台使用）
+  // 图片生成计费配置
+  allow_image_generation: false,
+  image_rate_independent: false,
+  image_rate_multiplier: 1,
   image_price_1k: null as number | null,
   image_price_2k: null as number | null,
   image_price_4k: null as number | null,
@@ -3898,6 +3962,9 @@ const closeCreateModal = () => {
   createForm.daily_limit_usd = null;
   createForm.weekly_limit_usd = null;
   createForm.monthly_limit_usd = null;
+  createForm.allow_image_generation = false;
+  createForm.image_rate_independent = false;
+  createForm.image_rate_multiplier = 1;
   createForm.image_price_1k = null;
   createForm.image_price_2k = null;
   createForm.image_price_4k = null;
@@ -3934,6 +4001,16 @@ const normalizeOptionalLimit = (
   return Number.isFinite(value) && value > 0 ? value : null;
 };
 
+const normalizeImageRateMultiplier = (
+  value: number | string | null | undefined,
+): number => {
+  if (value === null || value === undefined || value === "") {
+    return 1;
+  }
+  const parsed = typeof value === "string" ? Number(value.trim()) : value;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 1;
+};
+
 const handleCreateGroup = async () => {
   if (!createForm.name.trim()) {
     appStore.showError(t("admin.groups.nameRequired"));
@@ -3952,6 +4029,9 @@ const handleCreateGroup = async () => {
       ),
       monthly_limit_usd: normalizeOptionalLimit(
         createForm.monthly_limit_usd as number | string | null,
+      ),
+      image_rate_multiplier: normalizeImageRateMultiplier(
+        createForm.image_rate_multiplier as number | string | null,
       ),
       model_routing: convertRoutingRulesToApiFormat(
         createModelRoutingRules.value,
@@ -4008,6 +4088,9 @@ const handleEdit = async (group: AdminGroup) => {
   editForm.daily_limit_usd = group.daily_limit_usd;
   editForm.weekly_limit_usd = group.weekly_limit_usd;
   editForm.monthly_limit_usd = group.monthly_limit_usd;
+  editForm.allow_image_generation = group.allow_image_generation ?? false;
+  editForm.image_rate_independent = group.image_rate_independent ?? false;
+  editForm.image_rate_multiplier = group.image_rate_multiplier ?? 1;
   editForm.image_price_1k = group.image_price_1k;
   editForm.image_price_2k = group.image_price_2k;
   editForm.image_price_4k = group.image_price_4k;
@@ -4079,6 +4162,9 @@ const handleUpdateGroup = async () => {
       ),
       monthly_limit_usd: normalizeOptionalLimit(
         editForm.monthly_limit_usd as number | string | null,
+      ),
+      image_rate_multiplier: normalizeImageRateMultiplier(
+        editForm.image_rate_multiplier as number | string | null,
       ),
       fallback_group_id:
         editForm.fallback_group_id === null ? 0 : editForm.fallback_group_id,

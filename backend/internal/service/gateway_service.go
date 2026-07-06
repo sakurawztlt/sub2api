@@ -9445,7 +9445,8 @@ func (s *GatewayService) calculateRecordUsageCost(
 ) *CostBreakdown {
 	// 图片生成计费
 	if result.ImageCount > 0 {
-		return s.calculateImageCost(ctx, result, apiKey, billingModel, multiplier)
+		imageMultiplier := resolveImageRateMultiplier(apiKey, multiplier)
+		return s.calculateImageCost(ctx, result, apiKey, billingModel, imageMultiplier)
 	}
 
 	// Token 计费

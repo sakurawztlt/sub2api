@@ -86,12 +86,12 @@ func TestTryAcquireSingletonLeaderLock_CacheErrorFallsThrough(t *testing.T) {
 	require.NotPanics(t, release)
 }
 
-type subscriptionExpiryRepoStub struct {
+type leaderLockSubscriptionExpiryRepoStub struct {
 	userSubRepoNoop
 	batchCalls int
 }
 
-func (s *subscriptionExpiryRepoStub) BatchUpdateExpiredStatus(context.Context) (int64, error) {
+func (s *leaderLockSubscriptionExpiryRepoStub) BatchUpdateExpiredStatus(context.Context) (int64, error) {
 	s.batchCalls++
 	return int64(s.batchCalls), nil
 }
@@ -101,7 +101,7 @@ func TestSubscriptionExpiryService_SkipsUpdateWhenNotLeader(t *testing.T) {
 	// A peer already holds the expiry leader lock.
 	_, _ = cache.TryAcquireLeaderLock(context.Background(), subscriptionExpiryLeaderLockKey, "peer", time.Minute)
 
-	repo := &subscriptionExpiryRepoStub{}
+	repo := &leaderLockSubscriptionExpiryRepoStub{}
 	svc := NewSubscriptionExpiryService(repo, time.Minute)
 	svc.SetLeaderLock(cache, nil)
 
@@ -111,7 +111,7 @@ func TestSubscriptionExpiryService_SkipsUpdateWhenNotLeader(t *testing.T) {
 }
 
 func TestSubscriptionExpiryService_UpdatesWhenLeader(t *testing.T) {
-	repo := &subscriptionExpiryRepoStub{}
+	repo := &leaderLockSubscriptionExpiryRepoStub{}
 	svc := NewSubscriptionExpiryService(repo, time.Minute)
 	svc.SetLeaderLock(&fakeLeaderLockCache{}, nil)
 
@@ -130,7 +130,7 @@ func TestSubscriptionExpiryService_RunsEveryCycleSingleInstance(t *testing.T) {
 	}
 	for name, cache := range cases {
 		t.Run(name, func(t *testing.T) {
-			repo := &subscriptionExpiryRepoStub{}
+			repo := &leaderLockSubscriptionExpiryRepoStub{}
 			svc := NewSubscriptionExpiryService(repo, time.Minute)
 			svc.SetLeaderLock(cache, nil)
 

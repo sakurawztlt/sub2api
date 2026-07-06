@@ -7576,7 +7576,8 @@ func (s *OpenAIGatewayService) calculateOpenAIRecordUsageCost(
 	serviceTier string,
 ) (*CostBreakdown, error) {
 	if result != nil && result.ImageCount > 0 {
-		return s.calculateOpenAIImageCost(ctx, billingModel, apiKey, result, multiplier), nil
+		imageMultiplier := resolveImageRateMultiplier(apiKey, multiplier)
+		return s.calculateOpenAIImageCost(ctx, billingModel, apiKey, result, imageMultiplier), nil
 	}
 	if s.resolver != nil && apiKey.Group != nil {
 		gid := apiKey.Group.ID

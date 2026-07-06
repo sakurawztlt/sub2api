@@ -5,7 +5,7 @@
 
 import type { UsageRequestType } from '@/types'
 
-export type UsageRequestKind = UsageRequestType
+export type UsageRequestKind = UsageRequestType | 'cyber'
 
 /** 状态码徽章:≥500 红、429 紫、≥400 琥珀、其余灰 */
 export function statusCodeBadgeClass(code: number): string {

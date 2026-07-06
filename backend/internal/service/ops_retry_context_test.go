@@ -11,8 +11,8 @@ func TestNewOpsRetryContext_SetsHTTPTransportAndRequestHeaders(t *testing.T) {
 	errorLog := &OpsErrorLogDetail{
 		OpsErrorLog: OpsErrorLog{
 			RequestPath: "/openai/v1/responses",
+			UserAgent:   "ops-retry-agent/1.0",
 		},
-		UserAgent: "ops-retry-agent/1.0",
 		RequestHeaders: `{
 			"anthropic-beta":"beta-v1",
 			"ANTHROPIC-VERSION":"2023-06-01",

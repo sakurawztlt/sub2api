@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/google/uuid"
 )
 
@@ -28,6 +29,9 @@ type SubscriptionExpiryService struct {
 	lockCache  LeaderLockCache
 	db         *sql.DB
 	instanceID string
+
+	settingRepo              SettingRepository
+	notificationEmailService *NotificationEmailService
 }
 
 func NewSubscriptionExpiryService(userSubRepo UserSubscriptionRepository, interval time.Duration) *SubscriptionExpiryService {
@@ -48,6 +52,44 @@ func (s *SubscriptionExpiryService) SetLeaderLock(lockCache LeaderLockCache, db 
 	}
 	s.lockCache = lockCache
 	s.db = db
+}
+
+func (s *SubscriptionExpiryService) SetSettingRepository(settingRepo SettingRepository) {
+	if s == nil {
+		return
+	}
+	s.settingRepo = settingRepo
+}
+
+func (s *SubscriptionExpiryService) SetNotificationEmailService(notificationEmailService *NotificationEmailService) {
+	if s == nil {
+		return
+	}
+	s.notificationEmailService = notificationEmailService
+}
+
+func (s *SubscriptionExpiryService) expiryReminderEnabled(ctx context.Context) bool {
+	if s == nil || s.settingRepo == nil {
+		return true
+	}
+	value, err := s.settingRepo.GetValue(ctx, SettingKeySubscriptionExpiryNotifyEnabled)
+	if err == nil {
+		return !isFalseSettingValue(value)
+	}
+	if err == ErrSettingNotFound {
+		return true
+	}
+	return false
+}
+
+func (s *SubscriptionExpiryService) sendExpiryReminders(ctx context.Context) {
+	if s == nil || !s.expiryReminderEnabled(ctx) || s.userSubRepo == nil || s.notificationEmailService == nil {
+		return
+	}
+	_, _, err := s.userSubRepo.List(ctx, pagination.PaginationParams{Page: 1, PageSize: 100}, nil, nil, SubscriptionStatusActive, "", "expires_at", "asc")
+	if err != nil {
+		log.Printf("[SubscriptionExpiry] Scan expiry reminders failed: %v", err)
+	}
 }
 
 func (s *SubscriptionExpiryService) Start() {
