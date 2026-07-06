@@ -61,6 +61,16 @@ func TestNormalizeInboundEndpoint(t *testing.T) {
 		{"/foo/responses", "/foo/responses"},
 		{"/foo/responses/compact", "/foo/responses/compact"},
 
+		// Gin route patterns with wildcards. The literal wildcard token
+		// ("*subpath") is not the "compact" segment itself, so these
+		// generic FullPath patterns normalize to the root Responses
+		// endpoint; only a concrete "compact" path segment (tested above)
+		// resolves to EndpointResponsesCompact.
+		{"/v1beta/models/*modelAction", EndpointGeminiModels},
+		{"/v1/responses/*subpath", EndpointResponses},
+		{"/responses/*subpath", EndpointResponses},
+		{"/backend-api/codex/responses/*subpath", EndpointResponses},
+
 		// Unknown path is returned as-is.
 		{"/v1/embeddings", "/v1/embeddings"},
 		{"", ""},
