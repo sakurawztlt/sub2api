@@ -392,8 +392,7 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	}
 
 	// OpenAI 仅匹配已知 GPT-5/Codex 族，避免未知 OpenAI 型号误计价。
-	if strings.Contains(modelLower, "gpt-5") || strings.Contains(modelLower, "codex") {
-		normalized := normalizeCodexModel(modelLower)
+	if normalized := normalizeKnownOpenAICodexModel(modelLower); normalized != "" {
 		switch normalized {
 		case "gpt-5.6-sol":
 			return s.fallbackPrices["gpt-5.6-sol"]
@@ -774,13 +773,9 @@ func (s *BillingService) shouldApplySessionLongContextPricing(tokens UsageTokens
 }
 
 func isOpenAIGPT54Model(model string) bool {
-	trimmed := strings.TrimSpace(strings.ToLower(model))
-	// 仅当模型字符串实际属于 GPT-5/Codex 族时才做归一判定，避免 normalizeCodexModel
-	// 的默认兜底把非 OpenAI 模型（claude-*、gemini-*、gpt-4o）误识别为 gpt-5.4。
-	if !strings.Contains(trimmed, "gpt-5") && !strings.Contains(trimmed, "codex") {
-		return false
-	}
-	normalized := normalizeCodexModel(trimmed)
+	// 仅匹配已知 GPT-5/Codex 族，避免 normalizeCodexModel 的默认兜底把非 OpenAI
+	// 模型（claude-*、gemini-*、gpt-4o）误识别为 gpt-5.4。
+	normalized := normalizeKnownOpenAICodexModel(model)
 	return normalized == "gpt-5.4" || normalized == "gpt-5.5" || normalized == "gpt-5.5-pro" ||
 		normalized == "gpt-5.6-sol" || normalized == "gpt-5.6-terra" || normalized == "gpt-5.6-luna"
 }
