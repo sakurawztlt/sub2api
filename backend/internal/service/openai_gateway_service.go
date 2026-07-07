@@ -7379,6 +7379,7 @@ type OpenAIRecordUsageInput struct {
 	RequestPayloadHash string
 	APIKeyService      APIKeyQuotaUpdater
 	QuotaPlatform      string // user×platform quota platform resolved by the handler before async billing.
+	CyberBlocked       bool   // 标记 cyber_policy 命中，仅影响 usage request_type，不改变计费。
 	ChannelUsageFields
 }
 
@@ -7514,6 +7515,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	usageLog.AccountRateMultiplier = &accountRateMultiplier
 	usageLog.BillingType = billingType
 	usageLog.Stream = result.Stream
+	if input.CyberBlocked {
+		usageLog.RequestType = RequestTypeCyberBlocked
+	}
 	usageLog.OpenAIWSMode = result.OpenAIWSMode
 	usageLog.DurationMs = &durationMs
 	usageLog.FirstTokenMs = result.FirstTokenMs
