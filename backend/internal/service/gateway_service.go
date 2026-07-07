@@ -9816,6 +9816,11 @@ func (s *GatewayService) calculateImageCost(
 	billingModel string,
 	multiplier float64,
 ) *CostBreakdown {
+	sizeTier := NormalizeImageBillingTierOrDefault(result.ImageSize)
+	groupConfig := imagePriceConfigFromAPIKey(apiKey)
+	if apiKeyHasConfiguredImagePrice(apiKey, sizeTier) {
+		return s.billingService.CalculateImageCost(billingModel, sizeTier, result.ImageCount, groupConfig, multiplier)
+	}
 	if resolved := s.resolveChannelPricing(ctx, billingModel, apiKey); resolved != nil {
 		tokens := UsageTokens{
 			InputTokens:       result.Usage.InputTokens,
@@ -9829,7 +9834,7 @@ func (s *GatewayService) calculateImageCost(
 			GroupID:        &gid,
 			Tokens:         tokens,
 			RequestCount:   result.ImageCount,
-			SizeTier:       imageBillingSizeTier(resolved, result.ImageSize),
+			SizeTier:       imageBillingSizeTier(resolved, sizeTier),
 			RateMultiplier: multiplier,
 			Resolver:       s.resolver,
 			Resolved:       resolved,
@@ -9841,15 +9846,7 @@ func (s *GatewayService) calculateImageCost(
 		return cost
 	}
 
-	var groupConfig *ImagePriceConfig
-	if apiKey.Group != nil {
-		groupConfig = &ImagePriceConfig{
-			Price1K: apiKey.Group.ImagePrice1K,
-			Price2K: apiKey.Group.ImagePrice2K,
-			Price4K: apiKey.Group.ImagePrice4K,
-		}
-	}
-	return s.billingService.CalculateImageCost(billingModel, result.ImageSize, result.ImageCount, groupConfig, multiplier)
+	return s.billingService.CalculateImageCost(billingModel, sizeTier, result.ImageCount, groupConfig, multiplier)
 }
 
 func imageBillingSizeTier(resolved *ResolvedPricing, requested string) string {

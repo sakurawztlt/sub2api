@@ -442,7 +442,6 @@ func TestCalculateGrokImagineVideoCostUsesDefaultRateCard(t *testing.T) {
 	require.InDelta(t, 0.14, video15_720P.TotalCost, 1e-10)
 	require.InDelta(t, 0.25, video15_1080P.TotalCost, 1e-10)
 }
-
 func TestIsModelSupported(t *testing.T) {
 	svc := newTestBillingService()
 

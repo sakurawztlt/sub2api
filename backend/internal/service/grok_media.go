@@ -503,8 +503,6 @@ func grokMediaUsageFromResponse(endpoint GrokMediaEndpoint, requestInfo GrokMedi
 		meta.VideoDurationSeconds = requestInfo.DurationSeconds
 		// Keep the legacy media-unit counter populated for existing usage displays.
 		meta.ImageCount = 1
-		meta.ImageSize = requestInfo.SizeTier
-		meta.ImageInputSize = requestInfo.Size
 	}
 	return meta
 }

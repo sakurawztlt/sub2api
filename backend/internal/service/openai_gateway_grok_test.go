@@ -352,6 +352,13 @@ func TestParseGrokMediaRequestBuildsMultipartModerationBody(t *testing.T) {
 	require.True(t, strings.HasPrefix(gjson.GetBytes(moderationBody, "images.0.image_url").String(), "data:image/"))
 }
 
+func TestParseGrokMediaVideoRequestResolution(t *testing.T) {
+	info := ParseGrokMediaRequest("application/json", []byte(`{"model":"grok-imagine-video","prompt":"waves","resolution":"720p"}`))
+
+	require.Equal(t, "grok-imagine-video", info.Model)
+	require.Equal(t, "720p", info.Resolution)
+}
+
 func TestNormalizeGrokMediaModelForEndpoint(t *testing.T) {
 	tests := []struct {
 		name     string

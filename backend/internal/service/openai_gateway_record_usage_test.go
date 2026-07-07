@@ -2001,7 +2001,6 @@ func TestOpenAIGatewayServiceRecordUsage_GrokVideoWithTokenChannelPricingKeepsVi
 	require.NotNil(t, usageRepo.lastLog.VideoDurationSeconds)
 	require.Equal(t, 5, *usageRepo.lastLog.VideoDurationSeconds)
 }
-
 func TestOpenAIGatewayServiceRecordUsage_ChannelImageBillingUsesImageCountAndSharedMultiplier(t *testing.T) {
 	groupID := int64(123)
 	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
@@ -2113,6 +2112,19 @@ func newOpenAITokenImageChannelPricingResolverForTest(t *testing.T, groupID int6
 	return NewModelPricingResolver(cs, NewBillingService(&config.Config{}, nil))
 }
 
+type openAIMediaPriceGroupRepoStub struct {
+	GroupRepository
+	group *Group
+	err   error
+}
+
+func (s *openAIMediaPriceGroupRepoStub) GetByIDLite(context.Context, int64) (*Group, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.group, nil
+}
+
 func TestGatewayServiceCalculateRecordUsageCost_ChannelImageBillingUsesImageCount(t *testing.T) {
 	groupID := int64(126)
 	billingService := NewBillingService(&config.Config{}, nil)
@@ -2174,6 +2186,38 @@ func TestGatewayServiceCalculateRecordUsageCost_ChannelImageBillingUsesSizeTier(
 	require.Equal(t, string(BillingModeImage), cost.BillingMode)
 	require.InDelta(t, 0.80, cost.TotalCost, 1e-12)
 	require.InDelta(t, 0.80, cost.ActualCost, 1e-12)
+}
+
+func TestGatewayServiceCalculateRecordUsageCost_GroupImagePriceOverridesChannelImagePrice(t *testing.T) {
+	groupID := int64(129)
+	channelPrice := 0.25
+	groupImagePrice2K := 0.021
+
+	svc := &GatewayService{
+		billingService: NewBillingService(&config.Config{}, nil),
+		resolver:       newOpenAIImageChannelPricingResolverForTest(t, groupID, "gemini-image", channelPrice),
+	}
+
+	cost := svc.calculateRecordUsageCost(
+		context.Background(),
+		&ForwardResult{Model: "gemini-image", ImageCount: 2, ImageSize: ImageBillingSize2K},
+		&APIKey{
+			GroupID: i64p(groupID),
+			Group: &Group{
+				ID:           groupID,
+				ImagePrice2K: &groupImagePrice2K,
+			},
+		},
+		"gemini-image",
+		1.0,
+		1.0,
+		nil,
+	)
+
+	require.NotNil(t, cost)
+	require.Equal(t, string(BillingModeImage), cost.BillingMode)
+	require.InDelta(t, 0.042, cost.TotalCost, 1e-12)
+	require.InDelta(t, 0.042, cost.ActualCost, 1e-12)
 }
 
 func TestRecordUsageMarksCyberRequestType(t *testing.T) {
