@@ -3231,8 +3231,13 @@ func TestCodeExecutionFunctionCall_StreamsAsServerToolUse(t *testing.T) {
 		Type:     "response.completed",
 		Response: &ResponsesResponse{Status: "completed"},
 	}, state)
-	require.Len(t, events, 2)
-	assert.Equal(t, "end_turn", events[0].Delta.StopReason)
+	require.Len(t, events, 5)
+	assert.Equal(t, "content_block_start", events[0].Type)
+	require.NotNil(t, events[1].Delta)
+	assert.Equal(t, "text_delta", events[1].Delta.Type)
+	assert.Equal(t, "HELLO_CHECK", events[1].Delta.Text)
+	assert.Equal(t, "content_block_stop", events[2].Type)
+	assert.Equal(t, "end_turn", events[3].Delta.StopReason)
 }
 
 func TestCodeExecutionFallbackArgsFromAnthropicRequest(t *testing.T) {
@@ -3330,9 +3335,11 @@ func TestResponsesToAnthropic_CodeExecutionIsServerTool(t *testing.T) {
 		Usage: &ResponsesUsage{InputTokens: 20, OutputTokens: 4},
 	}, "claude-opus-4-8")
 
-	require.Len(t, anth.Content, 2)
+	require.Len(t, anth.Content, 3)
 	assert.Equal(t, "server_tool_use", anth.Content[0].Type)
 	assert.Equal(t, "code_execution_tool_result", anth.Content[1].Type)
+	assert.Equal(t, "text", anth.Content[2].Type)
+	assert.Equal(t, "HELLO_CHECK", anth.Content[2].Text)
 	assert.Equal(t, "end_turn", anth.StopReason)
 	assert.Contains(t, string(anth.Content[1].Content), "HELLO_CHECK")
 }
@@ -3352,10 +3359,41 @@ func TestResponsesToAnthropic_CodeExecutionCmdIsServerToolResult(t *testing.T) {
 		Usage: &ResponsesUsage{InputTokens: 20, OutputTokens: 4},
 	}, "claude-opus-4-8")
 
-	require.Len(t, anth.Content, 2)
+	require.Len(t, anth.Content, 3)
 	assert.Equal(t, "server_tool_use", anth.Content[0].Type)
 	assert.Equal(t, "code_execution_tool_result", anth.Content[1].Type)
+	assert.Equal(t, "text", anth.Content[2].Type)
+	assert.Equal(t, "HELLO_CHECK", anth.Content[2].Text)
 	assert.Contains(t, string(anth.Content[1].Content), "HELLO_CHECK")
+}
+
+func TestResponsesToAnthropic_CodeExecutionDoesNotDuplicateExplicitFinalText(t *testing.T) {
+	anth := ResponsesToAnthropic(&ResponsesResponse{
+		Status: "completed",
+		Output: []ResponsesOutput{
+			{
+				Type:      "function_call",
+				ID:        "fc_code",
+				CallID:    "call_code",
+				Name:      "code_execution",
+				Arguments: `{"code":"print('HELLO_CHECK')"}`,
+			},
+			{
+				Type: "message",
+				Content: []ResponsesContentPart{{
+					Type: "output_text",
+					Text: "HELLO_CHECK",
+				}},
+			},
+		},
+		Usage: &ResponsesUsage{InputTokens: 20, OutputTokens: 4},
+	}, "claude-opus-4-8")
+
+	require.Len(t, anth.Content, 3)
+	assert.Equal(t, "server_tool_use", anth.Content[0].Type)
+	assert.Equal(t, "code_execution_tool_result", anth.Content[1].Type)
+	assert.Equal(t, "text", anth.Content[2].Type)
+	assert.Equal(t, "HELLO_CHECK", anth.Content[2].Text)
 }
 
 func TestResponsesToAnthropic_ForceThinkingBlockForThinkingRequests(t *testing.T) {

@@ -65,7 +65,7 @@ func ResponsesToAnthropicWithUsageOptions(resp *ResponsesResponse, model string,
 	var blocks []AnthropicContentBlock
 	webSearchCount := 0
 
-	for _, item := range resp.Output {
+	for i, item := range resp.Output {
 		switch item.Type {
 		case "reasoning":
 			summaryText := ""
@@ -100,6 +100,9 @@ func ResponsesToAnthropicWithUsageOptions(resp *ResponsesResponse, model string,
 				})
 				if result := synthesizeSimpleCodeExecutionToolResult(toolUseID, item.Arguments); len(result.Content) > 0 {
 					blocks = append(blocks, result)
+					if stdout, ok := extractSimplePrintStdout(item.Arguments); ok && !responsesOutputHasTextAfter(resp.Output, i) {
+						blocks = append(blocks, codeExecutionFinalTextBlock(stdout))
+					}
 				}
 				continue
 			}
@@ -395,6 +398,10 @@ func synthesizeSimpleCodeExecutionToolResult(toolUseID, rawArgs string) Anthropi
 	if !ok {
 		return AnthropicContentBlock{}
 	}
+	return codeExecutionToolResultBlock(toolUseID, stdout)
+}
+
+func codeExecutionToolResultBlock(toolUseID, stdout string) AnthropicContentBlock {
 	content, err := json.Marshal([]map[string]string{{
 		"type": "text",
 		"text": stdout,
@@ -407,6 +414,27 @@ func synthesizeSimpleCodeExecutionToolResult(toolUseID, rawArgs string) Anthropi
 		ToolUseID: toolUseID,
 		Content:   content,
 	}
+}
+
+func codeExecutionFinalTextBlock(stdout string) AnthropicContentBlock {
+	return AnthropicContentBlock{
+		Type: "text",
+		Text: strings.TrimRight(stdout, "\r\n"),
+	}
+}
+
+func responsesOutputHasTextAfter(outputs []ResponsesOutput, index int) bool {
+	for i := index + 1; i < len(outputs); i++ {
+		if outputs[i].Type != "message" {
+			continue
+		}
+		for _, part := range outputs[i].Content {
+			if part.Type == "output_text" && strings.TrimSpace(part.Text) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func extractSimplePrintStdout(rawArgs string) (string, bool) {
@@ -585,6 +613,7 @@ type ResponsesEventToAnthropicState struct {
 	HasToolCall         bool // 058 step 2: true if any function_call output_item.added has been seen during this stream.
 
 	CodeExecutionFallbackArgs string // request-derived fallback for empty hosted code_execution args.
+	PendingCodeExecutionText  string // stdout from hosted code_execution, emitted at completion only if upstream sends no final text.
 
 	// OutputIndexToBlockIdx maps Responses output_index → Anthropic content block index.
 	OutputIndexToBlockIdx map[int]int
@@ -962,6 +991,7 @@ func resToAnthHandleTextDelta(evt *ResponsesStreamEvent, state *ResponsesEventTo
 	if evt.Delta == "" {
 		return nil
 	}
+	state.PendingCodeExecutionText = ""
 
 	var events []AnthropicStreamEvent
 
@@ -1053,7 +1083,8 @@ func resToAnthHandleFuncArgsDone(evt *ResponsesStreamEvent, state *ResponsesEven
 	if raw == "" || state.CurrentToolHadDelta {
 		events := closeCurrentBlock(state)
 		if isServerCode {
-			if result := synthesizeSimpleCodeExecutionToolResult(toolUseID, raw); len(result.Content) > 0 {
+			if stdout, ok := extractSimplePrintStdout(raw); ok {
+				result := codeExecutionToolResultBlock(toolUseID, stdout)
 				idx := state.ContentBlockIndex
 				events = append(events,
 					AnthropicStreamEvent{
@@ -1067,6 +1098,7 @@ func resToAnthHandleFuncArgsDone(evt *ResponsesStreamEvent, state *ResponsesEven
 					},
 				)
 				state.ContentBlockIndex++
+				state.PendingCodeExecutionText = strings.TrimRight(stdout, "\r\n")
 			}
 		}
 		return events
@@ -1092,7 +1124,8 @@ func resToAnthHandleFuncArgsDone(evt *ResponsesStreamEvent, state *ResponsesEven
 	}}
 	events = append(events, closeCurrentBlock(state)...)
 	if isServerCode {
-		if result := synthesizeSimpleCodeExecutionToolResult(toolUseID, raw); len(result.Content) > 0 {
+		if stdout, ok := extractSimplePrintStdout(raw); ok {
+			result := codeExecutionToolResultBlock(toolUseID, stdout)
 			idx := state.ContentBlockIndex
 			events = append(events,
 				AnthropicStreamEvent{
@@ -1106,6 +1139,7 @@ func resToAnthHandleFuncArgsDone(evt *ResponsesStreamEvent, state *ResponsesEven
 				},
 			)
 			state.ContentBlockIndex++
+			state.PendingCodeExecutionText = strings.TrimRight(stdout, "\r\n")
 		}
 	}
 	return events
@@ -1272,6 +1306,7 @@ func resToAnthHandleCompleted(evt *ResponsesStreamEvent, state *ResponsesEventTo
 
 	var events []AnthropicStreamEvent
 	events = append(events, closeCurrentBlock(state)...)
+	events = append(events, flushPendingCodeExecutionText(state)...)
 
 	stopReason := "end_turn"
 	if evt.Usage != nil {
@@ -1338,6 +1373,38 @@ func resToAnthHandleCompleted(evt *ResponsesStreamEvent, state *ResponsesEventTo
 	)
 	state.MessageStopSent = true
 	return events
+}
+
+func flushPendingCodeExecutionText(state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
+	text := strings.TrimSpace(state.PendingCodeExecutionText)
+	state.PendingCodeExecutionText = ""
+	if text == "" {
+		return nil
+	}
+	idx := state.ContentBlockIndex
+	state.ContentBlockIndex++
+	return []AnthropicStreamEvent{
+		{
+			Type:  "content_block_start",
+			Index: &idx,
+			ContentBlock: &AnthropicContentBlock{
+				Type: "text",
+				Text: "",
+			},
+		},
+		{
+			Type:  "content_block_delta",
+			Index: &idx,
+			Delta: &AnthropicDelta{
+				Type: "text_delta",
+				Text: text,
+			},
+		},
+		{
+			Type:  "content_block_stop",
+			Index: &idx,
+		},
+	}
 }
 
 func closeCurrentBlock(state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
