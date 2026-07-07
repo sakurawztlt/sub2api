@@ -386,6 +386,64 @@ func TestCodexInputItemRequiresNameTypesAllowCallID(t *testing.T) {
 	}
 }
 
+func TestFilterCodexInput_StripsInvalidCallInputIDWhenPreservingReferences(t *testing.T) {
+	input := []any{
+		map[string]any{
+			"type":    "function_call",
+			"id":      "item_A9v0SNfS3VaLrfX0j3y4xhyK",
+			"call_id": "fc_abc123",
+			"name":    "bash",
+		},
+		map[string]any{
+			"type":    "function_call_output",
+			"id":      "item_output_kept",
+			"call_id": "fc_abc123",
+			"output":  "done",
+		},
+		map[string]any{
+			"type": "message",
+			"id":   "item_msg_kept",
+			"role": "user",
+		},
+	}
+
+	filtered := filterCodexInputWithOptions(input, codexInputFilterOptions{
+		PreserveReferences: true,
+	})
+
+	require.Len(t, filtered, 3)
+
+	call, ok := filtered[0].(map[string]any)
+	require.True(t, ok)
+	_, hasID := call["id"]
+	require.False(t, hasID)
+	require.Equal(t, "fc_abc123", call["call_id"])
+
+	output, ok := filtered[1].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "item_output_kept", output["id"])
+
+	message, ok := filtered[2].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "item_msg_kept", message["id"])
+}
+
+func TestFilterCodexInput_KeepsValidCallInputIDWhenPreservingReferences(t *testing.T) {
+	filtered := filterCodexInputWithOptions([]any{
+		map[string]any{
+			"type":    "function_call",
+			"id":      "fc_validID123",
+			"call_id": "fc_validID123",
+			"name":    "bash",
+		},
+	}, codexInputFilterOptions{PreserveReferences: true})
+
+	require.Len(t, filtered, 1)
+	call, ok := filtered[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "fc_validID123", call["id"])
+}
+
 func TestApplyCodexOAuthTransform_ExplicitStoreFalsePreserved(t *testing.T) {
 	// 续链场景：显式 store=false 不再强制为 true，保持 false。
 

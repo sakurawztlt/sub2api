@@ -9392,8 +9392,12 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 
 	// 创建使用日志
 	accountRateMultiplier := account.BillingRateMultiplier()
+	usageRateMultiplier := multiplier
+	if result.ImageCount > 0 && cost != nil && cost.BillingMode == string(BillingModeImage) {
+		usageRateMultiplier = imageMultiplier
+	}
 	usageLog := s.buildRecordUsageLog(ctx, input, result, apiKey, user, account, subscription,
-		requestedModel, multiplier, accountRateMultiplier, billingType, cacheTTLOverridden, cost, opts)
+		requestedModel, usageRateMultiplier, accountRateMultiplier, billingType, cacheTTLOverridden, cost, opts)
 
 	// 计算账号统计定价费用（使用最终上游模型匹配自定义规则）
 	if apiKey.GroupID != nil {
@@ -9460,7 +9464,10 @@ func (s *GatewayService) calculateRecordUsageCost(
 ) *CostBreakdown {
 	// 图片生成计费
 	if result.ImageCount > 0 {
-		return s.calculateImageCost(ctx, result, apiKey, billingModel, imageMultiplier)
+		resolved := s.resolveChannelPricing(ctx, billingModel, apiKey)
+		if resolved == nil || resolved.Mode == BillingModePerRequest || resolved.Mode == BillingModeImage {
+			return s.calculateImageCost(ctx, result, apiKey, billingModel, imageMultiplier)
+		}
 	}
 
 	// Token 计费
@@ -9501,7 +9508,8 @@ func (s *GatewayService) calculateImageCost(
 			Model:          billingModel,
 			GroupID:        &gid,
 			Tokens:         tokens,
-			RequestCount:   1,
+			RequestCount:   result.ImageCount,
+			SizeTier:       imageBillingSizeTier(resolved, result.ImageSize),
 			RateMultiplier: multiplier,
 			Resolver:       s.resolver,
 			Resolved:       resolved,
@@ -9522,6 +9530,19 @@ func (s *GatewayService) calculateImageCost(
 		}
 	}
 	return s.billingService.CalculateImageCost(billingModel, result.ImageSize, result.ImageCount, groupConfig, multiplier)
+}
+
+func imageBillingSizeTier(resolved *ResolvedPricing, requested string) string {
+	requested = strings.TrimSpace(requested)
+	if requested != "" || resolved == nil {
+		return requested
+	}
+	for _, tier := range resolved.RequestTiers {
+		if strings.TrimSpace(tier.TierLabel) != "" && tier.PerRequestPrice != nil {
+			return tier.TierLabel
+		}
+	}
+	return ""
 }
 
 // calculateTokenCost 计算 Token 计费：根据 opts 决定走普通/长上下文/渠道统一计费。

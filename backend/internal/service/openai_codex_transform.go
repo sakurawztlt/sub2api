@@ -1529,6 +1529,16 @@ func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []an
 		if !preserveReferences {
 			ensureCopy()
 			delete(newItem, "id")
+		} else if isCodexToolCallInputType(typ) {
+			// 续链时需要保留普通 item id，但 function/tool call 等
+			// call-input 类型的 id 被上游要求以 fc 开头。客户端有时会
+			// 回放 item_* 形态，直接透传会触发 400
+			// "Expected an ID that begins with 'fc'."，因此只剥离
+			// 这类非法 id；call_id 和 output item id 保持原样。
+			if id, ok := m["id"].(string); ok && id != "" && !strings.HasPrefix(id, "fc") {
+				ensureCopy()
+				delete(newItem, "id")
+			}
 		}
 
 		filtered = append(filtered, newItem)
@@ -1548,6 +1558,20 @@ func isCodexToolCallItemType(typ string) bool {
 		"mcp_tool_call_output",
 		"custom_tool_call_output",
 		"tool_search_output":
+		return true
+	default:
+		return false
+	}
+}
+
+func isCodexToolCallInputType(typ string) bool {
+	switch typ {
+	case "function_call",
+		"tool_call",
+		"local_shell_call",
+		"tool_search_call",
+		"custom_tool_call",
+		"mcp_tool_call":
 		return true
 	default:
 		return false
