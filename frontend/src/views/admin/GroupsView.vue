@@ -867,6 +867,16 @@
               />
             </div>
           </div>
+          <div class="mt-3 grid grid-cols-3 gap-3 text-xs text-gray-500 dark:text-gray-400">
+            <div
+              v-for="tier in createImageFinalPricePreview"
+              :key="tier.label"
+              class="rounded border border-gray-200 bg-gray-50 px-3 py-2 dark:border-dark-600 dark:bg-dark-800"
+            >
+              <div class="font-medium text-gray-700 dark:text-gray-300">{{ tier.label }}</div>
+              <div>{{ tier.value }}</div>
+            </div>
+          </div>
         </div>
 
         <!-- 高峰时段倍率配置（仅订阅类型分组） -->
@@ -2177,6 +2187,16 @@
                 class="input"
                 placeholder="0.268"
               />
+            </div>
+          </div>
+          <div class="mt-3 grid grid-cols-3 gap-3 text-xs text-gray-500 dark:text-gray-400">
+            <div
+              v-for="tier in editImageFinalPricePreview"
+              :key="tier.label"
+              class="rounded border border-gray-200 bg-gray-50 px-3 py-2 dark:border-dark-600 dark:bg-dark-800"
+            >
+              <div class="font-medium text-gray-700 dark:text-gray-300">{{ tier.label }}</div>
+              <div>{{ tier.value }}</div>
             </div>
           </div>
         </div>
