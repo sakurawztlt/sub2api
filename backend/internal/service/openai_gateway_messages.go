@@ -498,7 +498,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	} else {
 		// Client wants JSON but upstream is streaming or ignored stream=false:
 		// buffer the streaming response and assemble a JSON reply.
-		result, handleErr = s.handleAnthropicBufferedStreamingResponse(resp, c, originalModel, billingModel, upstreamModel, startTime, len(body), forceThinkingBlock, webSearchRequestLimit)
+		result, handleErr = s.handleAnthropicBufferedStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime, len(body), forceThinkingBlock, webSearchRequestLimit)
 	}
 
 	// Propagate ServiceTier and ReasoningEffort to result for billing
@@ -575,6 +575,7 @@ func (s *OpenAIGatewayService) handleAnthropicErrorResponse(
 func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	resp *http.Response,
 	c *gin.Context,
+	account *Account,
 	originalModel string,
 	billingModel string,
 	upstreamModel string,
@@ -669,6 +670,17 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 			writeAnthropicError(c, http.StatusBadGateway, "api_error", "Internal server error")
 			return nil, fmt.Errorf("upstream stream ended without terminal event")
 		}
+	}
+
+	if strings.TrimSpace(finalResponse.Status) == "failed" {
+		payload, _ := json.Marshal(gin.H{"type": "response.failed", "response": finalResponse})
+		message := openAICompatFailedResponseMessage(finalResponse)
+		if openAIStreamFailedEventShouldFailover(payload, message) {
+			return nil, s.newOpenAIStreamFailoverError(c, account, false, requestID, payload, message)
+		}
+		message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payload, message)
+		writeAnthropicError(c, http.StatusBadGateway, "api_error", message)
+		return nil, fmt.Errorf("upstream response failed: %s", message)
 	}
 
 	// When the terminal event has an empty output array, reconstruct from
@@ -1463,6 +1475,8 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	clientDisconnected := false
 	var disconnectedAt time.Time // codex 5/8 #3: drain after disconnect 上限
 	clientOutputStarted := false
+	var streamFailoverErr error
+	var streamNonFailoverErr error
 
 	// R29 v25 cctest 签名校验失败教训: 没 forward 累积的 metadata events
 	// (message_start / content_block_start text/thinking / ping) 给客户,
@@ -1627,6 +1641,30 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			if event.Usage != nil {
 				usage = copyOpenAIUsageFromResponsesUsage(event.Usage)
 			}
+
+			if strings.TrimSpace(event.Type) == "response.failed" {
+				payloadBytes := []byte(payload)
+				message := extractOpenAISSEErrorMessage(payloadBytes)
+				if openAIStreamFailedEventShouldFailover(payloadBytes, message) {
+					streamFailoverErr = s.newOpenAIStreamFailoverError(c, account, false, requestID, payloadBytes, message)
+					return true
+				}
+
+				message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payloadBytes, message)
+				if !clientDisconnected {
+					if !clientOutputStarted {
+						writeAnthropicError(c, http.StatusBadGateway, "api_error", message)
+						clientOutputStarted = true
+					} else {
+						writeStreamHeader()
+						if _, err := fmt.Fprint(c.Writer, buildAnthropicStreamErrorSSE("api_error", message)); err == nil {
+							c.Writer.Flush()
+						}
+					}
+				}
+				streamNonFailoverErr = fmt.Errorf("upstream response failed: %s", message)
+				return true
+			}
 		}
 
 		// Convert to Anthropic events
@@ -1733,6 +1771,12 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 
 	// finalizeStream sends any remaining Anthropic events and returns the result.
 	finalizeStream := func() (*OpenAIForwardResult, error) {
+		if streamFailoverErr != nil {
+			return resultWithUsage(), streamFailoverErr
+		}
+		if streamNonFailoverErr != nil {
+			return resultWithUsage(), streamNonFailoverErr
+		}
 		if finalEvents := apicompat.FinalizeResponsesAnthropicStream(state); len(finalEvents) > 0 && !clientDisconnected {
 			for _, evt := range finalEvents {
 				sse, err := apicompat.ResponsesAnthropicEventToSSE(evt)
@@ -2384,6 +2428,22 @@ func writeAnthropicError(c *gin.Context, statusCode int, errType, message string
 			"message": message,
 		},
 	})
+}
+
+// buildAnthropicStreamErrorSSE builds an Anthropic error event for failures
+// discovered after a streaming response has already started.
+func buildAnthropicStreamErrorSSE(errType, message string) string {
+	payload, err := json.Marshal(gin.H{
+		"type": "error",
+		"error": gin.H{
+			"type":    errType,
+			"message": message,
+		},
+	})
+	if err != nil {
+		return "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"upstream error\"}}\n\n"
+	}
+	return "event: error\ndata: " + string(payload) + "\n\n"
 }
 
 func copyOpenAIUsageFromResponsesUsage(usage *apicompat.ResponsesUsage) OpenAIUsage {
