@@ -352,18 +352,21 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 	writeGrokMediaResponse(c, resp, respBody, s.responseHeaderFilter)
 	usage := grokMediaUsageFromResponse(endpoint, requestInfo, respBody)
 	return &OpenAIForwardResult{
-		RequestID:        requestIDHeader,
-		ResponseID:       usage.ResponseID,
-		Usage:            usage.Usage,
-		Model:            requestModel,
-		BillingModel:     requestModel,
-		UpstreamModel:    requestModel,
-		ResponseHeaders:  resp.Header.Clone(),
-		Duration:         time.Since(startTime),
-		ImageCount:       usage.ImageCount,
-		ImageSize:        usage.ImageSize,
-		ImageInputSize:   usage.ImageInputSize,
-		ImageOutputSizes: usage.ImageOutputSizes,
+		RequestID:            requestIDHeader,
+		ResponseID:           usage.ResponseID,
+		Usage:                usage.Usage,
+		Model:                requestModel,
+		BillingModel:         requestModel,
+		UpstreamModel:        requestModel,
+		ResponseHeaders:      resp.Header.Clone(),
+		Duration:             time.Since(startTime),
+		ImageCount:           usage.ImageCount,
+		ImageSize:            usage.ImageSize,
+		ImageInputSize:       usage.ImageInputSize,
+		ImageOutputSizes:     usage.ImageOutputSizes,
+		VideoCount:           usage.VideoCount,
+		VideoResolution:      usage.VideoResolution,
+		VideoDurationSeconds: usage.VideoDurationSeconds,
 	}, nil
 }
 
@@ -434,9 +437,9 @@ func normalizeGrokMediaForwardBody(endpoint GrokMediaEndpoint, body []byte, cont
 	if !endpoint.RequiresRequestBody() || !gjson.ValidBytes(body) {
 		return body, contentType, nil
 	}
-	model := strings.TrimSpace(gjson.GetBytes(body, "model").String())
-	upstreamModel := normalizeGrokMediaModelForEndpoint(endpoint, model)
-	if upstreamModel == "" || upstreamModel == model {
+	info := ParseGrokMediaRequest(contentType, body)
+	upstreamModel := normalizeGrokMediaModelForEndpoint(endpoint, info.Model, info.HasInputImage())
+	if upstreamModel == "" || upstreamModel == info.Model {
 		return body, contentType, nil
 	}
 	out, err := sjson.SetBytes(body, "model", upstreamModel)
@@ -446,24 +449,35 @@ func normalizeGrokMediaForwardBody(endpoint GrokMediaEndpoint, body []byte, cont
 	return out, contentType, nil
 }
 
-func normalizeGrokMediaModelForEndpoint(endpoint GrokMediaEndpoint, model string) string {
+func (r GrokMediaRequestInfo) HasInputImage() bool {
+	return len(r.InputImageURLs) > 0 || len(r.Uploads) > 0
+}
+
+func normalizeGrokMediaModelForEndpoint(endpoint GrokMediaEndpoint, model string, hasInputImage bool) string {
 	model = strings.TrimSpace(model)
 	switch endpoint {
 	case GrokMediaEndpointImagesGenerations, GrokMediaEndpointImagesEdits:
 		if model == "grok-imagine" {
 			return "grok-imagine-image-quality"
 		}
+	case GrokMediaEndpointVideosGenerations:
+		if model == "grok-imagine-video-1.5" && !hasInputImage {
+			return "grok-imagine-video"
+		}
 	}
 	return model
 }
 
 type grokMediaUsageMetadata struct {
-	ResponseID       string
-	Usage            OpenAIUsage
-	ImageCount       int
-	ImageSize        string
-	ImageInputSize   string
-	ImageOutputSizes []string
+	ResponseID           string
+	Usage                OpenAIUsage
+	ImageCount           int
+	ImageSize            string
+	ImageInputSize       string
+	ImageOutputSizes     []string
+	VideoCount           int
+	VideoResolution      string
+	VideoDurationSeconds int
 }
 
 func grokMediaUsageFromResponse(endpoint GrokMediaEndpoint, requestInfo GrokMediaRequestInfo, responseBody []byte) grokMediaUsageMetadata {
@@ -482,8 +496,12 @@ func grokMediaUsageFromResponse(endpoint GrokMediaEndpoint, requestInfo GrokMedi
 		meta.ImageSize = requestInfo.SizeTier
 		meta.ImageInputSize = requestInfo.Size
 		meta.ImageOutputSizes = collectOpenAIResponseImageOutputSizesFromJSONBytes(responseBody)
-	case GrokMediaEndpointVideosGenerations:
+	case GrokMediaEndpointVideosGenerations, GrokMediaEndpointVideosEdits, GrokMediaEndpointVideosExtensions:
 		meta.ResponseID = extractGrokMediaVideoRequestID(responseBody)
+		meta.VideoCount = 1
+		meta.VideoResolution = requestInfo.Resolution
+		meta.VideoDurationSeconds = requestInfo.DurationSeconds
+		// Keep the legacy media-unit counter populated for existing usage displays.
 		meta.ImageCount = 1
 		meta.ImageSize = requestInfo.SizeTier
 		meta.ImageInputSize = requestInfo.Size

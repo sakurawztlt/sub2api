@@ -2293,10 +2293,25 @@ export default {
         title: 'Image Generation Pricing',
         description: 'Configure image generation access and base image prices. Leave empty to use default prices.',
         allowImageGeneration: 'Allow image generation for this group',
+        allowBatchImageGeneration: 'Allow batch image generation for this group',
         independentMultiplier: 'Use independent image multiplier',
         imageMultiplier: 'Image multiplier',
+        batchDiscountMultiplier: 'Batch image discount',
+        batchHoldMultiplier: 'Batch hold price ratio',
+        batchSectionHint: 'Batch image settings only apply to batch jobs: settlement applies the batch discount, and the upfront hold is normal image price × batch hold price ratio. Reference images also create upstream input-token usage, so a batch image discount above 0.5 is recommended.',
+        batchDisabledHint: 'Enable image generation for this group before enabling batch image generation.',
+        batchGeminiOnlyHint: 'Batch image generation is currently available only for Gemini groups.',
         modeHint: 'By default, image billing uses image price × current effective group multiplier. Independent mode uses image price × image multiplier.',
         finalPricePreview: 'Final per-image price preview',
+        notConfigured: 'Not configured'
+      },
+      videoPricing: {
+        title: 'Video Generation Pricing',
+        description: 'Configure Grok video generation prices in USD per second of output video. Leave empty to use the default per-second rates (grok-imagine-video: $0.05/s 480p, $0.07/s 720p; video-1.5: $0.08/s 480p, $0.14/s 720p, $0.25/s 1080p).',
+        independentMultiplier: 'Use independent video multiplier',
+        videoMultiplier: 'Video multiplier',
+        modeHint: 'Videos are billed per second: per-second price × duration (1-15s, default 8s). By default the current effective group multiplier applies; independent mode uses the video multiplier instead.',
+        finalPricePreview: 'Final per-second price preview',
         notConfigured: 'Not configured'
       },
       peakRate: {
