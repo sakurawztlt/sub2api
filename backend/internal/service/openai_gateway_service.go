@@ -4555,6 +4555,11 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 		if clientConversationID != "" {
 			req.Header.Set("conversation_id", isolateOpenAISessionID(apiKeyID, clientConversationID))
 		}
+	} else if isOpenAIResponsesCompactPath(c) {
+		// Compact upstreams are unary JSON even for API-key accounts. Override a
+		// client text/event-stream Accept value so compatible relays do not return
+		// SSE to the unary response path.
+		req.Header.Set("accept", "application/json")
 	}
 
 	// 透传模式也支持账户自定义 User-Agent 与 ForceCodexCLI 兜底。
@@ -4789,7 +4794,7 @@ func (s *OpenAIGatewayService) compactNonstreamKeepaliveInterval() time.Duration
 
 // startCompactNonstreamKeepalive 为 compact 非流式请求启动下游空行心跳，防止反代空闲断连。
 func (s *OpenAIGatewayService) startCompactNonstreamKeepalive(ctx context.Context, c *gin.Context) func() {
-	if s == nil || c == nil || c.Writer == nil || !isOpenAIResponsesCompactPath(c) {
+	if s == nil || c == nil || c.Writer == nil || !isOpenAIResponsesCompactPath(c) || openAICompactClientWantsStream(c) {
 		return func() {}
 	}
 	interval := s.compactNonstreamKeepaliveInterval()
@@ -5475,7 +5480,9 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 		return nil, fmt.Errorf("restore OpenAI passthrough namespace response: %w", err)
 	}
 	stopBeforeWrite()
-	c.Data(resp.StatusCode, contentType, body)
+	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
+		c.Data(resp.StatusCode, contentType, body)
+	}
 	return &openaiNonStreamingResultPassthrough{
 		usage:      usage,
 		responseID: extractOpenAIResponseIDFromJSONBytes(body),
@@ -5507,6 +5514,7 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 				}
 			}
 		}
+		finalResponse = supplementCompactionItemFromSSE(c, finalResponse, bodyText)
 		body = finalResponse
 		if originalModel != "" && mappedModel != "" && originalModel != mappedModel {
 			body = s.replaceModelInResponseBody(body, mappedModel, originalModel)
@@ -5546,7 +5554,9 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 		}
 	}
 	stopBeforeWrite()
-	c.Data(resp.StatusCode, contentType, body)
+	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
+		c.Data(resp.StatusCode, contentType, body)
+	}
 
 	return &openaiNonStreamingResultPassthrough{
 		usage:      usage,
@@ -5697,6 +5707,8 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 		if clientConversationID != "" {
 			req.Header.Set("conversation_id", isolateOpenAISessionID(apiKeyID, clientConversationID))
 		}
+	} else if isOpenAIResponsesCompactPath(c) {
+		req.Header.Set("accept", "application/json")
 	}
 
 	// Apply custom User-Agent if configured
@@ -7230,7 +7242,9 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 
 	logOpenAIHTTP200SuspiciousUsageResponse(ctx, "openai_non_stream", resp, c, body, usage, true)
 	stop()
-	c.Data(resp.StatusCode, contentType, body)
+	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
+		c.Data(resp.StatusCode, contentType, body)
+	}
 
 	return &openaiNonStreamingResult{
 		OpenAIUsage:      usage,
@@ -7280,6 +7294,7 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 				}
 			}
 		}
+		finalResponse = supplementCompactionItemFromSSE(c, finalResponse, bodyText)
 		body = finalResponse
 		if originalModel != mappedModel {
 			body = s.replaceModelInResponseBody(body, mappedModel, originalModel)
@@ -7325,7 +7340,9 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 	}
 	logOpenAIHTTP200SuspiciousUsageResponse(context.Background(), "openai_sse_to_json", resp, c, body, usage, true)
 	stop()
-	c.Data(resp.StatusCode, contentType, body)
+	if !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {
+		c.Data(resp.StatusCode, contentType, body)
+	}
 
 	return usage, nil
 }
@@ -7448,6 +7465,13 @@ func (s *OpenAIGatewayService) writeOpenAINonStreamingProtocolError(resp *http.R
 		message = openAICompatSensitiveBackendErrorMessage
 	}
 	setOpsUpstreamError(c, http.StatusBadGateway, message, "")
+	// A body-signal compact heartbeat may already have committed HTTP 200. In
+	// that state an HTTP JSON error would corrupt the SSE stream, so terminate
+	// it with a protocol-valid response.failed event instead.
+	if openAICompactClientWantsStream(c) && StopOpenAICompactSSEKeepaliveCommitted(c) {
+		writeOpenAICompactSSEFailureMessage(c, http.StatusBadGateway, message)
+		return fmt.Errorf("non-streaming openai protocol error: %s", message)
+	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 	c.JSON(http.StatusBadGateway, gin.H{
@@ -7536,10 +7560,114 @@ func responsesStreamEventMayContributeToOutput(eventType string) bool {
 	}
 }
 
-// reconstructResponseOutputFromSSE scans raw SSE body text for delta events and
-// returns a JSON-encoded output array reconstructed from accumulated deltas.
-// Returns (nil, false) if no content was found in deltas.
+// collectRawResponsesOutputItemsFromSSE preserves authoritative
+// output_item.done items byte-for-byte so compact-specific and future fields
+// are not lost through a narrow response struct. If there are no done items,
+// a complete compaction item from output_item.added is used as a fallback.
+func collectRawResponsesOutputItemsFromSSE(bodyText string) ([]byte, bool) {
+	var items []json.RawMessage
+	seen := make(map[string]struct{})
+	appendItem := func(item gjson.Result) {
+		if !item.Exists() || !item.IsObject() {
+			return
+		}
+		key := strings.TrimSpace(item.Get("id").String())
+		if key == "" {
+			key = item.Raw
+		}
+		if _, duplicate := seen[key]; duplicate {
+			return
+		}
+		seen[key] = struct{}{}
+		items = append(items, json.RawMessage(item.Raw))
+	}
+	forEachOpenAISSEDataPayload(bodyText, func(data []byte) {
+		if strings.TrimSpace(gjson.GetBytes(data, "type").String()) == "response.output_item.done" {
+			appendItem(gjson.GetBytes(data, "item"))
+		}
+	})
+	if len(items) == 0 {
+		forEachOpenAISSEDataPayload(bodyText, func(data []byte) {
+			if strings.TrimSpace(gjson.GetBytes(data, "type").String()) != "response.output_item.added" {
+				return
+			}
+			item := gjson.GetBytes(data, "item")
+			if isResponsesCompactionItemType(item.Get("type").String()) {
+				appendItem(item)
+			}
+		})
+	}
+	if len(items) == 0 {
+		return nil, false
+	}
+	outputJSON, err := json.Marshal(items)
+	if err != nil {
+		return nil, false
+	}
+	return outputJSON, true
+}
+
+func isResponsesCompactionItemType(itemType string) bool {
+	switch strings.TrimSpace(itemType) {
+	case "compaction", "compaction_summary":
+		return true
+	default:
+		return false
+	}
+}
+
+// supplementCompactionItemFromSSE restores a raw compaction item when a
+// compact terminal response has other output but omits that item.
+func supplementCompactionItemFromSSE(c *gin.Context, finalResponse []byte, bodyText string) []byte {
+	if !isOpenAIResponsesCompactPath(c) || len(gjson.GetBytes(finalResponse, "output").Array()) == 0 || responsesOutputHasCompactionItem(finalResponse) {
+		return finalResponse
+	}
+	item, found := findRawCompactionItemFromSSE(bodyText)
+	if !found {
+		return finalResponse
+	}
+	patched, err := sjson.SetRawBytes(finalResponse, "output.-1", item)
+	if err != nil {
+		return finalResponse
+	}
+	return patched
+}
+
+func responsesOutputHasCompactionItem(response []byte) bool {
+	for _, item := range gjson.GetBytes(response, "output").Array() {
+		if isResponsesCompactionItemType(item.Get("type").String()) {
+			return true
+		}
+	}
+	return false
+}
+
+func findRawCompactionItemFromSSE(bodyText string) (json.RawMessage, bool) {
+	var found json.RawMessage
+	pick := func(eventType string) {
+		forEachOpenAISSEDataPayload(bodyText, func(data []byte) {
+			if found != nil || strings.TrimSpace(gjson.GetBytes(data, "type").String()) != eventType {
+				return
+			}
+			item := gjson.GetBytes(data, "item")
+			if item.IsObject() && isResponsesCompactionItemType(item.Get("type").String()) {
+				found = json.RawMessage(item.Raw)
+			}
+		})
+	}
+	pick("response.output_item.done")
+	if found == nil {
+		pick("response.output_item.added")
+	}
+	return found, found != nil
+}
+
+// reconstructResponseOutputFromSSE prefers raw terminal items and falls back
+// to delta accumulation only when the upstream emitted no complete items.
 func reconstructResponseOutputFromSSE(bodyText string) ([]byte, bool) {
+	if outputJSON, ok := collectRawResponsesOutputItemsFromSSE(bodyText); ok {
+		return outputJSON, true
+	}
 	acc := apicompat.NewBufferedResponseAccumulator()
 	imageOutputs := make([]json.RawMessage, 0, 1)
 	seenImages := make(map[string]struct{})
@@ -7576,6 +7704,26 @@ func reconstructResponseOutputFromSSE(bodyText string) ([]byte, bool) {
 	if frame, hasFrame := parser.Finish(); hasFrame {
 		process(frame)
 	}
+	if outputJSON, ok := buildResponsesOutputJSON(acc, imageOutputs); ok {
+		return outputJSON, true
+	}
+
+	// Be liberal with relay-produced SSE that omits blank frame separators.
+	// The parser above correctly preserves an `event:`-only type, while this
+	// fallback can still recover independent consecutive data lines.
+	forEachOpenAISSEDataPayload(bodyText, func(data []byte) {
+		if imageOutput, ok := extractImageGenerationOutputFromSSEData(data, seenImages); ok {
+			imageOutputs = append(imageOutputs, imageOutput)
+		}
+		eventType := strings.TrimSpace(gjson.GetBytes(data, "type").String())
+		if !responsesStreamEventMayContributeToOutput(eventType) {
+			return
+		}
+		var event apicompat.ResponsesStreamEvent
+		if err := json.Unmarshal(data, &event); err == nil {
+			acc.ProcessEvent(&event)
+		}
+	})
 	return buildResponsesOutputJSON(acc, imageOutputs)
 }
 
