@@ -7469,7 +7469,7 @@ func (s *OpenAIGatewayService) writeOpenAINonStreamingProtocolError(resp *http.R
 	// that state an HTTP JSON error would corrupt the SSE stream, so terminate
 	// it with a protocol-valid response.failed event instead.
 	if openAICompactClientWantsStream(c) && StopOpenAICompactSSEKeepaliveCommitted(c) {
-		writeOpenAICompactSSEFailureMessage(c, http.StatusBadGateway, message)
+		writeOpenAICompactSSEFailureMessage(c, http.StatusBadGateway, "upstream_error", message)
 		return fmt.Errorf("non-streaming openai protocol error: %s", message)
 	}
 	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -7567,6 +7567,7 @@ func responsesStreamEventMayContributeToOutput(eventType string) bool {
 func collectRawResponsesOutputItemsFromSSE(bodyText string) ([]byte, bool) {
 	var items []json.RawMessage
 	seen := make(map[string]struct{})
+	hasCompactionItem := false
 	appendItem := func(item gjson.Result) {
 		if !item.Exists() || !item.IsObject() {
 			return
@@ -7579,6 +7580,9 @@ func collectRawResponsesOutputItemsFromSSE(bodyText string) ([]byte, bool) {
 			return
 		}
 		seen[key] = struct{}{}
+		if isResponsesCompactionItemType(item.Get("type").String()) {
+			hasCompactionItem = true
+		}
 		items = append(items, json.RawMessage(item.Raw))
 	}
 	forEachOpenAISSEDataPayload(bodyText, func(data []byte) {
@@ -7586,7 +7590,9 @@ func collectRawResponsesOutputItemsFromSSE(bodyText string) ([]byte, bool) {
 			appendItem(gjson.GetBytes(data, "item"))
 		}
 	})
-	if len(items) == 0 {
+	// Some relays emit done for message items but only added for the compact
+	// item. Inspect added whenever no compaction item was found in done.
+	if !hasCompactionItem {
 		forEachOpenAISSEDataPayload(bodyText, func(data []byte) {
 			if strings.TrimSpace(gjson.GetBytes(data, "type").String()) != "response.output_item.added" {
 				return
@@ -9630,6 +9636,10 @@ func writeOpenAIFastPolicyBlockedResponse(c *gin.Context, err *OpenAIFastBlocked
 		return
 	}
 	MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
+	if StopOpenAICompactSSEKeepaliveCommitted(c) {
+		writeOpenAICompactSSEFailureMessage(c, http.StatusForbidden, "permission_error", err.Message)
+		return
+	}
 	c.JSON(http.StatusForbidden, gin.H{
 		"error": gin.H{
 			"type":    "permission_error",
