@@ -8,6 +8,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func mustMarshalJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	data, err := json.Marshal(value)
+	require.NoError(t, err)
+	return data
+}
+
 // ---------------------------------------------------------------------------
 // ChatCompletionsToResponses tests
 // ---------------------------------------------------------------------------

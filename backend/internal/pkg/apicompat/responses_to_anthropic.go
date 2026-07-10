@@ -161,7 +161,13 @@ func ResponsesToAnthropicWithUsageOptions(resp *ResponsesResponse, model string,
 		if resp.Usage.OutputTokensDetails != nil {
 			reasoning = resp.Usage.OutputTokensDetails.ReasoningTokens
 		}
-		input, creation, read := estimateAnthropicCacheUsageForModel(resp.Usage.InputTokens, cached, model, opts)
+		input, creation, read := estimateAnthropicCacheUsageWithExplicitCreation(
+			resp.Usage.InputTokens,
+			cached,
+			resp.Usage.CacheCreationInputTokens,
+			model,
+			opts,
+		)
 		out.Usage = AnthropicUsage{
 			InputTokens:              input,
 			OutputTokens:             visibleOutputTokens(resp.Usage.OutputTokens, reasoning),
@@ -230,6 +236,57 @@ const openaiPrefixCacheMinTokens = anthropicDefaultCacheMinTokens
 //     after the request is large enough to be cacheable
 func estimateAnthropicCacheUsage(total, cached int) (input, creation, read int) {
 	return estimateAnthropicCacheUsageForModel(total, cached, "", AnthropicUsageEstimationOptions{})
+}
+
+// anthropicUsageFromResponsesUsage maps an upstream usage payload without
+// applying request-side cache synthesis. An explicit cache creation counter is
+// authoritative because some Responses-compatible upstreams expose Claude-like
+// cache writes directly.
+func anthropicUsageFromResponsesUsage(usage *ResponsesUsage) AnthropicUsage {
+	if usage == nil {
+		return AnthropicUsage{}
+	}
+	cached := 0
+	if usage.InputTokensDetails != nil {
+		cached = usage.InputTokensDetails.CachedTokens
+	}
+	input, creation, read := splitExplicitAnthropicCacheUsage(
+		usage.InputTokens,
+		cached,
+		usage.CacheCreationInputTokens,
+	)
+	return AnthropicUsage{
+		InputTokens:              input,
+		OutputTokens:             usage.OutputTokens,
+		CacheCreationInputTokens: creation,
+		CacheReadInputTokens:     read,
+	}
+}
+
+func splitExplicitAnthropicCacheUsage(total, cached, creation int) (input, normalizedCreation, read int) {
+	if total < 0 {
+		total = 0
+	}
+	if cached < 0 {
+		cached = 0
+	}
+	if cached > total {
+		cached = total
+	}
+	if creation < 0 {
+		creation = 0
+	}
+	if creation > total-cached {
+		creation = total - cached
+	}
+	return total - cached - creation, creation, cached
+}
+
+func estimateAnthropicCacheUsageWithExplicitCreation(total, cached, explicitCreation int, model string, opts AnthropicUsageEstimationOptions) (input, creation, read int) {
+	if explicitCreation > 0 {
+		return splitExplicitAnthropicCacheUsage(total, cached, explicitCreation)
+	}
+	return estimateAnthropicCacheUsageForModel(total, cached, model, opts)
 }
 
 func estimateAnthropicCacheUsageForModel(total, cached int, model string, opts AnthropicUsageEstimationOptions) (input, creation, read int) {
@@ -625,11 +682,12 @@ type ResponsesEventToAnthropicState struct {
 	// identical mapping rules. RawReasoningTokens is OpenAI's hidden chain-
 	// of-thought counter which is subtracted from RawOutputTokens before the
 	// value is surfaced to Anthropic clients.
-	RawTotalInputTokens  int
-	RawCachedInputTokens int
-	RawOutputTokens      int
-	RawReasoningTokens   int
-	ExternalInputTokens  int
+	RawTotalInputTokens         int
+	RawCachedInputTokens        int
+	RawCacheCreationInputTokens int
+	RawOutputTokens             int
+	RawReasoningTokens          int
+	ExternalInputTokens         int
 
 	ResponseID string
 	Model      string
@@ -780,9 +838,10 @@ func FinalizeResponsesAnthropicStream(state *ResponsesEventToAnthropicState) []A
 	var events []AnthropicStreamEvent
 	events = append(events, closeCurrentBlock(state)...)
 
-	input, creation, read := estimateAnthropicCacheUsageForModel(
+	input, creation, read := estimateAnthropicCacheUsageWithExplicitCreation(
 		state.RawTotalInputTokens,
 		state.RawCachedInputTokens,
+		state.RawCacheCreationInputTokens,
 		state.Model,
 		AnthropicUsageEstimationOptions{ExternalInputTokens: state.ExternalInputTokens},
 	)
@@ -1311,6 +1370,7 @@ func resToAnthHandleCompleted(evt *ResponsesStreamEvent, state *ResponsesEventTo
 	stopReason := "end_turn"
 	if evt.Usage != nil {
 		state.RawTotalInputTokens = evt.Usage.InputTokens
+		state.RawCacheCreationInputTokens = evt.Usage.CacheCreationInputTokens
 		state.RawOutputTokens = evt.Usage.OutputTokens
 		if evt.Usage.InputTokensDetails != nil {
 			state.RawCachedInputTokens = evt.Usage.InputTokensDetails.CachedTokens
@@ -1322,6 +1382,7 @@ func resToAnthHandleCompleted(evt *ResponsesStreamEvent, state *ResponsesEventTo
 	if evt.Response != nil {
 		if evt.Response.Usage != nil {
 			state.RawTotalInputTokens = evt.Response.Usage.InputTokens
+			state.RawCacheCreationInputTokens = evt.Response.Usage.CacheCreationInputTokens
 			state.RawOutputTokens = evt.Response.Usage.OutputTokens
 			if evt.Response.Usage.InputTokensDetails != nil {
 				state.RawCachedInputTokens = evt.Response.Usage.InputTokensDetails.CachedTokens
@@ -1344,9 +1405,10 @@ func resToAnthHandleCompleted(evt *ResponsesStreamEvent, state *ResponsesEventTo
 		}
 	}
 
-	input, creation, read := estimateAnthropicCacheUsageForModel(
+	input, creation, read := estimateAnthropicCacheUsageWithExplicitCreation(
 		state.RawTotalInputTokens,
 		state.RawCachedInputTokens,
+		state.RawCacheCreationInputTokens,
 		state.Model,
 		AnthropicUsageEstimationOptions{ExternalInputTokens: state.ExternalInputTokens},
 	)
