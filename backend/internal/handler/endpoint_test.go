@@ -133,6 +133,10 @@ func TestDeriveUpstreamEndpoint(t *testing.T) {
 		{"openai alpha search", EndpointAlphaSearch, "/backend-api/codex/alpha/search", service.PlatformOpenAI, EndpointAlphaSearch},
 		{"openai image generations", EndpointImagesGenerations, "/v1/images/generations", service.PlatformOpenAI, EndpointImagesGenerations},
 		{"openai image edits", EndpointImagesEdits, "/openai/v1/images/edits", service.PlatformOpenAI, EndpointImagesEdits},
+		{"grok chat defaults to responses without runtime result", EndpointChatCompletions, "/v1/chat/completions", service.PlatformGrok, EndpointResponses},
+		{"grok responses", EndpointResponses, "/v1/responses", service.PlatformGrok, EndpointResponses},
+		{"grok video generations", EndpointVideosGenerations, "/v1/videos/generations", service.PlatformGrok, EndpointVideosGenerations},
+		{"grok video status", EndpointVideos, "/videos/req_123", service.PlatformGrok, EndpointVideos},
 
 		// Antigravity — uses inbound to pick Claude vs Gemini upstream.
 		{"antigravity claude", EndpointMessages, "/antigravity/v1/messages", service.PlatformAntigravity, EndpointMessages},
@@ -165,6 +169,59 @@ func TestShouldUseAntigravityCompat(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			require.Equal(t, tt.want, shouldUseAntigravityCompat(tt.account))
+		})
+	}
+}
+
+func TestResolveOpenAIUpstreamEndpointPrefersForwardResult(t *testing.T) {
+	tests := []struct {
+		name            string
+		account         *service.Account
+		result          *service.OpenAIForwardResult
+		runtimeEndpoint string
+		want            string
+	}{
+		{
+			name:            "grok raw chat result overrides stale context",
+			account:         &service.Account{Platform: service.PlatformGrok, Type: service.AccountTypeOAuth},
+			result:          &service.OpenAIForwardResult{UpstreamEndpoint: EndpointChatCompletions},
+			runtimeEndpoint: EndpointResponses,
+			want:            EndpointChatCompletions,
+		},
+		{
+			name:    "grok chat bridged to responses",
+			account: &service.Account{Platform: service.PlatformGrok, Type: service.AccountTypeOAuth},
+			result:  &service.OpenAIForwardResult{UpstreamEndpoint: EndpointResponses},
+			want:    EndpointResponses,
+		},
+		{
+			name:    "grok empty result keeps responses default",
+			account: &service.Account{Platform: service.PlatformGrok, Type: service.AccountTypeOAuth},
+			result:  &service.OpenAIForwardResult{},
+			want:    EndpointResponses,
+		},
+		{
+			name:            "grok raw error uses runtime endpoint",
+			account:         &service.Account{Platform: service.PlatformGrok, Type: service.AccountTypeOAuth},
+			runtimeEndpoint: EndpointChatCompletions,
+			want:            EndpointChatCompletions,
+		},
+		{
+			name:    "openai behavior remains responses",
+			account: &service.Account{Platform: service.PlatformOpenAI, Type: service.AccountTypeOAuth},
+			result:  &service.OpenAIForwardResult{},
+			want:    EndpointResponses,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, EndpointChatCompletions, nil)
+			c.Set(ctxKeyInboundEndpoint, EndpointChatCompletions)
+			service.SetActualOpenAIUpstreamEndpoint(c, tt.runtimeEndpoint)
+			require.Equal(t, tt.want, resolveOpenAIUpstreamEndpoint(c, tt.account, tt.result))
 		})
 	}
 }
