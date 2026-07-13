@@ -128,6 +128,35 @@ func TestBuildVideoURLRejectsPathSemanticRequestIDs(t *testing.T) {
 	require.Equal(t, DefaultBaseURL+"/videos/video_123", got)
 }
 
+func TestBuildGrokMediaURLs(t *testing.T) {
+	imagesURL, err := BuildImagesGenerationsURL(DefaultBaseURL + "/")
+	require.NoError(t, err)
+	require.Equal(t, DefaultBaseURL+"/images/generations", imagesURL)
+
+	editsURL, err := BuildImagesEditsURL(DefaultBaseURL)
+	require.NoError(t, err)
+	require.Equal(t, DefaultBaseURL+"/images/edits", editsURL)
+
+	videosURL, err := BuildVideosGenerationsURL(DefaultBaseURL)
+	require.NoError(t, err)
+	require.Equal(t, DefaultBaseURL+"/videos/generations", videosURL)
+
+	videoEditsURL, err := BuildVideosEditsURL(DefaultBaseURL)
+	require.NoError(t, err)
+	require.Equal(t, DefaultBaseURL+"/videos/edits", videoEditsURL)
+
+	videoExtensionsURL, err := BuildVideosExtensionsURL(DefaultBaseURL)
+	require.NoError(t, err)
+	require.Equal(t, DefaultBaseURL+"/videos/extensions", videoExtensionsURL)
+
+	videoURL, err := BuildVideoURL(DefaultBaseURL, "req 123")
+	require.NoError(t, err)
+	require.Equal(t, DefaultBaseURL+"/videos/req%20123", videoURL)
+
+	_, err = BuildVideoURL(DefaultBaseURL, " ")
+	require.Error(t, err)
+}
+
 func TestValidateXAIURLsRejectArbitraryHostsByDefault(t *testing.T) {
 	_, err := ValidateOAuthEndpointURL("https://auth.example.test/oauth2/token")
 	require.Error(t, err)
