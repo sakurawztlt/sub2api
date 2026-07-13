@@ -1181,6 +1181,7 @@ func resToAnthHandleFuncArgsDone(evt *ResponsesStreamEvent, state *ResponsesEven
 			PartialJSON: raw,
 		},
 	}}
+	state.CurrentToolHadDelta = true
 	events = append(events, closeCurrentBlock(state)...)
 	if isServerCode {
 		if stdout, ok := extractSimplePrintStdout(raw); ok {
@@ -1473,6 +1474,27 @@ func closeCurrentBlock(state *ResponsesEventToAnthropicState) []AnthropicStreamE
 	if !state.ContentBlockOpen {
 		return nil
 	}
+
+	var events []AnthropicStreamEvent
+	if state.CurrentBlockType == "tool_use" &&
+		state.CurrentToolName == "Read" &&
+		!state.CurrentToolHadDelta &&
+		state.CurrentToolArgs != "" {
+		raw := sanitizeAnthropicToolUseInput(state.CurrentToolName, state.CurrentToolArgs)
+		if len(raw) > 0 {
+			idx := state.ContentBlockIndex
+			events = append(events, AnthropicStreamEvent{
+				Type:  "content_block_delta",
+				Index: &idx,
+				Delta: &AnthropicDelta{
+					Type:        "input_json_delta",
+					PartialJSON: string(raw),
+				},
+			})
+			state.CurrentToolHadDelta = true
+		}
+	}
+
 	idx := state.ContentBlockIndex
 	state.ContentBlockOpen = false
 	state.ContentBlockIndex++
@@ -1481,10 +1503,11 @@ func closeCurrentBlock(state *ResponsesEventToAnthropicState) []AnthropicStreamE
 	state.CurrentToolArgs = ""
 	state.CurrentToolHadDelta = false
 	state.CurrentToolIsServer = false
-	return []AnthropicStreamEvent{{
+	events = append(events, AnthropicStreamEvent{
 		Type:  "content_block_stop",
 		Index: &idx,
-	}}
+	})
+	return events
 }
 
 // fakeEncryptedContent 生成 ~512 bytes random base64 (~700 chars) 占位
