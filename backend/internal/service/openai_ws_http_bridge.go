@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -210,6 +209,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	imageBillingModel string,
 	imageSizeTier string,
 	imageInputSize string,
+	grokCacheIdentity string,
 	turn int,
 	writeClientMessage func([]byte) error,
 ) (*OpenAIForwardResult, error) {
@@ -238,12 +238,18 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		if upstreamModel == "" {
 			upstreamModel = "grok-4.3"
 		}
-		body, err = patchGrokResponsesBody(body, upstreamModel)
+		grokIntentSourceBody := body
+		body, err = patchGrokResponsesBody(grokIntentSourceBody, upstreamModel)
 		if err != nil {
 			releaseUpstreamCtx()
 			return nil, err
 		}
-		upstreamReq, err = buildGrokResponsesRequest(upstreamCtx, c, account, body, token, s.cfg)
+		body, err = applyGrokResponsesCacheIdentity(body, grokIntentSourceBody, grokCacheIdentity, account.IsGrokOAuth())
+		if err != nil {
+			releaseUpstreamCtx()
+			return nil, fmt.Errorf("apply grok prompt cache identity: %w", err)
+		}
+		upstreamReq, err = buildGrokResponsesRequest(upstreamCtx, c, account, body, token, s.cfg, grokCacheIdentity)
 	} else {
 		upstreamReq, err = s.buildUpstreamRequestOpenAIPassthrough(upstreamCtx, c, account, body, token)
 	}
@@ -303,7 +309,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		return nil, fmt.Errorf("upstream http bridge error: status=%d message=%s", resp.StatusCode, upstreamMsg)
 	}
 	if account.Platform == PlatformGrok {
-		s.updateGrokUsageSnapshot(ctx, account, xai.ParseQuotaHeaders(resp.Header, resp.StatusCode))
+		s.updateGrokUsageFromResponse(ctx, account, resp.Header, resp.StatusCode)
 	}
 
 	responseID := ""
@@ -522,4 +528,13 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, terminalErr, true)
 	}
 	return resultWithUsage(), terminalErr
+}
+
+func resolveGrokWSCacheIdentity(c *gin.Context, account *Account, payload []byte, originalModel string) (string, error) {
+	body, err := prepareOpenAIWSHTTPBridgeBody(payload)
+	if err != nil {
+		return "", err
+	}
+	upstreamModel := resolveOpenAIWSTurnUpstreamModel(account, body, originalModel)
+	return resolveGrokCacheIdentity(c, body, "", upstreamModel), nil
 }

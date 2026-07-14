@@ -86,7 +86,7 @@ func TestProxyOpenAIWSHTTPBridgeTurnTransportErrorFailoverSafety(t *testing.T) {
 
 			result, err := svc.proxyOpenAIWSHTTPBridgeTurn(
 				context.Background(), c, account, "sk-test", payload, len(payload),
-				"gpt-5", "", "", "", tt.turn,
+				"gpt-5", "", "", "", "", tt.turn,
 				func(message []byte) error {
 					writes = append(writes, append([]byte(nil), message...))
 					return nil
@@ -144,7 +144,7 @@ func TestProxyOpenAIWSHTTPBridgeTurnHTTPStatusFailoverSafety(t *testing.T) {
 
 			result, err := svc.proxyOpenAIWSHTTPBridgeTurn(
 				context.Background(), c, account, "sk-test", payload, len(payload),
-				"gpt-5", "", "", "", tt.turn,
+				"gpt-5", "", "", "", "", tt.turn,
 				func(message []byte) error {
 					writes = append(writes, append([]byte(nil), message...))
 					return nil
@@ -187,7 +187,7 @@ func TestProxyOpenAIWSHTTPBridgeTurnSSEErrorFailoverSafety(t *testing.T) {
 
 			result, err := svc.proxyOpenAIWSHTTPBridgeTurn(
 				context.Background(), c, account, "sk-test", payload, len(payload),
-				"gpt-5", "", "", "", turn,
+				"gpt-5", "", "", "", "", turn,
 				func(message []byte) error {
 					writes = append(writes, append([]byte(nil), message...))
 					return nil
@@ -244,7 +244,7 @@ func TestProxyOpenAIWSHTTPBridgeTurnRequiresTerminalEvent(t *testing.T) {
 
 			result, err := svc.proxyOpenAIWSHTTPBridgeTurn(
 				context.Background(), c, account, "sk-test", payload, len(payload),
-				"gpt-5", "", "", "", 1,
+				"gpt-5", "", "", "", "", 1,
 				func(message []byte) error {
 					writes = append(writes, append([]byte(nil), message...))
 					return nil
@@ -339,6 +339,7 @@ func TestOpenAIWSHTTPBridgeRelaysSSEFramesAsWebSocketMessages(t *testing.T) {
 			payload,
 			len(payload),
 			"gpt-5",
+			"",
 			"",
 			"",
 			"",

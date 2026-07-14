@@ -19,7 +19,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -348,12 +347,18 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		return nil, policyErr
 	}
 	responsesBody = updatedBody
+	grokCacheIdentity := ""
 	if account.Platform == PlatformGrok {
-		patchedBody, patchErr := patchGrokResponsesBody(responsesBody, upstreamModel)
+		grokIntentSourceBody := responsesBody
+		grokCacheIdentity = resolveGrokCacheIdentity(c, grokIntentSourceBody, promptCacheKey, upstreamModel)
+		patchedBody, patchErr := patchGrokResponsesBody(grokIntentSourceBody, upstreamModel)
 		if patchErr != nil {
 			return nil, patchErr
 		}
-		responsesBody = patchedBody
+		responsesBody, patchErr = applyGrokResponsesCacheIdentity(patchedBody, grokIntentSourceBody, grokCacheIdentity, account.IsGrokOAuth())
+		if patchErr != nil {
+			return nil, fmt.Errorf("apply grok prompt cache identity: %w", patchErr)
+		}
 	}
 
 	// 5. Get access token
@@ -372,7 +377,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	var upstreamReq *http.Request
 	if account.Platform == PlatformGrok {
-		upstreamReq, err = buildGrokResponsesRequest(upstreamCtx, c, account, responsesBody, token, s.cfg)
+		upstreamReq, err = buildGrokResponsesRequest(upstreamCtx, c, account, responsesBody, token, s.cfg, grokCacheIdentity)
 	} else {
 		upstreamReq, err = s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, isStream, promptCacheKey, false)
 	}
@@ -467,7 +472,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		return s.handleAnthropicErrorResponse(resp, c, account, billingModel)
 	}
 	if account.Platform == PlatformGrok && account.Type == AccountTypeOAuth {
-		s.updateGrokUsageSnapshot(ctx, account, xai.ParseQuotaHeaders(resp.Header, resp.StatusCode))
+		s.updateGrokUsageFromResponse(ctx, account, resp.Header, resp.StatusCode)
 	}
 
 	// 058 step 2: Codex SSE returns x-codex-turn-state on the success header.

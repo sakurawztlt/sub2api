@@ -165,7 +165,8 @@ func ValidatedBaseURL(override string) (string, error) {
 }
 
 // BaseURLValidator lets the service layer apply its configured outbound URL
-// policy before an xAI endpoint path is appended.
+// policy before an xAI endpoint path is appended. OAuth callers can pin this
+// to trusted official hosts while API-key callers use the operator allowlist.
 type BaseURLValidator func(string) (string, error)
 
 func validatedBaseURLWithValidator(override string, validator BaseURLValidator) (string, error) {
@@ -542,6 +543,22 @@ func BuildVideosGenerationsURL(baseURL string) (string, error) {
 
 func BuildVideosGenerationsURLWithValidator(baseURL string, validator BaseURLValidator) (string, error) {
 	return buildAPIURLWithValidator(baseURL, "/videos/generations", validator)
+}
+
+func BuildVideosEditsURL(baseURL string) (string, error) {
+	return BuildVideosEditsURLWithValidator(baseURL, nil)
+}
+
+func BuildVideosEditsURLWithValidator(baseURL string, validator BaseURLValidator) (string, error) {
+	return buildAPIURLWithValidator(baseURL, "/videos/edits", validator)
+}
+
+func BuildVideosExtensionsURL(baseURL string) (string, error) {
+	return BuildVideosExtensionsURLWithValidator(baseURL, nil)
+}
+
+func BuildVideosExtensionsURLWithValidator(baseURL string, validator BaseURLValidator) (string, error) {
+	return buildAPIURLWithValidator(baseURL, "/videos/extensions", validator)
 }
 
 func BuildVideoURL(baseURL, requestID string) (string, error) {

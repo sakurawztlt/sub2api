@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -26,6 +25,8 @@ const (
 	GrokMediaEndpointImagesGenerations GrokMediaEndpoint = "images_generations"
 	GrokMediaEndpointImagesEdits       GrokMediaEndpoint = "images_edits"
 	GrokMediaEndpointVideosGenerations GrokMediaEndpoint = "videos_generations"
+	GrokMediaEndpointVideosEdits       GrokMediaEndpoint = "videos_edits"
+	GrokMediaEndpointVideosExtensions  GrokMediaEndpoint = "videos_extensions"
 	GrokMediaEndpointVideoStatus       GrokMediaEndpoint = "video_status"
 )
 
@@ -35,7 +36,7 @@ func (e GrokMediaEndpoint) RequiresRequestBody() bool {
 
 func (e GrokMediaEndpoint) IsGenerationRequest() bool {
 	switch e {
-	case GrokMediaEndpointImagesGenerations, GrokMediaEndpointImagesEdits, GrokMediaEndpointVideosGenerations:
+	case GrokMediaEndpointImagesGenerations, GrokMediaEndpointImagesEdits, GrokMediaEndpointVideosGenerations, GrokMediaEndpointVideosEdits, GrokMediaEndpointVideosExtensions:
 		return true
 	default:
 		return false
@@ -43,15 +44,17 @@ func (e GrokMediaEndpoint) IsGenerationRequest() bool {
 }
 
 type GrokMediaRequestInfo struct {
-	Model          string
-	Prompt         string
-	N              int
-	Size           string
-	SizeTier       string
-	InputImageURLs []string
-	MaskImageURL   string
-	Uploads        []OpenAIImagesUpload
-	MaskUpload     *OpenAIImagesUpload
+	Model           string
+	Prompt          string
+	N               int
+	Size            string
+	SizeTier        string
+	Resolution      string
+	DurationSeconds int
+	InputImageURLs  []string
+	MaskImageURL    string
+	Uploads         []OpenAIImagesUpload
+	MaskUpload      *OpenAIImagesUpload
 }
 
 func (r GrokMediaRequestInfo) ModerationBody() []byte {
@@ -114,6 +117,8 @@ func ParseGrokMediaRequest(contentType string, body []byte) GrokMediaRequestInfo
 	info.Prompt = strings.TrimSpace(info.Prompt)
 	info.Size = strings.TrimSpace(info.Size)
 	info.SizeTier = NormalizeImageBillingTierOrDefault(info.Size)
+	info.Resolution = NormalizeVideoBillingResolutionOrDefault(info.Resolution)
+	info.DurationSeconds = NormalizeVideoBillingDurationSecondsOrDefault(info.DurationSeconds)
 	if info.N <= 0 {
 		info.N = 1
 	}
@@ -127,6 +132,10 @@ func parseGrokMediaJSONRequest(body []byte, info *GrokMediaRequestInfo) {
 	info.Model = strings.TrimSpace(gjson.GetBytes(body, "model").String())
 	info.Prompt = strings.TrimSpace(gjson.GetBytes(body, "prompt").String())
 	info.Size = strings.TrimSpace(gjson.GetBytes(body, "size").String())
+	info.Resolution = strings.TrimSpace(gjson.GetBytes(body, "resolution").String())
+	if duration := gjson.GetBytes(body, "duration"); duration.Exists() && duration.Type == gjson.Number {
+		info.DurationSeconds = int(duration.Int())
+	}
 	if n := gjson.GetBytes(body, "n"); n.Exists() && n.Type == gjson.Number {
 		info.N = int(n.Int())
 	}
@@ -226,6 +235,12 @@ func parseGrokMediaMultipartRequest(contentType string, body []byte, info *GrokM
 			info.Prompt = value
 		case "size":
 			info.Size = value
+		case "resolution":
+			info.Resolution = value
+		case "duration":
+			if duration, err := strconv.Atoi(value); err == nil {
+				info.DurationSeconds = duration
+			}
 		case "n":
 			if n, err := strconv.Atoi(value); err == nil {
 				info.N = n
@@ -250,21 +265,6 @@ func GrokMediaVideoRequestSessionHash(requestID string) string {
 
 func (s *OpenAIGatewayService) BindGrokMediaVideoRequestAccount(ctx context.Context, groupID *int64, requestID string, accountID int64) error {
 	return s.BindStickySession(ctx, groupID, GrokMediaVideoRequestSessionHash(requestID), accountID)
-}
-
-func (e GrokMediaEndpoint) upstreamURL(baseURL, requestID string) (string, error) {
-	switch e {
-	case GrokMediaEndpointImagesGenerations:
-		return xai.BuildImagesGenerationsURL(baseURL)
-	case GrokMediaEndpointImagesEdits:
-		return xai.BuildImagesEditsURL(baseURL)
-	case GrokMediaEndpointVideosGenerations:
-		return xai.BuildVideosGenerationsURL(baseURL)
-	case GrokMediaEndpointVideoStatus:
-		return xai.BuildVideoURL(baseURL, requestID)
-	default:
-		return "", fmt.Errorf("unsupported grok media endpoint: %s", e)
-	}
 }
 
 func (s *OpenAIGatewayService) ForwardGrokMedia(
@@ -344,7 +344,7 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 		return s.handleGrokMediaErrorResponse(ctx, resp, c, account, requestIDHeader, requestModel)
 	}
 
-	s.updateGrokUsageSnapshot(ctx, account, xai.ParseQuotaHeaders(resp.Header, resp.StatusCode))
+	s.updateGrokUsageFromResponse(ctx, account, resp.Header, resp.StatusCode)
 	respBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
 		return nil, err

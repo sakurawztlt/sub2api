@@ -26,6 +26,10 @@ type grokQuotaAccountRepo struct {
 	lastRateLimitedID     int64
 	lastRateLimitResetAt  time.Time
 	updateCalls           int
+	recoveryClearCalls    int
+	recoveryObservedAt    time.Time
+	recoveryObservedReset time.Time
+	recoveryClearResult   bool
 }
 
 func (r *grokQuotaAccountRepo) Update(ctx context.Context, account *Account) error {
@@ -54,6 +58,17 @@ func (r *grokQuotaAccountRepo) UpdateExtra(_ context.Context, id int64, updates 
 	return nil
 }
 
+func (r *grokQuotaAccountRepo) SetRateLimitedIfLater(ctx context.Context, id int64, resetAt time.Time) error {
+	return r.SetRateLimited(ctx, id, resetAt)
+}
+
+func (r *grokQuotaAccountRepo) ClearRateLimitIfObserved(_ context.Context, _ int64, observedLimitedAt, observedResetAt time.Time) (bool, error) {
+	r.recoveryClearCalls++
+	r.recoveryObservedAt = observedLimitedAt
+	r.recoveryObservedReset = observedResetAt
+	return r.recoveryClearResult, nil
+}
+
 func (r *grokQuotaAccountRepo) SetTempUnschedulable(_ context.Context, id int64, until time.Time, reason string) error {
 	r.tempUnschedCalls++
 	r.lastTempUnschedID = id
@@ -71,6 +86,22 @@ type grokQuotaProxyRepo struct {
 func (r *grokQuotaProxyRepo) GetByID(_ context.Context, id int64) (*Proxy, error) {
 	r.calls++
 	return r.proxies[id], nil
+}
+
+func healthyGrokQuotaOAuthAccount(id int64) *Account {
+	return &Account{
+		ID:          id,
+		Platform:    PlatformGrok,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token":  "access-token",
+			"refresh_token": "refresh-token",
+			"expires_at":    time.Now().Add(2 * grokTokenRefreshSkew).UTC().Format(time.RFC3339),
+		},
+	}
 }
 
 func TestGrokQuotaServiceProbeUsageStoresHeaders(t *testing.T) {
@@ -169,20 +200,16 @@ func TestGrokQuotaServiceProbeUsageLoadsProxyWhenAccountEdgeMissing(t *testing.T
 func TestGrokQuotaServiceProbeUsageStoresNoHeadersState(t *testing.T) {
 	t.Parallel()
 
-	account := &Account{
-		ID:          45,
-		Platform:    PlatformGrok,
-		Type:        AccountTypeOAuth,
-		Concurrency: 1,
-		Credentials: map[string]any{
-			"access_token": "access-token",
-			"expires_at":   time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
-		},
-	}
+	account := healthyGrokQuotaOAuthAccount(45)
+	observedResetAt := time.Now().Add(-time.Second).UTC().Truncate(time.Second)
+	observedLimitedAt := observedResetAt.Add(-grokRateLimitRepeatCooldown)
+	account.RateLimitedAt = &observedLimitedAt
+	account.RateLimitResetAt = &observedResetAt
 	repo := &grokQuotaAccountRepo{
 		mockAccountRepoForPlatform: &mockAccountRepoForPlatform{
 			accountsByID: map[int64]*Account{45: account},
 		},
+		recoveryClearResult: true,
 	}
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
@@ -205,6 +232,9 @@ func TestGrokQuotaServiceProbeUsageStoresNoHeadersState(t *testing.T) {
 	require.True(t, ok)
 	require.False(t, stored.HeadersObserved)
 	require.Equal(t, http.StatusOK, stored.StatusCode)
+	require.Equal(t, 1, repo.recoveryClearCalls)
+	require.Equal(t, observedLimitedAt, repo.recoveryObservedAt)
+	require.Equal(t, observedResetAt, repo.recoveryObservedReset)
 }
 
 func TestGrokQuotaServiceProbeUsageReturnsRateLimitedSnapshot(t *testing.T) {

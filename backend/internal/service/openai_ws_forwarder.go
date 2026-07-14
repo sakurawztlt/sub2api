@@ -2939,6 +2939,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 	}
 	refreshIngressRouteState(firstPayload)
+	grokCacheSeedPayload := firstPayload.payloadRaw
 
 	runHTTPBridge := func(currentBridgePayload openAIWSClientPayload, bridgeReplayInput []json.RawMessage, bridgeReplayInputExists bool, firstBridgeTurn int, skipFirstTurnHooks bool) error {
 		logOpenAIWSModeInfo(
@@ -2999,6 +3000,13 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					openAIWSRawPayloadHasToolCallOutput(currentBridgePayload.payloadRaw),
 				)
 			}
+			grokCacheIdentity := ""
+			if account.Platform == PlatformGrok {
+				grokCacheIdentity, err = resolveGrokWSCacheIdentity(c, account, grokCacheSeedPayload, currentBridgePayload.originalModel)
+				if err != nil {
+					return fmt.Errorf("resolve Grok websocket cache identity: %w", err)
+				}
+			}
 			result, bridgeErr := s.proxyOpenAIWSHTTPBridgeTurn(
 				ctx,
 				c,
@@ -3010,6 +3018,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				currentBridgePayload.imageBillingModel,
 				currentBridgePayload.imageSizeTier,
 				currentBridgePayload.imageInputSize,
+				grokCacheIdentity,
 				turn,
 				writeClientMessage,
 			)

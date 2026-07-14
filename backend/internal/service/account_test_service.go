@@ -23,6 +23,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -772,7 +773,7 @@ func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *
 	now := time.Now()
 	snapshot := parseGrokQuotaSnapshot(resp.Header, resp.StatusCode, now)
 	if snapshot != nil && s.accountRepo != nil {
-		resetAt, limited := grokRateLimitResetAt(snapshot, now)
+		resetAt, limited := grokRateLimitResetAtForAccount(account, snapshot, now)
 		if limited {
 			normalizeGrokExhaustedWindowResets(snapshot, resetAt, now)
 		}
@@ -781,7 +782,11 @@ func (s *AccountTestService) testGrokAccountConnection(c *gin.Context, account *
 		})
 		if limited && !account.IsPoolMode() {
 			persistGrokRateLimit(ctx, s.accountRepo, account, resetAt)
+		} else if isSuccessfulGrokRateLimitRecovery(account, snapshot) {
+			clearGrokRateLimitAfterRecovery(ctx, s.accountRepo, account)
 		}
+	} else if s.accountRepo != nil && isSuccessfulGrokRateLimitRecovery(account, &xai.QuotaSnapshot{StatusCode: resp.StatusCode}) {
+		clearGrokRateLimitAfterRecovery(ctx, s.accountRepo, account)
 	}
 
 	if resp.StatusCode != http.StatusOK {

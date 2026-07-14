@@ -97,7 +97,7 @@ func (s *GrokQuotaService) ProbeUsage(ctx context.Context, accountID int64) (*Gr
 
 	now := time.Now()
 	snapshot := xai.ObserveQuotaHeaders(resp.Header, resp.StatusCode, "active_probe")
-	resetAt, limited := grokRateLimitResetAt(snapshot, now)
+	resetAt, limited := grokRateLimitResetAtForAccount(account, snapshot, now)
 	if limited {
 		normalizeGrokExhaustedWindowResets(snapshot, resetAt, now)
 	}
@@ -106,6 +106,8 @@ func (s *GrokQuotaService) ProbeUsage(ctx context.Context, accountID int64) (*Gr
 	})
 	if limited && !account.IsPoolMode() {
 		persistGrokRateLimit(ctx, s.accountRepo, account, resetAt)
+	} else if isSuccessfulGrokRateLimitRecovery(account, snapshot) {
+		clearGrokRateLimitAfterRecovery(ctx, s.accountRepo, account)
 	}
 
 	result := &GrokQuotaProbeResult{
