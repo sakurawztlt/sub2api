@@ -164,6 +164,22 @@ func ValidatedBaseURL(override string) (string, error) {
 	return ValidateBaseURL(EffectiveBaseURL(override))
 }
 
+// BaseURLValidator lets the service layer apply its configured outbound URL
+// policy before an xAI endpoint path is appended.
+type BaseURLValidator func(string) (string, error)
+
+func validatedBaseURLWithValidator(override string, validator BaseURLValidator) (string, error) {
+	if validator == nil {
+		return ValidatedBaseURL(override)
+	}
+	raw := EffectiveBaseURL(override)
+	validated, err := validator(raw)
+	if err != nil {
+		return "", err
+	}
+	return normalizeKnownBaseURLPath(validated)
+}
+
 type RuntimeSanityCheck struct {
 	Value     string `json:"value"`
 	Valid     bool   `json:"valid"`
@@ -266,10 +282,43 @@ func ValidateBaseURL(raw string) (string, error) {
 	return normalizeKnownBaseURLPath(normalized)
 }
 
+// ValidateTrustedBaseURL only accepts the official xAI API/CLI hosts. OAuth
+// callers use this validator so an unsafe custom address cannot receive a
+// bearer token unless the service-layer operator policy explicitly permits it.
+func ValidateTrustedBaseURL(raw string) (string, error) {
+	if AllowUnsafeURLOverrides() {
+		return urlvalidator.ValidateURLFormat(raw, true)
+	}
+	normalized, err := urlvalidator.ValidateHTTPSURL(raw, urlvalidator.ValidationOptions{
+		AllowedHosts:     baseURLAllowedHosts,
+		RequireAllowlist: true,
+		AllowPrivate:     false,
+	})
+	if err != nil {
+		return "", err
+	}
+	return normalizeKnownBaseURLPath(normalized)
+}
+
+// normalizeKnownBaseURLPath 规范化 base URL 的 path 部分：
+//   - 官方主机固定使用 /v1 前缀（空 path 自动补齐，其余 path 拒绝）；
+//   - 其他主机保留管理员配置的任意 path 前缀（第三方转发地址常见
+//     /xxx/v1 之类的路由前缀），空 path 仍按惯例补 /v1。
+//
+// 所有主机统一禁止 userinfo/query/fragment，并去除尾部斜杠。
 func normalizeKnownBaseURLPath(raw string) (string, error) {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return "", fmt.Errorf("invalid url: %s", raw)
+		return "", fmt.Errorf("invalid base URL")
+	}
+	if parsed.User != nil {
+		return "", fmt.Errorf("base URL must not include userinfo")
+	}
+	if parsed.ForceQuery || parsed.RawQuery != "" {
+		return "", fmt.Errorf("base URL must not include a query")
+	}
+	if parsed.Fragment != "" {
+		return "", fmt.Errorf("base URL must not include a fragment")
 	}
 	path := strings.TrimRight(parsed.Path, "/")
 	if path == "" {
@@ -277,12 +326,38 @@ func normalizeKnownBaseURLPath(raw string) (string, error) {
 		parsed.RawPath = ""
 		return strings.TrimRight(parsed.String(), "/"), nil
 	}
-	if path != "/v1" {
+	if path != "/v1" && IsOfficialBaseURLHost(parsed.Hostname()) {
 		return "", fmt.Errorf("base URL path must be /v1")
 	}
 	parsed.Path = path
 	parsed.RawPath = ""
 	return strings.TrimRight(parsed.String(), "/"), nil
+}
+
+// IsOfficialBaseURLHost 报告 host 是否属于官方 API / CLI 网关主机。
+func IsOfficialBaseURLHost(host string) bool {
+	host = strings.ToLower(strings.TrimSpace(host))
+	for _, allowed := range baseURLAllowedHosts {
+		if host == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+// IsOfficialBaseURL 报告 raw 是否指向官方主机（api.x.ai 或 CLI 网关），
+// 容忍存量凭证中的历史变体（大小写、显式 443 端口、百分号编码 path 等）。
+// 无法解析的值一并视为官方，调用方据此回落默认端点而不是把流量发往未定义目标。
+func IsOfficialBaseURL(raw string) bool {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return true
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Host == "" {
+		return true
+	}
+	return IsOfficialBaseURLHost(parsed.Hostname())
 }
 
 func AllowUnsafeURLOverrides() bool {
@@ -422,7 +497,11 @@ func ParseAuthorizationInput(raw string) AuthorizationInput {
 }
 
 func BuildResponsesURL(baseURL string) (string, error) {
-	validatedBaseURL, err := ValidatedBaseURL(baseURL)
+	return BuildResponsesURLWithValidator(baseURL, nil)
+}
+
+func BuildResponsesURLWithValidator(baseURL string, validator BaseURLValidator) (string, error) {
+	validatedBaseURL, err := validatedBaseURLWithValidator(baseURL, validator)
 	if err != nil {
 		return "", fmt.Errorf("invalid base url: %w", err)
 	}
@@ -430,7 +509,11 @@ func BuildResponsesURL(baseURL string) (string, error) {
 }
 
 func BuildChatCompletionsURL(baseURL string) (string, error) {
-	validatedBaseURL, err := ValidatedBaseURL(baseURL)
+	return BuildChatCompletionsURLWithValidator(baseURL, nil)
+}
+
+func BuildChatCompletionsURLWithValidator(baseURL string, validator BaseURLValidator) (string, error) {
+	validatedBaseURL, err := validatedBaseURLWithValidator(baseURL, validator)
 	if err != nil {
 		return "", fmt.Errorf("invalid base url: %w", err)
 	}
@@ -438,27 +521,47 @@ func BuildChatCompletionsURL(baseURL string) (string, error) {
 }
 
 func BuildImagesGenerationsURL(baseURL string) (string, error) {
-	return buildAPIURL(baseURL, "/images/generations")
+	return BuildImagesGenerationsURLWithValidator(baseURL, nil)
+}
+
+func BuildImagesGenerationsURLWithValidator(baseURL string, validator BaseURLValidator) (string, error) {
+	return buildAPIURLWithValidator(baseURL, "/images/generations", validator)
 }
 
 func BuildImagesEditsURL(baseURL string) (string, error) {
-	return buildAPIURL(baseURL, "/images/edits")
+	return BuildImagesEditsURLWithValidator(baseURL, nil)
+}
+
+func BuildImagesEditsURLWithValidator(baseURL string, validator BaseURLValidator) (string, error) {
+	return buildAPIURLWithValidator(baseURL, "/images/edits", validator)
 }
 
 func BuildVideosGenerationsURL(baseURL string) (string, error) {
-	return buildAPIURL(baseURL, "/videos/generations")
+	return BuildVideosGenerationsURLWithValidator(baseURL, nil)
+}
+
+func BuildVideosGenerationsURLWithValidator(baseURL string, validator BaseURLValidator) (string, error) {
+	return buildAPIURLWithValidator(baseURL, "/videos/generations", validator)
 }
 
 func BuildVideoURL(baseURL, requestID string) (string, error) {
+	return BuildVideoURLWithValidator(baseURL, requestID, nil)
+}
+
+func BuildVideoURLWithValidator(baseURL, requestID string, validator BaseURLValidator) (string, error) {
 	requestID = strings.TrimSpace(requestID)
 	if requestID == "" {
 		return "", fmt.Errorf("request id is required")
 	}
-	return buildAPIURL(baseURL, "/videos/"+url.PathEscape(requestID))
+	return buildAPIURLWithValidator(baseURL, "/videos/"+url.PathEscape(requestID), validator)
 }
 
 func buildAPIURL(baseURL, endpoint string) (string, error) {
-	validatedBaseURL, err := ValidatedBaseURL(baseURL)
+	return buildAPIURLWithValidator(baseURL, endpoint, nil)
+}
+
+func buildAPIURLWithValidator(baseURL, endpoint string, validator BaseURLValidator) (string, error) {
+	validatedBaseURL, err := validatedBaseURLWithValidator(baseURL, validator)
 	if err != nil {
 		return "", fmt.Errorf("invalid base url: %w", err)
 	}

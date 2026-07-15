@@ -25,7 +25,7 @@ export function applyAntigravityProjectID(
   }
 }
 
-// ========== 请求头覆写（仅 anthropic/openai 平台的 api_key 账号） ==========
+// ========== 请求头覆写（anthropic/openai 的 api_key 账号 + grok 的 api_key/oauth 账号） ==========
 
 export const HEADER_OVERRIDE_ENABLED_CREDENTIAL_KEY = 'header_override_enabled'
 export const HEADER_OVERRIDES_CREDENTIAL_KEY = 'header_overrides'
@@ -35,9 +35,20 @@ export interface HeaderOverrideRow {
   value: string
 }
 
-/** 请求头覆写支持的平台（与后端 IsHeaderOverrideEligible 保持一致） */
+/** 请求头覆写资格（与后端 IsHeaderOverrideEligible 保持一致） */
+export function isHeaderOverrideCapable(platform: string, type: string): boolean {
+  if (platform === 'anthropic' || platform === 'openai') {
+    return type === 'apikey'
+  }
+  if (platform === 'grok') {
+    return type === 'apikey' || type === 'oauth'
+  }
+  return false
+}
+
+/** 请求头覆写支持的平台，保留给只关心平台的旧调用方。 */
 export function isHeaderOverridePlatform(platform: string): boolean {
-  return platform === 'anthropic' || platform === 'openai'
+  return platform === 'anthropic' || platform === 'openai' || platform === 'grok'
 }
 
 /** 禁止覆写的请求头（与后端 headerOverrideBlockedNames 保持一致） */
@@ -71,6 +82,7 @@ const HEADER_OVERRIDE_BLOCKED_NAMES = new Set([
   'chatgpt-account-id',
   'x-claude-code-session-id',
   'x-client-request-id',
+  'x-grok-conv-id',
   'user-agent',
   'x-app',
   'anthropic-version',
@@ -170,6 +182,64 @@ export function splitHeaderOverridesObject(record: unknown): HeaderOverrideRow[]
     .filter(([, value]) => typeof value === 'string')
     .map(([name, value]) => ({ name, value: value as string }))
     .sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/**
+ * 解析粘贴的 JSON 文本为请求头覆写行。
+ * 仅接受扁平对象；string/number/boolean 值统一转为字符串。
+ */
+export function parseHeaderOverridesJson(text: string): HeaderOverrideRow[] | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    return null
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+
+  const rows: HeaderOverrideRow[] = []
+  for (const [rawName, rawValue] of Object.entries(parsed as Record<string, unknown>)) {
+    const name = rawName.trim()
+    if (!name) continue
+    if (
+      typeof rawValue !== 'string' &&
+      typeof rawValue !== 'number' &&
+      typeof rawValue !== 'boolean'
+    ) {
+      return null
+    }
+    rows.push({ name, value: String(rawValue).trim() })
+  }
+  return rows.sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/** 请求头覆写行转换为便于迁移的 JSON；空名称占位行不写入。 */
+export function serializeHeaderOverrideRows(rows: HeaderOverrideRow[]): string {
+  const record: Record<string, string> = {}
+  for (const row of rows) {
+    const name = row.name.trim()
+    if (!name) continue
+    record[name] = row.value.trim()
+  }
+  return JSON.stringify(record, null, 2)
+}
+
+// ========== Grok 自定义转发地址 ==========
+
+const GROK_OFFICIAL_BASE_URL_HOSTS = new Set(['api.x.ai', 'cli-chat-proxy.grok.com'])
+
+/** 官方地址视为默认；只有可解析的第三方 host 才算显式自定义上游。 */
+export function isCustomGrokBaseUrl(value: unknown): boolean {
+  if (typeof value !== 'string') return false
+  const trimmed = value.trim()
+  if (!trimmed) return false
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    return false
+  }
+  return !GROK_OFFICIAL_BASE_URL_HOSTS.has(parsed.hostname.toLowerCase())
 }
 
 /**

@@ -80,7 +80,7 @@ func TestGrokQuotaServiceProbeUsageStoresHeaders(t *testing.T) {
 		},
 		Body: io.NopCloser(strings.NewReader(`{"id":"resp_probe"}`)),
 	}}
-	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream)
+	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream, nil)
 
 	result, err := svc.ProbeUsage(context.Background(), 42)
 	require.NoError(t, err)
@@ -136,7 +136,7 @@ func TestGrokQuotaServiceProbeUsageLoadsProxyWhenAccountEdgeMissing(t *testing.T
 		Header:     http.Header{},
 		Body:       io.NopCloser(strings.NewReader(`{"id":"resp_probe"}`)),
 	}}
-	svc := NewGrokQuotaService(repo, proxyRepo, NewGrokTokenProvider(repo, nil), upstream)
+	svc := NewGrokQuotaService(repo, proxyRepo, NewGrokTokenProvider(repo, nil), upstream, nil)
 
 	_, err := svc.ProbeUsage(context.Background(), 46)
 	require.NoError(t, err)
@@ -167,7 +167,7 @@ func TestGrokQuotaServiceProbeUsageStoresNoHeadersState(t *testing.T) {
 		Header:     http.Header{},
 		Body:       io.NopCloser(strings.NewReader(`{"id":"resp_probe"}`)),
 	}}
-	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream)
+	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream, nil)
 
 	result, err := svc.ProbeUsage(context.Background(), 45)
 	require.NoError(t, err)
@@ -207,7 +207,7 @@ func TestGrokQuotaServiceProbeUsageReturnsRateLimitedSnapshot(t *testing.T) {
 		Header:     http.Header{"Retry-After": []string{"45"}},
 		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"rate limited"}}`)),
 	}}
-	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream)
+	svc := NewGrokQuotaService(repo, nil, NewGrokTokenProvider(repo, nil), upstream, nil)
 
 	result, err := svc.ProbeUsage(context.Background(), 43)
 	require.NoError(t, err)
@@ -230,7 +230,7 @@ func TestGrokQuotaServiceResetQuotaUnsupported(t *testing.T) {
 			accountsByID: map[int64]*Account{44: account},
 		},
 	}
-	svc := NewGrokQuotaService(repo, nil, nil, nil)
+	svc := NewGrokQuotaService(repo, nil, nil, nil, nil)
 
 	_, err := svc.ResetQuota(context.Background(), 44)
 	require.Error(t, err)

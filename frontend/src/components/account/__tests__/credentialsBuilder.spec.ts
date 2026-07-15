@@ -8,7 +8,11 @@ import {
   applyInterceptWarmup,
   buildHeaderOverridesObject,
   getHeaderOverrideTemplate,
+  isCustomGrokBaseUrl,
+  isHeaderOverrideCapable,
   isHeaderOverridePlatform,
+  parseHeaderOverridesJson,
+  serializeHeaderOverrideRows,
   splitHeaderOverridesObject,
   validateHeaderOverrideRows
 } from '../credentialsBuilder'
@@ -92,13 +96,57 @@ describe('applyAntigravityProjectID', () => {
 })
 
 describe('isHeaderOverridePlatform', () => {
-  it('only anthropic and openai are supported', () => {
+  it('includes every platform that supports at least one eligible account type', () => {
     expect(isHeaderOverridePlatform('anthropic')).toBe(true)
     expect(isHeaderOverridePlatform('openai')).toBe(true)
+    expect(isHeaderOverridePlatform('grok')).toBe(true)
     expect(isHeaderOverridePlatform('gemini')).toBe(false)
-    expect(isHeaderOverridePlatform('grok')).toBe(false)
     expect(isHeaderOverridePlatform('antigravity')).toBe(false)
     expect(isHeaderOverridePlatform('')).toBe(false)
+  })
+})
+
+describe('isHeaderOverrideCapable', () => {
+  it('supports API-key Anthropic/OpenAI and API-key/OAuth Grok only', () => {
+    expect(isHeaderOverrideCapable('anthropic', 'apikey')).toBe(true)
+    expect(isHeaderOverrideCapable('openai', 'apikey')).toBe(true)
+    expect(isHeaderOverrideCapable('anthropic', 'oauth')).toBe(false)
+    expect(isHeaderOverrideCapable('openai', 'oauth')).toBe(false)
+    expect(isHeaderOverrideCapable('grok', 'apikey')).toBe(true)
+    expect(isHeaderOverrideCapable('grok', 'oauth')).toBe(true)
+    expect(isHeaderOverrideCapable('grok', 'bedrock')).toBe(false)
+    expect(isHeaderOverrideCapable('gemini', 'apikey')).toBe(false)
+  })
+})
+
+describe('JSON header override helpers', () => {
+  it('parses flat values, trims them and rejects nested values', () => {
+    expect(parseHeaderOverridesJson('{"x-num": 3, "accept-language": " zh-CN "}')).toEqual([
+      { name: 'accept-language', value: 'zh-CN' },
+      { name: 'x-num', value: '3' }
+    ])
+    expect(parseHeaderOverridesJson('{"nested":{"value":1}}')).toBeNull()
+    expect(parseHeaderOverridesJson('[1,2]')).toBeNull()
+    expect(parseHeaderOverridesJson('not-json')).toBeNull()
+  })
+
+  it('serializes named rows and skips placeholders', () => {
+    const text = serializeHeaderOverrideRows([
+      { name: ' accept-language ', value: ' zh-CN ' },
+      { name: '', value: 'ignored' }
+    ])
+    expect(JSON.parse(text)).toEqual({ 'accept-language': 'zh-CN' })
+  })
+})
+
+describe('isCustomGrokBaseUrl', () => {
+  it('distinguishes official and third-party hosts', () => {
+    expect(isCustomGrokBaseUrl('https://api.x.ai/v1')).toBe(false)
+    expect(isCustomGrokBaseUrl('https://cli-chat-proxy.grok.com/v1')).toBe(false)
+    expect(isCustomGrokBaseUrl('HTTPS://API.X.AI:443/')).toBe(false)
+    expect(isCustomGrokBaseUrl('https://relay.example.com/xai/v1')).toBe(true)
+    expect(isCustomGrokBaseUrl('not a url')).toBe(false)
+    expect(isCustomGrokBaseUrl(undefined)).toBe(false)
   })
 })
 
@@ -137,6 +185,9 @@ describe('validateHeaderOverrideRows', () => {
       'blockedName'
     )
     expect(validateHeaderOverrideRows([{ name: 'Originator', value: '' }])).toBe('blockedName')
+    expect(validateHeaderOverrideRows([{ name: 'X-Grok-Conv-Id', value: '' }])).toBe(
+      'blockedName'
+    )
   })
 
   it('rejects duplicate names case-insensitively', () => {
@@ -198,8 +249,15 @@ describe('getHeaderOverrideTemplate', () => {
     expect(validateHeaderOverrideRows(rows)).toBeNull()
   })
 
+  it('returns the same safe generic headers for grok', () => {
+    expect(getHeaderOverrideTemplate('grok')).toEqual([
+      { name: 'accept', value: '' },
+      { name: 'accept-language', value: '' }
+    ])
+  })
+
   it('returns no template for unsupported platforms', () => {
-    expect(getHeaderOverrideTemplate('grok')).toEqual([])
+    expect(getHeaderOverrideTemplate('gemini')).toEqual([])
   })
 })
 

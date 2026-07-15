@@ -3497,7 +3497,8 @@ export default {
         selectionInfo:
           '{count} account(s) selected. Only checked or filled fields will be updated; others stay unchanged.',
         baseUrlPlaceholder: 'https://api.anthropic.com or https://api.openai.com',
-        baseUrlNotice: 'Applies to API Key accounts only; leave empty to keep existing value',
+        baseUrlNotice:
+          'Applies to API Key accounts and the forwarding endpoint of Grok OAuth accounts; leave empty to keep existing value',
         submit: 'Update Accounts',
         updating: 'Updating...',
         success: 'Updated {count} account(s)',
@@ -3739,6 +3740,15 @@ export default {
         valuePlaceholder: 'Override value (leave empty to skip)',
         addRow: 'Add Header',
         fillTemplate: 'Fill Template',
+        importJson: 'Import JSON',
+        importJsonPlaceholder: '{"accept-language": "en-US", "x-relay-token": "..."}',
+        importJsonApply: 'Parse & Fill',
+        importJsonCancel: 'Cancel',
+        importJsonHint:
+          'Paste a flat JSON object (header name to value). Parsing replaces the current rows.',
+        importJsonInvalid:
+          'Invalid JSON: expected a flat object of header name to string value',
+        copyJson: 'Copy as JSON',
         emptyValueHint: 'Rows with an empty value are placeholders and do not override anything.',
         bulkDisableHint: 'Saving will disable header override and clear existing configuration on the selected accounts.',
         bulkReplaceHint: 'Saving will replace the existing header override configuration on all selected accounts with the rows below.',
@@ -3748,6 +3758,14 @@ export default {
         duplicateName: 'Duplicate header name (matching is case-insensitive)',
         invalidValue: 'Invalid header value (control characters are not allowed; max length 8192)',
         tooManyEntries: 'Too many header override entries (max 64)'
+      },
+      grokCustomBaseUrl: {
+        title: 'Custom Upstream URL',
+        hint:
+          'When enabled, account traffic is forwarded to this address. OAuth authorization and token refresh remain on official endpoints.',
+        placeholder: 'https://relay.example.com/v1',
+        required: 'An address is required when Custom Upstream URL is enabled',
+        invalid: 'Invalid upstream address (must be a full http(s):// URL)'
       },
       autoPauseOnExpired: 'Auto Pause On Expired',
       autoPauseOnExpiredDesc: 'When enabled, the account will auto pause scheduling after it expires',
