@@ -7,8 +7,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func intPtr(v int) *int       { return &v }
-func strPtr(s string) *string { return &s }
+func parallelToolIntPtr(v int) *int { return &v }
+func strPtr(s string) *string       { return &s }
 
 // TestStreamingParallelToolUseNoGhostDelta reproduces the bug from issue #4193:
 // when the CC→Responses→Anthropic bridge finalizes parallel tool calls whose
@@ -36,7 +36,7 @@ func TestStreamingParallelToolUseNoGhostDelta(t *testing.T) {
 			Index: 0,
 			Delta: ChatDelta{
 				ToolCalls: []ChatToolCall{{
-					Index: intPtr(0),
+					Index: parallelToolIntPtr(0),
 					ID:    "call_weather",
 					Type:  "function",
 					Function: ChatFunctionCall{
@@ -56,7 +56,7 @@ func TestStreamingParallelToolUseNoGhostDelta(t *testing.T) {
 			Index: 0,
 			Delta: ChatDelta{
 				ToolCalls: []ChatToolCall{{
-					Index: intPtr(1),
+					Index: parallelToolIntPtr(1),
 					ID:    "call_time",
 					Type:  "function",
 					Function: ChatFunctionCall{
