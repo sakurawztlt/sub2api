@@ -150,7 +150,7 @@ func ResponsesToAnthropicWithUsageOptions(resp *ResponsesResponse, model string,
 	}
 	out.Content = blocks
 
-	out.StopReason = responsesStatusToAnthropicStopReason(resp.Status, resp.IncompleteDetails, blocks)
+	out.StopReason = AnthropicStopReasonPtr(responsesStatusToAnthropicStopReason(resp.Status, resp.IncompleteDetails, blocks))
 
 	if resp.Usage != nil {
 		cached := 0
@@ -976,6 +976,8 @@ func resToAnthHandleCreated(evt *ResponsesStreamEvent, state *ResponsesEventToAn
 			Role:    "assistant",
 			Content: []AnthropicContentBlock{},
 			Model:   state.Model,
+			// Anthropic message_start explicitly carries stop_reason:null.
+			StopReason: nil,
 			Usage: AnthropicUsage{
 				InputTokens:  state.PreflightInputTokens,
 				OutputTokens: 0,

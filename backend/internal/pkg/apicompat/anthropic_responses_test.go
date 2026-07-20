@@ -239,7 +239,7 @@ func TestResponsesToAnthropic_TextOnly(t *testing.T) {
 	assert.True(t, strings.HasPrefix(anth.ID, "msg_01"), "id should start with msg_01, got %s", anth.ID)
 	assert.NotEqual(t, "resp_123", anth.ID)
 	assert.Equal(t, "claude-opus-4-6", anth.Model)
-	assert.Equal(t, "end_turn", anth.StopReason)
+	assert.Equal(t, "end_turn", AnthropicStopReasonString(anth.StopReason))
 	require.Len(t, anth.Content, 1)
 	assert.Equal(t, "text", anth.Content[0].Type)
 	assert.Equal(t, "Hello there!", anth.Content[0].Text)
@@ -323,7 +323,7 @@ func TestResponsesToAnthropic_ToolUse(t *testing.T) {
 	}
 
 	anth := ResponsesToAnthropic(resp, "claude-opus-4-6")
-	assert.Equal(t, "tool_use", anth.StopReason)
+	assert.Equal(t, "tool_use", AnthropicStopReasonString(anth.StopReason))
 	require.Len(t, anth.Content, 2)
 	assert.Equal(t, "text", anth.Content[0].Type)
 	assert.Equal(t, "tool_use", anth.Content[1].Type)
@@ -332,6 +332,34 @@ func TestResponsesToAnthropic_ToolUse(t *testing.T) {
 	assert.Equal(t, "toolu_1", anth.Content[1].ID)
 	assert.Equal(t, "get_weather", anth.Content[1].Name)
 	assert.JSONEq(t, `{"city":"NYC"}`, string(anth.Content[1].Input))
+}
+
+func TestResponsesToAnthropic_ToolUseStopReasonDoesNotDependOnLastBlock(t *testing.T) {
+	resp := &ResponsesResponse{
+		ID:     "resp_tool_then_text",
+		Model:  "gpt-5.5",
+		Status: "completed",
+		Output: []ResponsesOutput{
+			{
+				Type:      "function_call",
+				CallID:    "call_todo",
+				Name:      "TodoWrite",
+				Arguments: `{"todos":[{"content":"review changes","status":"in_progress"}]}`,
+			},
+			{
+				Type: "message",
+				Content: []ResponsesContentPart{
+					{Type: "output_text", Text: "Task list updated."},
+				},
+			},
+		},
+	}
+
+	anth := ResponsesToAnthropic(resp, "claude-opus-4-6")
+	assert.Equal(t, "tool_use", AnthropicStopReasonString(anth.StopReason))
+	require.Len(t, anth.Content, 2)
+	assert.Equal(t, "tool_use", anth.Content[0].Type)
+	assert.Equal(t, "text", anth.Content[1].Type)
 }
 
 // 2026-05-07 codex 伪装泄漏修复: 验证 toResponsesCallID + fromResponsesCallID
@@ -459,7 +487,7 @@ func TestResponsesToAnthropic_Incomplete(t *testing.T) {
 	}
 
 	anth := ResponsesToAnthropic(resp, "claude-opus-4-6")
-	assert.Equal(t, "max_tokens", anth.StopReason)
+	assert.Equal(t, "max_tokens", AnthropicStopReasonString(anth.StopReason))
 }
 
 func TestResponsesToAnthropic_EmptyOutput(t *testing.T) {
@@ -1100,7 +1128,7 @@ func TestResponsesToAnthropic_Failed(t *testing.T) {
 
 	anth := ResponsesToAnthropic(resp, "claude-opus-4-6")
 	// Failed status defaults to "end_turn" stop reason
-	assert.Equal(t, "end_turn", anth.StopReason)
+	assert.Equal(t, "end_turn", AnthropicStopReasonString(anth.StopReason))
 	// Should have at least an empty text block
 	require.Len(t, anth.Content, 1)
 	assert.Equal(t, "text", anth.Content[0].Type)
@@ -3340,7 +3368,7 @@ func TestResponsesToAnthropic_CodeExecutionIsServerTool(t *testing.T) {
 	assert.Equal(t, "code_execution_tool_result", anth.Content[1].Type)
 	assert.Equal(t, "text", anth.Content[2].Type)
 	assert.Equal(t, "HELLO_CHECK", anth.Content[2].Text)
-	assert.Equal(t, "end_turn", anth.StopReason)
+	assert.Equal(t, "end_turn", AnthropicStopReasonString(anth.StopReason))
 	assert.Contains(t, string(anth.Content[1].Content), "HELLO_CHECK")
 }
 
@@ -3430,7 +3458,7 @@ func TestAnthropicToResponsesResponse_CacheTokensUseOpenAIInputSemantics(t *test
 		Content: []AnthropicContentBlock{
 			{Type: "text", Text: "ok"},
 		},
-		StopReason: "end_turn",
+		StopReason: AnthropicStopReasonPtr("end_turn"),
 		Usage: AnthropicUsage{
 			InputTokens:              3318,
 			OutputTokens:             123,
@@ -3456,7 +3484,7 @@ func TestAnthropicToResponsesResponse_NoCacheTokens(t *testing.T) {
 		Content: []AnthropicContentBlock{
 			{Type: "text", Text: "ok"},
 		},
-		StopReason: "end_turn",
+		StopReason: AnthropicStopReasonPtr("end_turn"),
 		Usage: AnthropicUsage{
 			InputTokens:  100,
 			OutputTokens: 50,

@@ -147,15 +147,28 @@ type AnthropicCacheControl struct {
 }
 
 // AnthropicResponse is the non-streaming response from POST /v1/messages.
+// StopReason is a pointer because Anthropic emits null in message_start and a
+// string only in the terminal message_delta/non-stream response.
 type AnthropicResponse struct {
 	ID           string                  `json:"id"`
 	Type         string                  `json:"type"` // "message"
 	Role         string                  `json:"role"` // "assistant"
 	Content      []AnthropicContentBlock `json:"content"`
 	Model        string                  `json:"model"`
-	StopReason   string                  `json:"stop_reason"`
+	StopReason   *string                 `json:"stop_reason"`
 	StopSequence *string                 `json:"stop_sequence,omitempty"`
 	Usage        AnthropicUsage          `json:"usage"`
+}
+
+func AnthropicStopReasonPtr(value string) *string {
+	return &value
+}
+
+func AnthropicStopReasonString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 // AnthropicUsage holds token counts in Anthropic format. Field declaration
