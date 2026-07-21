@@ -1511,7 +1511,15 @@ func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []an
 			// Anthropic tool_use_id round-trip intact — fc_ prefixing breaks
 			// the call_id ↔ tool_use_id correspondence Claude Code expects.
 			if opts.PreserveCallIDs {
-				return id
+				// preserve 模式尽量原样透传客户端 id 以维持 tool_use/tool_result
+				// 配对，但上游对 call_id 有 64 字符硬上限，超长原样透传必然被
+				// 400 拒绝（"Invalid 'input[N].call_id': string too long"）。
+				// 超长时退回确定性压缩：同一逻辑 id 在 function_call 与
+				// function_call_output 两侧结果一致，配对不受影响。
+				if len(id) <= codexCallIDMaxLength {
+					return id
+				}
+				return compactCodexCallID(id)
 			}
 			return normalizeCodexCallID(id)
 		}
