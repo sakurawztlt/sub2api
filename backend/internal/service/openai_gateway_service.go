@@ -6513,9 +6513,31 @@ func extractOpenAIUsageFromJSONBytes(body []byte) (OpenAIUsage, bool) {
 	// codex upstream PR#2505: try top-level usage first (chat-shape +
 	// non-stream Responses), fall back to response.usage (SSE terminal).
 	if usage, ok := openAIUsageFromGJSON(gjson.GetBytes(body, "usage")); ok {
+		mergeHostedImageGenToolUsage(gjson.GetBytes(body, "tool_usage.image_gen"), &usage)
 		return usage, true
 	}
-	return openAIUsageFromGJSON(gjson.GetBytes(body, "response.usage"))
+	usage, ok := openAIUsageFromGJSON(gjson.GetBytes(body, "response.usage"))
+	if !ok {
+		return OpenAIUsage{}, false
+	}
+	mergeHostedImageGenToolUsage(gjson.GetBytes(body, "response.tool_usage.image_gen"), &usage)
+	return usage, true
+}
+
+func mergeHostedImageGenToolUsage(imageGen gjson.Result, usage *OpenAIUsage) {
+	if usage == nil || !imageGen.Exists() || !imageGen.IsObject() {
+		return
+	}
+	if usage.ImageOutputTokens == 0 {
+		if value := imageGen.Get("output_tokens_details.image_tokens").Int(); value > 0 {
+			usage.ImageOutputTokens = int(value)
+		}
+	}
+	if usage.ImageInputTokens == 0 {
+		if value := imageGen.Get("input_tokens_details.image_tokens").Int(); value > 0 {
+			usage.ImageInputTokens = int(value)
+		}
+	}
 }
 
 func logOpenAIHTTP200SuspiciousUsageResponse(ctx context.Context, source string, resp *http.Response, c *gin.Context, body []byte, usage *OpenAIUsage, usageParsed bool) {
