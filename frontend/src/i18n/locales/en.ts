@@ -211,6 +211,8 @@ export default {
       description: 'Connect to your Redis server',
       host: 'Host',
       port: 'Port',
+      username: 'Username (optional)',
+      usernamePlaceholder: 'Redis ACL username',
       password: 'Password (optional)',
       database: 'Database',
       passwordPlaceholder: 'Password',

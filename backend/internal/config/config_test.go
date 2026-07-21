@@ -17,6 +17,15 @@ func resetViperWithJWTSecret(t *testing.T) {
 	t.Setenv("JWT_SECRET", strings.Repeat("x", 32))
 }
 
+func TestLoadRedisUsernameFromEnvironment(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("REDIS_USERNAME", "app-user")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "app-user", cfg.Redis.Username)
+}
+
 func TestLoadForBootstrapAllowsMissingJWTSecret(t *testing.T) {
 	viper.Reset()
 	t.Setenv("JWT_SECRET", "")

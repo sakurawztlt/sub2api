@@ -211,6 +211,8 @@ export default {
       description: '连接到您的 Redis 服务器',
       host: '主机',
       port: '端口',
+      username: '用户名（可选）',
+      usernamePlaceholder: 'Redis ACL 用户名',
       password: '密码（可选）',
       database: '数据库',
       passwordPlaceholder: '密码',
