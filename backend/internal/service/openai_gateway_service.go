@@ -4504,6 +4504,19 @@ func (s *OpenAIGatewayService) handleFailoverErrorResponsePassthrough(
 		}
 		upstreamDetail = truncateString(string(body), maxBytes)
 	}
+	if account != nil && account.Platform == PlatformGrok && isGrokContentPolicyRejection(resp.StatusCode, body) {
+		clientMsg := grokContentPolicyClientMessage(body)
+		setOpsUpstreamError(c, resp.StatusCode, clientMsg, upstreamDetail)
+		writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+		MarkResponseCommitted(c)
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": gin.H{
+				"type":    "invalid_request_error",
+				"message": clientMsg,
+			},
+		})
+		return fmt.Errorf("grok content policy rejection: %s", clientMsg)
+	}
 	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
 	logOpenAIInstructionsRequiredDebug(ctx, c, account, resp.StatusCode, upstreamMsg, requestBody, body)
 	reqModel, _, _ := extractOpenAIRequestMetaFromBody(requestBody)
@@ -5634,6 +5647,13 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 			maxBytes = 2048
 		}
 		upstreamDetail = truncateString(string(body), maxBytes)
+	}
+	if account != nil && account.Platform == PlatformGrok && isGrokContentPolicyRejection(resp.StatusCode, body) {
+		clientMsg := grokContentPolicyClientMessage(body)
+		setOpsUpstreamError(c, resp.StatusCode, clientMsg, upstreamDetail)
+		MarkResponseCommitted(c)
+		writeError(c, http.StatusForbidden, "invalid_request_error", clientMsg)
+		return nil, fmt.Errorf("grok content policy rejection: %s", clientMsg)
 	}
 	if containsOpenAICompatSensitiveBackendTerm(upstreamMsg, body) {
 		if isOpenAIOAuthSensitiveBackendError(account, resp.StatusCode, upstreamMsg, body) {

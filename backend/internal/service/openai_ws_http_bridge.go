@@ -285,6 +285,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		}
 		shouldFailover := s.shouldFailoverOpenAIUpstreamResponseForAccount(resp.StatusCode, upstreamMsg, respBody, account)
 		if account.Platform == PlatformGrok {
+			shouldFailover = s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody)
 			s.handleGrokAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
 			if turn == 1 && shouldFailover {
 				return nil, newOpenAIWSHTTPBridgeFailoverError(resp.StatusCode, resp.Header, respBody)
@@ -428,7 +429,16 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			statusCode := openAIWSErrorHTTPStatusFromRaw(errCodeRaw, errTypeRaw)
 			shouldFailover := s.shouldFailoverOpenAIUpstreamResponse(statusCode, errMessage, upstreamMessage)
 			if account.Platform == PlatformGrok {
-				s.handleGrokAccountUpstreamError(ctx, account, statusCode, resp.Header, upstreamMessage)
+				// SSE error events do not carry an HTTP status. The local status
+				// mapper therefore defaults unknown xAI codes (for example
+				// new_sensitive) to 502; classify the body as a request-scoped
+				// 403 before applying status-based failover or account state.
+				if isGrokContentPolicyRejection(http.StatusForbidden, upstreamMessage) {
+					shouldFailover = false
+				} else {
+					shouldFailover = s.shouldFailoverGrokUpstreamError(statusCode, upstreamMessage)
+					s.handleGrokAccountUpstreamError(ctx, account, statusCode, resp.Header, upstreamMessage)
+				}
 			} else if isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw) {
 				s.persistOpenAIWSRateLimitSignal(ctx, account, resp.Header, upstreamMessage, errCodeRaw, errTypeRaw, errMsgRaw)
 			} else if shouldFailover {
