@@ -4,6 +4,7 @@ import { opsAPI, type OpsRuntimeLogConfig, type OpsSystemLog, type OpsSystemLogS
 import Pagination from '@/components/common/Pagination.vue'
 import Select from '@/components/common/Select.vue'
 import { useAppStore } from '@/stores'
+import { extractApiErrorMessage } from '@/utils/apiError'
 
 const appStore = useAppStore()
 
@@ -303,7 +304,11 @@ const cleanupCurrentFilter = async () => {
     await Promise.all([fetchLogs(), fetchHealth()])
   } catch (err: any) {
     console.error('[OpsSystemLogTable] Failed to cleanup logs', err)
-    appStore.showError(err?.response?.data?.detail || '清理系统日志失败')
+    appStore.showError(
+      extractApiErrorMessage(err, '清理系统日志失败', {
+        OPS_SYSTEM_LOG_CLEANUP_FILTER_REQUIRED: '清理需要至少一个筛选条件（起止时间或其他字段）'
+      })
+    )
   }
 }
 
