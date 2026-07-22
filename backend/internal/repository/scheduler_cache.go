@@ -27,11 +27,31 @@ const (
 
 	defaultSchedulerSnapshotMGetChunkSize  = 128
 	defaultSchedulerSnapshotWriteChunkSize = 256
+	schedulerLastUsedUpdateChunkSize       = 256
 
 	// snapshotGraceTTLSeconds 旧快照过期的宽限期（秒）。
 	// 替代立即 DEL，让正在读取旧版本的 reader 有足够时间完成 ZRANGE。
 	snapshotGraceTTLSeconds = 60
 )
+
+var updateSchedulerLastUsedScript = redis.NewScript(`
+local updated = 0
+for index = 1, #ARGV do
+    local key_index = (index - 1) * 2 + 1
+    local candidate = tonumber(ARGV[index])
+    if candidate == nil then
+        return redis.error_reply('invalid last_used value')
+    end
+    if redis.call('EXISTS', KEYS[key_index]) == 1 then
+        local current = tonumber(redis.call('GET', KEYS[key_index + 1]))
+        if current == nil or candidate > current then
+            redis.call('SET', KEYS[key_index + 1], ARGV[index])
+            updated = updated + 1
+        end
+    end
+end
+return updated
+`)
 
 var (
 	// activateSnapshotScript 原子 CAS 切换快照版本。
@@ -224,19 +244,18 @@ func (c *schedulerCache) SetSnapshot(ctx context.Context, bucket service.Schedul
 
 func (c *schedulerCache) GetAccount(ctx context.Context, accountID int64) (*service.Account, error) {
 	id := strconv.FormatInt(accountID, 10)
-	key := schedulerAccountKey(id)
-	val, err := c.rdb.Get(ctx, key).Result()
-	if err == redis.Nil {
+	values, err := c.rdb.MGet(ctx, schedulerAccountKey(id), schedulerLastUsedKey(id)).Result()
+	if err != nil {
+		return nil, err
+	}
+	if len(values) != 2 || values[0] == nil {
 		return nil, nil
 	}
+	account, err := decodeCachedAccount(values[0])
 	if err != nil {
 		return nil, err
 	}
-	account, err := decodeCachedAccount(val)
-	if err != nil {
-		return nil, err
-	}
-	if err := c.applySchedulerLastUsedFromKey(ctx, account, schedulerLastUsedKey(id)); err != nil {
+	if err := applySchedulerLastUsed(account, values[1]); err != nil {
 		return nil, err
 	}
 	return account, nil
@@ -271,11 +290,23 @@ func (c *schedulerCache) UpdateLastUsed(ctx context.Context, updates map[int64]t
 
 	pipe := c.rdb.Pipeline()
 	queuedCommands := 0
+	keys := make([]string, 0, schedulerLastUsedUpdateChunkSize*2)
+	args := make([]any, 0, schedulerLastUsedUpdateChunkSize)
+	queueBatch := func() {
+		if len(args) == 0 {
+			return
+		}
+		updateSchedulerLastUsedScript.Eval(ctx, pipe, keys, args...)
+		queuedCommands++
+		keys = make([]string, 0, schedulerLastUsedUpdateChunkSize*2)
+		args = make([]any, 0, schedulerLastUsedUpdateChunkSize)
+	}
 	for id, usedAt := range updates {
 		if id <= 0 {
 			continue
 		}
-		key := schedulerLastUsedKey(strconv.FormatInt(id, 10))
+		idText := strconv.FormatInt(id, 10)
+		key := schedulerLastUsedKey(idText)
 		if _, err := usedAt.MarshalJSON(); err != nil {
 			slog.Warn("scheduler cache drops unencodable last_used value",
 				"account_id", id,
@@ -288,11 +319,16 @@ func (c *schedulerCache) UpdateLastUsed(ctx context.Context, updates map[int64]t
 		// 热路径只更新 side key，避免反序列化并重写整块账号 JSON。
 		if usedAt.IsZero() {
 			pipe.Del(ctx, key)
+			queuedCommands++
 		} else {
-			pipe.Set(ctx, key, strconv.FormatInt(usedAt.UTC().UnixNano(), 10), 0)
+			keys = append(keys, schedulerAccountKey(idText), key)
+			args = append(args, usedAt.UTC().UnixNano())
+			if len(args) >= schedulerLastUsedUpdateChunkSize {
+				queueBatch()
+			}
 		}
-		queuedCommands++
 	}
+	queueBatch()
 	if queuedCommands == 0 {
 		return nil
 	}
@@ -369,17 +405,6 @@ func ptrTime(t time.Time) *time.Time {
 	return &t
 }
 
-func (c *schedulerCache) applySchedulerLastUsedFromKey(ctx context.Context, account *service.Account, key string) error {
-	val, err := c.rdb.Get(ctx, key).Result()
-	switch {
-	case err == redis.Nil:
-		return nil
-	case err != nil:
-		return err
-	}
-	return applySchedulerLastUsed(account, val)
-}
-
 func applySchedulerLastUsed(account *service.Account, val any) error {
 	if account == nil || val == nil {
 		return nil
@@ -391,7 +416,9 @@ func applySchedulerLastUsed(account *service.Account, val any) error {
 	if lastUsedAt == nil {
 		return nil
 	}
-	account.LastUsedAt = lastUsedAt
+	if account.LastUsedAt == nil || lastUsedAt.After(*account.LastUsedAt) {
+		account.LastUsedAt = lastUsedAt
+	}
 	return nil
 }
 
@@ -424,15 +451,6 @@ func decodeSchedulerLastUsed(val any) (*time.Time, error) {
 		return &utc, nil
 	}
 	return nil, fmt.Errorf("invalid last_used cache value: %q", raw)
-}
-
-func writeSchedulerLastUsed(pipe redis.Pipeliner, ctx context.Context, id string, lastUsedAt *time.Time) {
-	key := schedulerLastUsedKey(id)
-	if lastUsedAt == nil {
-		pipe.Del(ctx, key)
-		return
-	}
-	pipe.Set(ctx, key, strconv.FormatInt(lastUsedAt.UTC().UnixNano(), 10), 0)
 }
 
 func decodeCachedAccount(val any) (*service.Account, error) {
@@ -485,7 +503,8 @@ func (c *schedulerCache) writeAccounts(ctx context.Context, accounts []service.A
 		id := strconv.FormatInt(account.ID, 10)
 		pipe.Set(ctx, schedulerAccountKey(id), fullPayload, 0)
 		pipe.Set(ctx, schedulerAccountMetaKey(id), metaPayload, 0)
-		writeSchedulerLastUsed(pipe, ctx, id, account.LastUsedAt)
+		// LastUsedAt is a hot side key. Keep it untouched so a stale snapshot
+		// rebuild cannot overwrite a newer scheduler update.
 		cacheableAccounts = append(cacheableAccounts, account)
 		pending++
 		if pending >= c.writeChunkSize {
