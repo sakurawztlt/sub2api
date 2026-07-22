@@ -62,29 +62,31 @@ func TestPatchGrokResponsesBodyDropsNestedUnsupportedFields(t *testing.T) {
 	require.Equal(t, "kept_fn", gjson.GetBytes(patched, "tools.0.name").String())
 }
 
-func TestPatchGrokResponsesBodyDropsUnsupportedNamespaceTools(t *testing.T) {
+func TestPatchGrokResponsesBodyFlattensNamespaceTools(t *testing.T) {
 	t.Parallel()
 
 	body := []byte(`{
 		"model": "grok",
 		"input": "hello",
 		"tools": [
-			{"type": "namespace", "namespace": "functions", "tools": [{"type": "function", "name": "inner"}]},
+			{"type": "namespace", "name": "functions", "tools": [{"type": "function", "name": "inner"}]},
 			{"type": "function", "name": "kept_fn", "parameters": {"type": "object"}},
 			{"type": "shell", "name": "kept_shell"}
 		],
-		"tool_choice": {"type": "function", "name": "kept_fn"}
+		"tool_choice": {"type": "function", "namespace": "functions", "name": "inner"}
 	}`)
 
-	patched, err := patchGrokResponsesBody(body, "grok-4.3")
+	patched, _, err := patchGrokResponsesBodyWithClientTools(body, "grok-4.3")
 	require.NoError(t, err)
 	require.True(t, json.Valid(patched))
 	require.Equal(t, "grok-4.3", gjson.GetBytes(patched, "model").String())
-	require.Len(t, gjson.GetBytes(patched, "tools").Array(), 2)
+	require.Len(t, gjson.GetBytes(patched, "tools").Array(), 3)
 	require.False(t, gjson.GetBytes(patched, `tools.#(type=="namespace")`).Exists())
 	require.True(t, gjson.GetBytes(patched, `tools.#(type=="function")`).Exists())
 	require.True(t, gjson.GetBytes(patched, `tools.#(type=="shell")`).Exists())
-	require.Equal(t, "kept_fn", gjson.GetBytes(patched, "tool_choice.name").String())
+	require.Equal(t, "functions__inner", gjson.GetBytes(patched, "tools.0.name").String())
+	require.Equal(t, "functions__inner", gjson.GetBytes(patched, "tool_choice.name").String())
+	require.False(t, gjson.GetBytes(patched, "tool_choice.namespace").Exists())
 }
 
 func TestPatchGrokResponsesBodyDropsToolChoiceWhenNoSupportedToolsRemain(t *testing.T) {
