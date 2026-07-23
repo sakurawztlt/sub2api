@@ -22,6 +22,7 @@ export type VisiblePaymentMethod = 'alipay' | 'wxpay' | 'stripe' | 'airwallex'
 export type StripeVisibleMethod = 'alipay' | 'wechat_pay'
 export type PaymentLaunchKind =
   | 'qr_waiting'
+  | 'alipay_deep_link'
   | 'redirect_waiting'
   | 'stripe_popup'
   | 'stripe_route'
@@ -47,6 +48,7 @@ export interface PaymentRecoverySnapshot {
   orderType: OrderType | ''
   paymentMode: string
   resumeToken: string
+  alipayMobilePrecreateDeepLink?: boolean
   createdAt: number
 }
 
@@ -55,6 +57,8 @@ export interface PaymentLaunchContext {
   orderType: OrderType
   isMobile: boolean
   isWechatBrowser?: boolean
+  /** When true, the mobile Alipay precreate flow uses an app deep link. */
+  mobilePrecreateDeepLink?: boolean
   now?: number
   stripePopupUrl?: string
   stripeRouteUrl?: string
@@ -78,6 +82,8 @@ export interface BuildCreateOrderPayloadInput {
   origin?: string
   isMobile: boolean
   isWechatBrowser: boolean
+  /** Preserve the mobile signal so the backend can select Alipay precreate. */
+  mobilePrecreateDeepLink?: boolean
 }
 
 type CreateOrderFlowResult = CreateOrderResult & {
@@ -153,6 +159,7 @@ export function decidePaymentLaunch(
     orderType: context.orderType,
     paymentMode: (result.payment_mode || '').trim(),
     resumeToken: result.resume_token || '',
+    alipayMobilePrecreateDeepLink: result.alipay_mobile_precreate_deep_link === true,
   }, context.now)
 
   if (visibleMethod === 'airwallex' && baseState.clientSecret && baseState.intentId) {
@@ -187,6 +194,15 @@ export function decidePaymentLaunch(
   const jsapiPayload = result.jsapi ?? result.jsapi_payload
   if (result.result_type === 'jsapi_ready' && jsapiPayload) {
     return { kind: 'wechat_jsapi', paymentState: baseState, recovery: baseState, jsapi: jsapiPayload }
+  }
+
+  if (
+    visibleMethod === 'alipay'
+    && context.isMobile
+    && baseState.alipayMobilePrecreateDeepLink
+    && baseState.qrCode
+  ) {
+    return { kind: 'alipay_deep_link', paymentState: baseState, recovery: baseState }
   }
 
   const normalizedPaymentMode = baseState.paymentMode.trim().toLowerCase()
@@ -265,6 +281,7 @@ export function readPaymentRecoverySnapshot(
       || typeof parsed.payAmount !== 'number'
       || typeof parsed.paymentMode !== 'string'
       || typeof parsed.resumeToken !== 'string'
+      || (parsed.alipayMobilePrecreateDeepLink != null && typeof parsed.alipayMobilePrecreateDeepLink !== 'boolean')
       || typeof parsed.createdAt !== 'number'
     ) {
       return null
@@ -296,6 +313,7 @@ export function readPaymentRecoverySnapshot(
       orderType: parsed.orderType === 'subscription' ? 'subscription' : 'balance',
       paymentMode: parsed.paymentMode,
       resumeToken: parsed.resumeToken,
+      alipayMobilePrecreateDeepLink: parsed.alipayMobilePrecreateDeepLink === true,
       createdAt: parsed.createdAt,
     }
   } catch {

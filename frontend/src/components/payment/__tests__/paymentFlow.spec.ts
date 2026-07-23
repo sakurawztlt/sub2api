@@ -232,6 +232,34 @@ describe('decidePaymentLaunch', () => {
     expect(decision.jsapi?.appId).toBe('wx123')
     expect(decision.paymentState.orderType).toBe('subscription')
   })
+
+  it('launches the Alipay app for a mobile precreate order', () => {
+    const decision = decidePaymentLaunch(createOrderResult({
+      qr_code: 'https://qr.alipay.com/dynamic-order-101',
+      alipay_mobile_precreate_deep_link: true,
+    }), {
+      visibleMethod: 'alipay',
+      orderType: 'balance',
+      isMobile: true,
+    })
+
+    expect(decision.kind).toBe('alipay_deep_link')
+    expect(decision.paymentState.qrCode).toBe('https://qr.alipay.com/dynamic-order-101')
+    expect(decision.paymentState.alipayMobilePrecreateDeepLink).toBe(true)
+  })
+
+  it('keeps the desktop Alipay QR flow when a precreate marker is present', () => {
+    const decision = decidePaymentLaunch(createOrderResult({
+      qr_code: 'https://qr.alipay.com/dynamic-order-102',
+      alipay_mobile_precreate_deep_link: true,
+    }), {
+      visibleMethod: 'alipay',
+      orderType: 'balance',
+      isMobile: false,
+    })
+
+    expect(decision.kind).toBe('qr_waiting')
+  })
 })
 
 describe('buildCreateOrderPayload', () => {
