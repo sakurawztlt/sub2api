@@ -33,6 +33,7 @@ func TestIsSensitiveKey_TokenBudgetKeysNotRedacted(t *testing.T) {
 		"access_token",
 		"refresh_token",
 		"id_token",
+		"session",
 		"session_token",
 		"token",
 		"client_secret",
@@ -42,6 +43,21 @@ func TestIsSensitiveKey_TokenBudgetKeysNotRedacted(t *testing.T) {
 		if !isSensitiveKey(key) {
 			t.Fatalf("expected key %q to be treated as sensitive", key)
 		}
+	}
+}
+
+func TestSanitizeAndTrimRequestBody_RedactsOllamaSession(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte(`{"session":"wos-session=secret","account_id":7}`)
+	out, _, _ := sanitizeAndTrimRequestBody(raw, 10*1024)
+
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(out), &decoded); err != nil {
+		t.Fatalf("unmarshal sanitized output: %v", err)
+	}
+	if got := decoded["session"]; got != "[REDACTED]" {
+		t.Fatalf("expected Ollama session to be redacted, got %#v", got)
 	}
 }
 
