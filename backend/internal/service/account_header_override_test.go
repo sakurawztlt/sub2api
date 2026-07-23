@@ -75,19 +75,18 @@ func TestGetHeaderOverrides(t *testing.T) {
 	acc := headerOverrideTestAccount(PlatformOpenAI, AccountTypeAPIKey, map[string]any{
 		credKeyHeaderOverrideEnabled: true,
 		credKeyHeaderOverrides: map[string]any{
-			"User-Agent":    "my-agent/1.0",  // 大写 key 归一化为小写
-			" X-App ":       "cli",           // 名称去空白
-			"x-empty":       "",              // 空 value（模板占位）跳过
-			"authorization": "Bearer leaked", // 禁止覆写的头跳过
-			"bad name":      "value",         // 非法 header 名跳过
-			"x-padded":      "  padded  ",    // value 去空白
+			"User-Agent":     "my-agent/1.0",  // 身份指纹头跳过
+			" X-App ":        "cli",           // 身份指纹头跳过
+			"X-Stainless-OS": "Windows",       // 身份指纹前缀整体跳过
+			"x-empty":        "",              // 空 value（模板占位）跳过
+			"authorization":  "Bearer leaked", // 禁止覆写的头跳过
+			"bad name":       "value",         // 非法 header 名跳过
+			"x-padded":       "  padded  ",    // value 去空白
 		},
 	})
 	overrides := acc.GetHeaderOverrides()
 	require.Equal(t, map[string]string{
-		"user-agent": "my-agent/1.0",
-		"x-app":      "cli",
-		"x-padded":   "padded",
+		"x-padded": "padded",
 	}, overrides)
 
 	// 未启用时返回 nil
@@ -122,9 +121,10 @@ func TestApplyHeaderOverrides(t *testing.T) {
 	acc := headerOverrideTestAccount(PlatformAnthropic, AccountTypeAPIKey, map[string]any{
 		credKeyHeaderOverrideEnabled: true,
 		credKeyHeaderOverrides: map[string]any{
-			"user-agent":     "override-agent/2.0",
-			"anthropic-beta": "custom-beta-1",
-			"x-custom":       "custom-value",
+			"user-agent":       "override-agent/2.0",
+			"anthropic-beta":   "custom-beta-1",
+			"x-stainless-lang": "python",
+			"x-custom":         "custom-value",
 		},
 	})
 
@@ -136,11 +136,11 @@ func TestApplyHeaderOverrides(t *testing.T) {
 
 	acc.ApplyHeaderOverrides(h)
 
-	// user-agent 覆盖且只有一个值（已知头恢复 wire casing）
-	require.Equal(t, []string{"override-agent/2.0"}, h["User-Agent"])
-	// anthropic-beta：非 canonical 旧值被清除，写入 wire casing（小写）
-	require.Equal(t, []string{"custom-beta-1"}, h["anthropic-beta"])
+	// 客户端身份指纹由兼容层统一生成，账号配置不能覆盖。
+	require.Equal(t, []string{"claude-cli/2.1.161 (external, cli)"}, h["User-Agent"])
+	require.Equal(t, []string{"claude-code-20250219,oauth-2025-04-20"}, h["anthropic-beta"])
 	require.Empty(t, h["Anthropic-Beta"])
+	require.Empty(t, h.Get("X-Stainless-Lang"))
 	// 新增头（未知头以小写原样键写入，与转发链路 wire casing 约定一致）
 	require.Equal(t, []string{"custom-value"}, h["x-custom"])
 	require.Equal(t, "custom-value", getHeaderRaw(h, "x-custom"))
@@ -218,24 +218,24 @@ func TestNormalizeHeaderOverrideCredentials(t *testing.T) {
 		creds := map[string]any{
 			credKeyHeaderOverrideEnabled: true,
 			credKeyHeaderOverrides: map[string]any{
-				" User-Agent ": " my-agent ",
-				"X-App":        "",
-				"":             "", // 完全空行被丢弃
+				" X-Custom ": " custom-value ",
+				"X-Optional": "",
+				"":           "", // 完全空行被丢弃
 			},
 		}
 		require.NoError(t, NormalizeHeaderOverrideCredentials(creds))
 		require.Equal(t, map[string]any{
-			"user-agent": "my-agent",
-			"x-app":      "",
+			"x-custom":   "custom-value",
+			"x-optional": "",
 		}, creds[credKeyHeaderOverrides])
 	})
 
 	t.Run("accepts map[string]string input", func(t *testing.T) {
 		creds := map[string]any{
-			credKeyHeaderOverrides: map[string]string{"X-App": "cli"},
+			credKeyHeaderOverrides: map[string]string{"X-Custom": "value"},
 		}
 		require.NoError(t, NormalizeHeaderOverrideCredentials(creds))
-		require.Equal(t, map[string]any{"x-app": "cli"}, creds[credKeyHeaderOverrides])
+		require.Equal(t, map[string]any{"x-custom": "value"}, creds[credKeyHeaderOverrides])
 	})
 
 	t.Run("rejects non-bool enabled", func(t *testing.T) {

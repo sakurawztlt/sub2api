@@ -106,8 +106,8 @@ describe('validateHeaderOverrideRows', () => {
   it('accepts valid rows and empty placeholder rows', () => {
     expect(
       validateHeaderOverrideRows([
-        { name: 'user-agent', value: 'my-agent/1.0' },
-        { name: 'x-app', value: '' },
+        { name: 'x-provider-routing', value: 'region-a' },
+        { name: 'accept-language', value: '' },
         { name: '', value: '' }
       ])
     ).toBeNull()
@@ -131,13 +131,19 @@ describe('validateHeaderOverrideRows', () => {
     expect(validateHeaderOverrideRows([{ name: 'Content-Type', value: '' }])).toBe('blockedName')
     expect(validateHeaderOverrideRows([{ name: 'Cookie', value: '' }])).toBe('blockedName')
     expect(validateHeaderOverrideRows([{ name: 'x-goog-api-key', value: '' }])).toBe('blockedName')
+    expect(validateHeaderOverrideRows([{ name: 'User-Agent', value: '' }])).toBe('blockedName')
+    expect(validateHeaderOverrideRows([{ name: 'Anthropic-Beta', value: '' }])).toBe('blockedName')
+    expect(validateHeaderOverrideRows([{ name: 'X-Stainless-Custom', value: '' }])).toBe(
+      'blockedName'
+    )
+    expect(validateHeaderOverrideRows([{ name: 'Originator', value: '' }])).toBe('blockedName')
   })
 
   it('rejects duplicate names case-insensitively', () => {
     expect(
       validateHeaderOverrideRows([
-        { name: 'User-Agent', value: 'a' },
-        { name: 'user-agent', value: 'b' }
+        { name: 'X-Custom', value: 'a' },
+        { name: 'x-custom', value: 'b' }
       ])
     ).toBe('duplicateName')
   })
@@ -147,19 +153,19 @@ describe('buildHeaderOverridesObject / splitHeaderOverridesObject', () => {
   it('lowercases names, trims values and drops empty-name rows', () => {
     expect(
       buildHeaderOverridesObject([
-        { name: ' User-Agent ', value: ' my-agent ' },
-        { name: 'X-App', value: '' },
+        { name: ' X-Custom ', value: ' custom-value ' },
+        { name: 'Accept-Language', value: '' },
         { name: '', value: 'ignored' }
       ])
-    ).toEqual({ 'user-agent': 'my-agent', 'x-app': '' })
+    ).toEqual({ 'x-custom': 'custom-value', 'accept-language': '' })
   })
 
   it('splits an object into sorted rows and ignores non-string values', () => {
     expect(
-      splitHeaderOverridesObject({ 'x-app': 'cli', 'user-agent': 'ua', bogus: 42 })
+      splitHeaderOverridesObject({ 'x-custom': 'value', 'accept-language': 'zh-CN', bogus: 42 })
     ).toEqual([
-      { name: 'user-agent', value: 'ua' },
-      { name: 'x-app', value: 'cli' }
+      { name: 'accept-language', value: 'zh-CN' },
+      { name: 'x-custom', value: 'value' }
     ])
     expect(splitHeaderOverridesObject(null)).toEqual([])
     expect(splitHeaderOverridesObject(['a'])).toEqual([])
@@ -168,47 +174,46 @@ describe('buildHeaderOverridesObject / splitHeaderOverridesObject', () => {
 
   it('roundtrips through build and split', () => {
     const rows = [
-      { name: 'user-agent', value: 'ua' },
-      { name: 'x-app', value: 'cli' }
+      { name: 'accept-language', value: 'zh-CN' },
+      { name: 'x-custom', value: 'value' }
     ]
     expect(splitHeaderOverridesObject(buildHeaderOverridesObject(rows))).toEqual(rows)
   })
 })
 
 describe('getHeaderOverrideTemplate', () => {
-  it('returns Claude Code CLI headers with empty values for anthropic', () => {
+  it('returns safe generic headers with empty values for anthropic', () => {
     const rows = getHeaderOverrideTemplate('anthropic')
     expect(rows.every((r) => r.value === '')).toBe(true)
     const names = rows.map((r) => r.name)
-    expect(names).toContain('user-agent')
-    expect(names).toContain('x-app')
-    expect(names).toContain('anthropic-beta')
-    expect(names).toContain('x-stainless-lang')
+    expect(names).toEqual(['accept', 'accept-language'])
     expect(validateHeaderOverrideRows(rows)).toBeNull()
   })
 
-  it('returns Codex CLI headers with empty values for openai', () => {
+  it('returns safe generic headers with empty values for openai', () => {
     const rows = getHeaderOverrideTemplate('openai')
     expect(rows.every((r) => r.value === '')).toBe(true)
     const names = rows.map((r) => r.name)
-    expect(names).toContain('user-agent')
-    expect(names).toContain('originator')
-    expect(names).toContain('openai-beta')
+    expect(names).toEqual(['accept', 'accept-language'])
     expect(validateHeaderOverrideRows(rows)).toBeNull()
+  })
+
+  it('returns no template for unsupported platforms', () => {
+    expect(getHeaderOverrideTemplate('grok')).toEqual([])
   })
 })
 
 describe('applyHeaderOverride', () => {
   it('create + enabled: writes enabled flag and overrides object', () => {
     const creds: Record<string, unknown> = { api_key: 'sk' }
-    applyHeaderOverride(creds, true, [{ name: 'User-Agent', value: 'ua' }], 'create')
+    applyHeaderOverride(creds, true, [{ name: 'X-Custom', value: 'value' }], 'create')
     expect(creds[HEADER_OVERRIDE_ENABLED_CREDENTIAL_KEY]).toBe(true)
-    expect(creds[HEADER_OVERRIDES_CREDENTIAL_KEY]).toEqual({ 'user-agent': 'ua' })
+    expect(creds[HEADER_OVERRIDES_CREDENTIAL_KEY]).toEqual({ 'x-custom': 'value' })
   })
 
   it('create + disabled: does not add fields', () => {
     const creds: Record<string, unknown> = { api_key: 'sk' }
-    applyHeaderOverride(creds, false, [{ name: 'user-agent', value: 'ua' }], 'create')
+    applyHeaderOverride(creds, false, [{ name: 'x-custom', value: 'value' }], 'create')
     expect(HEADER_OVERRIDE_ENABLED_CREDENTIAL_KEY in creds).toBe(false)
     expect(HEADER_OVERRIDES_CREDENTIAL_KEY in creds).toBe(false)
   })
@@ -217,7 +222,7 @@ describe('applyHeaderOverride', () => {
     const creds: Record<string, unknown> = {
       api_key: 'sk',
       [HEADER_OVERRIDE_ENABLED_CREDENTIAL_KEY]: true,
-      [HEADER_OVERRIDES_CREDENTIAL_KEY]: { 'user-agent': 'ua' }
+      [HEADER_OVERRIDES_CREDENTIAL_KEY]: { 'x-custom': 'value' }
     }
     applyHeaderOverride(creds, false, [], 'edit')
     expect(HEADER_OVERRIDE_ENABLED_CREDENTIAL_KEY in creds).toBe(false)
@@ -243,21 +248,23 @@ describe('validateHeaderOverrideRows value/entry limits', () => {
   })
 
   it('rejects control characters in values', () => {
-    expect(validateHeaderOverrideRows([{ name: 'x-app', value: 'a\x0bb' }])).toBe('invalidValue')
+    expect(validateHeaderOverrideRows([{ name: 'x-custom', value: 'a\x0bb' }])).toBe(
+      'invalidValue'
+    )
   })
 
   it('rejects oversized values', () => {
-    expect(validateHeaderOverrideRows([{ name: 'x-app', value: 'a'.repeat(8193) }])).toBe(
+    expect(validateHeaderOverrideRows([{ name: 'x-custom', value: 'a'.repeat(8193) }])).toBe(
       'invalidValue'
     )
   })
 
   it('measures value length in UTF-8 bytes to match backend', () => {
     // 3000 个 CJK 字符 = 3000 UTF-16 code units，但 9000 UTF-8 字节 > 8192
-    expect(validateHeaderOverrideRows([{ name: 'x-app', value: '测'.repeat(3000) }])).toBe(
+    expect(validateHeaderOverrideRows([{ name: 'x-custom', value: '测'.repeat(3000) }])).toBe(
       'invalidValue'
     )
-    expect(validateHeaderOverrideRows([{ name: 'x-app', value: '测'.repeat(2000) }])).toBeNull()
+    expect(validateHeaderOverrideRows([{ name: 'x-custom', value: '测'.repeat(2000) }])).toBeNull()
   })
 
   it('rejects too many entries', () => {
@@ -282,7 +289,7 @@ describe('validateHeaderOverrideRows session isolation headers', () => {
   })
 
   it('allows tab inside value', () => {
-    expect(validateHeaderOverrideRows([{ name: 'x-app', value: 'a\tb' }])).toBeNull()
+    expect(validateHeaderOverrideRows([{ name: 'x-custom', value: 'a\tb' }])).toBeNull()
   })
 
   it('rejects oversized names', () => {

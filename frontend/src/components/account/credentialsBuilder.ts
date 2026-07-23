@@ -70,7 +70,15 @@ const HEADER_OVERRIDE_BLOCKED_NAMES = new Set([
   'x-codex-turn-metadata',
   'chatgpt-account-id',
   'x-claude-code-session-id',
-  'x-client-request-id'
+  'x-client-request-id',
+  'user-agent',
+  'x-app',
+  'anthropic-version',
+  'anthropic-beta',
+  'anthropic-dangerous-direct-browser-access',
+  'originator',
+  'openai-beta',
+  'version'
 ])
 
 /** RFC 7230 token：合法的 HTTP header 名称字符集 */
@@ -80,37 +88,18 @@ function isValidHeaderOverrideName(name: string): boolean {
   return HEADER_NAME_PATTERN.test(name)
 }
 
-/** 模板：Claude Code CLI 标准客户端请求头（值留空由管理员填写） */
-const ANTHROPIC_HEADER_OVERRIDE_TEMPLATE = [
-  'user-agent',
-  'x-app',
-  'anthropic-beta',
-  'anthropic-version',
-  'anthropic-dangerous-direct-browser-access',
-  'x-stainless-lang',
-  'x-stainless-package-version',
-  'x-stainless-os',
-  'x-stainless-arch',
-  'x-stainless-runtime',
-  'x-stainless-runtime-version',
-  'x-stainless-retry-count',
-  'x-stainless-timeout'
-]
+function isBlockedHeaderOverrideName(lowerName: string): boolean {
+  return lowerName.startsWith('x-stainless-') || HEADER_OVERRIDE_BLOCKED_NAMES.has(lowerName)
+}
 
-/** 模板：Codex CLI 标准客户端请求头（值留空由管理员填写） */
-const OPENAI_HEADER_OVERRIDE_TEMPLATE = [
-  'user-agent',
-  'originator',
-  'openai-beta',
-  'version',
-  'accept',
-  'accept-language'
-]
+/**
+ * 身份指纹由网关兼容层统一生成，模板只提供不会改变 Claude/Codex 身份的通用协商头。
+ */
+const SAFE_HEADER_OVERRIDE_TEMPLATE = ['accept', 'accept-language']
 
 export function getHeaderOverrideTemplate(platform: string): HeaderOverrideRow[] {
-  const names =
-    platform === 'openai' ? OPENAI_HEADER_OVERRIDE_TEMPLATE : ANTHROPIC_HEADER_OVERRIDE_TEMPLATE
-  return names.map((name) => ({ name, value: '' }))
+  if (!isHeaderOverridePlatform(platform)) return []
+  return SAFE_HEADER_OVERRIDE_TEMPLATE.map((name) => ({ name, value: '' }))
 }
 
 /** 与后端 maxHeaderOverride* 常量保持一致 */
@@ -149,7 +138,7 @@ export function validateHeaderOverrideRows(
       return 'invalidName'
     }
     const lower = name.toLowerCase()
-    if (HEADER_OVERRIDE_BLOCKED_NAMES.has(lower)) return 'blockedName'
+    if (isBlockedHeaderOverrideName(lower)) return 'blockedName'
     if (seen.has(lower)) return 'duplicateName'
     if (
       HEADER_VALUE_INVALID_PATTERN.test(value) ||

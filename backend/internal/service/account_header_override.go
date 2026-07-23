@@ -29,6 +29,8 @@ const (
 //   - accept-encoding：强制压缩会破坏网关对上游流式响应（SSE/usage）的解析；
 //   - sec-websocket-*：WebSocket 握手头由拨号器管理（OpenAI WS 模式）；
 //   - session_id/x-claude-code-session-id 等：逐请求会话隔离头，固定值会造成会话串扰。
+//   - Claude/Codex 客户端身份头：由网关的兼容层统一生成，账号级覆写会让同一服务
+//     对外发出互相矛盾的客户端指纹；x-stainless-* 通过前缀规则整体拦截。
 var headerOverrideBlockedNames = map[string]struct{}{
 	"host":                     {},
 	"content-length":           {},
@@ -59,9 +61,20 @@ var headerOverrideBlockedNames = map[string]struct{}{
 	"chatgpt-account-id":       {},
 	"x-claude-code-session-id": {},
 	"x-client-request-id":      {},
+	"user-agent":               {},
+	"x-app":                    {},
+	"anthropic-version":        {},
+	"anthropic-beta":           {},
+	"anthropic-dangerous-direct-browser-access": {},
+	"originator":  {},
+	"openai-beta": {},
+	"version":     {},
 }
 
 func isHeaderOverrideBlockedName(lowerName string) bool {
+	if strings.HasPrefix(lowerName, "x-stainless-") {
+		return true
+	}
 	_, blocked := headerOverrideBlockedNames[lowerName]
 	return blocked
 }
