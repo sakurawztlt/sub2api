@@ -74,6 +74,11 @@ func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 	}
 
 	reqModel := parsedReq.Model
+	ensureCompositeTargetPlatform(c, apiKey, reqModel)
+	if !compositeTargetPlatformAllowed(c, apiKey, reqModel, service.PlatformOpenAI) {
+		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Model is not supported by this OpenAI-compatible endpoint for composite groups")
+		return
+	}
 	routingModel := service.NormalizeOpenAICompatRequestedModel(reqModel)
 	preferredMappedModel := resolveOpenAIMessagesDispatchMappedModel(apiKey, reqModel)
 	reqLog = reqLog.With(zap.String("model", reqModel), zap.Bool("stream", parsedReq.Stream))
@@ -112,12 +117,13 @@ func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 		service.OpenAIEndpointCapabilityChatCompletions,
 		false,
 		false,
-		openAICompatibleRequestPlatform(apiKey),
+		openAICompatibleRequestPlatform(c.Request.Context(), apiKey),
 	)
 	service.SetOpsLatencyMs(c, service.OpsAuthLatencyMsKey, time.Since(requestStart).Milliseconds())
 	if err != nil {
-		reqLog.Warn("openai_count_tokens.account_select_failed", zap.Error(err))
-		cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, currentRoutingModel, reqModel, service.PlatformOpenAI)
+		requestPlatform := openAICompatibleRequestPlatform(c.Request.Context(), apiKey)
+		reqLog.Warn("openai_count_tokens.account_select_failed", zap.Error(openAICompatibleSelectionErrorForLog(err, requestPlatform)))
+		cls := classifyOpenAICompatibleNoAccountErrorFromGin(c, h.gatewayService, apiKey, currentRoutingModel, reqModel)
 		if !cls.ModelNotFound {
 			markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
 		}
@@ -125,7 +131,7 @@ func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 		return
 	}
 	if selection == nil || selection.Account == nil {
-		cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, currentRoutingModel, reqModel, service.PlatformOpenAI)
+		cls := classifyOpenAICompatibleNoAccountErrorFromGin(c, h.gatewayService, apiKey, currentRoutingModel, reqModel)
 		if !cls.ModelNotFound {
 			markOpsRoutingCapacityLimited(c)
 		}

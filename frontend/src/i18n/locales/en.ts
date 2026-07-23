@@ -2201,6 +2201,8 @@ export default {
         openai: 'OpenAI',
         gemini: 'Gemini',
         antigravity: 'Antigravity',
+        grok: 'Grok',
+        composite: 'Composite',
       },
       deleteConfirm:
         "Are you sure you want to delete '{name}'? All associated API keys will no longer belong to any group.",
@@ -2243,6 +2245,55 @@ export default {
         hint: 'Only changes the /v1/models response. Whitelist model calls and account routing are unchanged.',
         loading: 'Loading model list...',
         empty: 'No displayable models'
+      },
+      compositeRoutes: {
+        action: 'Routes',
+        title: 'Composite Routes',
+        titleWithGroup: 'Composite Routes: {name}',
+        routes: 'Saved Routes',
+        empty: 'No composite routes configured',
+        publicModel: 'Public Model',
+        target: 'Target',
+        scope: 'Scope',
+        priority: 'Priority',
+        addRoute: 'Add Route',
+        editRoute: 'Edit Route',
+        matchType: 'Match',
+        endpoint: 'Endpoint',
+        targetPlatform: 'Target Platform',
+        upstreamModel: 'Upstream Model',
+        notes: 'Notes',
+        enabled: 'Enabled',
+        preview: 'Preview',
+        matched: 'Matched',
+        notMatched: 'No Match',
+        publicModelRequired: 'Public model is required',
+        routeCreated: 'Composite route created',
+        routeUpdated: 'Composite route updated',
+        routeDeleted: 'Composite route deleted',
+        failedToLoad: 'Failed to load composite routes',
+        failedToSave: 'Failed to save composite route',
+        failedToDelete: 'Failed to delete composite route',
+        failedToPreview: 'Failed to preview composite route',
+        deleteConfirm: 'Delete this composite route?',
+        endpoints: {
+          any: 'Any',
+          messages: 'Messages',
+          countTokens: 'Count Tokens',
+          responses: 'Responses',
+          chatCompletions: 'Chat Completions',
+          embeddings: 'Embeddings',
+          images: 'Images',
+          gemini: 'Gemini Native'
+        },
+        match: {
+          exact: 'Exact',
+          prefix: 'Prefix'
+        },
+        sources: {
+          route: 'Route',
+          detector: 'Detector'
+        }
       },
       claudeCode: {
         title: 'Claude Code Client Restriction',

@@ -39,6 +39,7 @@ func ProvideRouter(
 	opsService *service.OpsService,
 	settingService *service.SettingService,
 	trafficCapture *service.TrafficCaptureService,
+	compositeResolver *service.CompositeRouteResolver,
 	redisClient *redis.Client,
 ) *gin.Engine {
 	if cfg.Server.Mode == "release" {
@@ -96,7 +97,7 @@ func ProvideRouter(
 		service.SetWebSearchManager(websearch.NewManager(configs, redisClient))
 	})
 
-	return SetupRouter(r, handlers, jwtAuth, adminAuth, apiKeyAuth, apiKeyService, subscriptionService, opsService, settingService, trafficCapture, cfg, redisClient)
+	return SetupRouter(r, handlers, jwtAuth, adminAuth, apiKeyAuth, apiKeyService, subscriptionService, opsService, settingService, trafficCapture, compositeResolver, cfg, redisClient)
 }
 
 // ProvideHTTPServer 提供 HTTP 服务器

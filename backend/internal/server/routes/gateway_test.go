@@ -17,12 +17,12 @@ import (
 func newGatewayRoutesTestRouter(platform ...string) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
+	cfg := &config.Config{Gateway: config.GatewayConfig{MaxBodySize: 1024 * 1024}}
 
 	groupPlatform := service.PlatformOpenAI
 	if len(platform) > 0 && platform[0] != "" {
 		groupPlatform = platform[0]
 	}
-
 	RegisterGatewayRoutes(
 		router,
 		&handler.Handlers{
@@ -42,7 +42,8 @@ func newGatewayRoutesTestRouter(platform ...string) *gin.Engine {
 		nil,
 		nil,
 		nil, // trafficCapture — nil = disabled (test 不需要 capture)
-		&config.Config{},
+		nil, // compositeResolver — built-in model detector is sufficient here
+		cfg,
 	)
 
 	return router
@@ -112,6 +113,56 @@ func TestGatewayRoutesOpenAIImagesPathsAreRegistered(t *testing.T) {
 		router.ServeHTTP(w, req)
 		require.NotEqual(t, http.StatusNotFound, w.Code, "path=%s should hit OpenAI images handler", path)
 	}
+}
+
+func TestGatewayRoutesCompositeMessagesWithGrokModelUsesOpenAIGateway(t *testing.T) {
+	router := newGatewayRoutesTestRouter(service.PlatformComposite)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"grok-4.3","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	require.NotEqual(t, http.StatusNotFound, w.Code)
+	require.NotContains(t, w.Body.String(), "not supported")
+	require.NotContains(t, w.Body.String(), "OpenAI-compatible endpoint")
+	require.NotContains(t, w.Body.String(), "composite groups")
+}
+
+func TestGatewayRoutesCompositeChatCompletionsWithGrokModelUsesOpenAIGateway(t *testing.T) {
+	router := newGatewayRoutesTestRouter(service.PlatformComposite)
+
+	for _, path := range []string{"/v1/chat/completions", "/chat/completions"} {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"grok-4.3","messages":[{"role":"user","content":"hi"}]}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		router.ServeHTTP(w, req)
+
+		require.NotEqual(t, http.StatusNotFound, w.Code, "path=%s", path)
+		require.NotContains(t, w.Body.String(), "not supported")
+		require.NotContains(t, w.Body.String(), "OpenAI-compatible endpoint")
+		require.NotContains(t, w.Body.String(), "composite groups")
+	}
+}
+
+func TestGatewayRoutesCompositeOpenAIOnlyEndpointsRequireOpenAITarget(t *testing.T) {
+	router := newGatewayRoutesTestRouter(service.PlatformComposite)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/embeddings", strings.NewReader(`{"model":"gemini-2.5-pro","input":"hello"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+	require.Equal(t, http.StatusNotFound, w.Code)
+
+	req = httptest.NewRequest(http.MethodPost, "/v1/embeddings", strings.NewReader(`{"model":"text-embedding-3-small","input":"hello"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+	require.NotEqual(t, http.StatusNotFound, w.Code)
 }
 
 func TestGatewayRoutesGrokAllowsCLICompatibilityEntrypoints(t *testing.T) {
