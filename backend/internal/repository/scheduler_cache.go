@@ -196,18 +196,18 @@ func (c *schedulerCache) SetSnapshot(ctx context.Context, bucket service.Schedul
 	versionStr := strconv.FormatInt(version, 10)
 	snapshotKey := schedulerSnapshotKey(bucket, versionStr)
 
-	cacheableAccounts, err := c.writeAccounts(ctx, accounts)
+	cacheableAccountIDs, err := c.writeAccountIDs(ctx, accounts)
 	if err != nil {
 		return err
 	}
 
-	if len(cacheableAccounts) > 0 {
+	if len(cacheableAccountIDs) > 0 {
 		// 使用序号作为 score，保持数据库返回的排序语义。
-		members := make([]redis.Z, 0, len(cacheableAccounts))
-		for idx, account := range cacheableAccounts {
+		members := make([]redis.Z, 0, len(cacheableAccountIDs))
+		for idx, accountID := range cacheableAccountIDs {
 			members = append(members, redis.Z{
 				Score:  float64(idx),
-				Member: strconv.FormatInt(account.ID, 10),
+				Member: strconv.FormatInt(accountID, 10),
 			})
 		}
 		pipe := c.rdb.Pipeline()
@@ -265,11 +265,11 @@ func (c *schedulerCache) SetAccount(ctx context.Context, account *service.Accoun
 	if account == nil || account.ID <= 0 {
 		return nil
 	}
-	cacheableAccounts, err := c.writeAccounts(ctx, []service.Account{*account})
+	cacheableAccountIDs, err := c.writeAccountIDs(ctx, []service.Account{*account})
 	if err != nil {
 		return err
 	}
-	if len(cacheableAccounts) == 0 {
+	if len(cacheableAccountIDs) == 0 {
 		return c.DeleteAccount(ctx, account.ID)
 	}
 	return nil
@@ -470,13 +470,13 @@ func decodeCachedAccount(val any) (*service.Account, error) {
 	return &account, nil
 }
 
-func (c *schedulerCache) writeAccounts(ctx context.Context, accounts []service.Account) ([]service.Account, error) {
+func (c *schedulerCache) writeAccountIDs(ctx context.Context, accounts []service.Account) ([]int64, error) {
 	if len(accounts) == 0 {
 		return nil, nil
 	}
 
 	pipe := c.rdb.Pipeline()
-	cacheableAccounts := make([]service.Account, 0, len(accounts))
+	cacheableAccountIDs := make([]int64, 0, len(accounts))
 	pending := 0
 	flush := func() error {
 		if pending == 0 {
@@ -505,7 +505,7 @@ func (c *schedulerCache) writeAccounts(ctx context.Context, accounts []service.A
 		pipe.Set(ctx, schedulerAccountMetaKey(id), metaPayload, 0)
 		// LastUsedAt is a hot side key. Keep it untouched so a stale snapshot
 		// rebuild cannot overwrite a newer scheduler update.
-		cacheableAccounts = append(cacheableAccounts, account)
+		cacheableAccountIDs = append(cacheableAccountIDs, account.ID)
 		pending++
 		if pending >= c.writeChunkSize {
 			if err := flush(); err != nil {
@@ -517,7 +517,7 @@ func (c *schedulerCache) writeAccounts(ctx context.Context, accounts []service.A
 	if err := flush(); err != nil {
 		return nil, err
 	}
-	return cacheableAccounts, nil
+	return cacheableAccountIDs, nil
 }
 
 func marshalSchedulerCacheAccount(account service.Account) ([]byte, []byte, error) {

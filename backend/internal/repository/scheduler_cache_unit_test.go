@@ -23,18 +23,17 @@ func newSchedulerCacheUnit(t *testing.T) *schedulerCache {
 	return cache
 }
 
-func TestSchedulerCacheWriteAccountsSkipsUnencodableTimes(t *testing.T) {
+func TestSchedulerCacheWriteAccountIDsSkipsUnencodableTimes(t *testing.T) {
 	ctx := context.Background()
 	cache := newSchedulerCacheUnit(t)
 	invalidTime := time.Date(10000, time.January, 1, 0, 0, 0, 0, time.UTC)
 
-	cacheable, err := cache.writeAccounts(ctx, []service.Account{
+	cacheableIDs, err := cache.writeAccountIDs(ctx, []service.Account{
 		{ID: 111, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey},
 		{ID: 112, Platform: service.PlatformOpenAI, Type: service.AccountTypeAPIKey, ExpiresAt: &invalidTime},
 	})
 	require.NoError(t, err)
-	require.Len(t, cacheable, 1)
-	require.Equal(t, int64(111), cacheable[0].ID)
+	require.Equal(t, []int64{111}, cacheableIDs)
 
 	cached, err := cache.GetAccount(ctx, 111)
 	require.NoError(t, err)
