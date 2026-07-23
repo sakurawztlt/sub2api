@@ -45,7 +45,7 @@ const (
 	openaiPlatformAPIURL            = "https://api.openai.com/v1/responses"
 	openaiPlatformAPIInputTokensURL = "https://api.openai.com/v1/responses/input_tokens"
 	openaiStickySessionTTL          = time.Hour // 粘性会话TTL
-	codexCLIUserAgent               = "codex_cli_rs/0.125.0"
+	codexCLIUserAgent               = "codex_cli_rs/0.144.1 (Ubuntu 22.4.0; x86_64) xterm-256color"
 	// codex_cli_only 拒绝时单个请求头日志长度上限（字符）
 	codexCLIOnlyHeaderValueMaxBytes = 256
 
@@ -59,7 +59,7 @@ const (
 	openAIWSRetryBackoffMaxDefault     = 2 * time.Second
 	openAIWSRetryJitterRatioDefault    = 0.2
 	openAICompactSessionSeedKey        = "openai_compact_session_seed"
-	codexCLIVersion                    = "0.125.0"
+	codexCLIVersion                    = "0.144.1"
 	// Codex 限额快照仅用于后台展示/诊断，不需要每个成功请求都立即落库。
 	openAICodexSnapshotPersistMinInterval = 30 * time.Second
 	openAICodexRecoverySnapshotMaxSkew    = 2 * time.Minute
@@ -73,36 +73,44 @@ func applyOpenAIOAuthCodexUserAgentFallback(headers http.Header, account *Accoun
 	if account == nil || account.Type != AccountTypeOAuth {
 		return
 	}
-	if !openai.IsCodexCLIRequest(headers.Get("user-agent")) {
+	if !openai.IsCodexOfficialClientRequest(headers.Get("user-agent")) {
 		headers.Set("user-agent", codexCLIUserAgent)
 	}
 }
 
 // OpenAI allowed headers whitelist (for non-passthrough).
 var openaiAllowedHeaders = map[string]bool{
-	"accept-language":       true,
-	"content-type":          true,
-	"conversation_id":       true,
-	"user-agent":            true,
-	"originator":            true,
-	"session_id":            true,
-	"x-codex-turn-state":    true,
-	"x-codex-turn-metadata": true,
+	"accept-language":         true,
+	"content-type":            true,
+	"conversation_id":         true,
+	"user-agent":              true,
+	"originator":              true,
+	"session_id":              true,
+	"x-codex-beta-features":   true,
+	"x-codex-installation-id": true,
+	"x-codex-turn-state":      true,
+	"x-codex-turn-metadata":   true,
+	"x-codex-window-id":       true,
+	responsesLiteHeaderKey:    true,
 }
 
 // OpenAI passthrough allowed headers whitelist.
 // 透传模式下仅放行这些低风险请求头，避免将非标准/环境噪声头传给上游触发风控。
 var openaiPassthroughAllowedHeaders = map[string]bool{
-	"accept":                true,
-	"accept-language":       true,
-	"content-type":          true,
-	"conversation_id":       true,
-	"openai-beta":           true,
-	"user-agent":            true,
-	"originator":            true,
-	"session_id":            true,
-	"x-codex-turn-state":    true,
-	"x-codex-turn-metadata": true,
+	"accept":                  true,
+	"accept-language":         true,
+	"content-type":            true,
+	"conversation_id":         true,
+	"openai-beta":             true,
+	"user-agent":              true,
+	"originator":              true,
+	"session_id":              true,
+	"x-codex-beta-features":   true,
+	"x-codex-installation-id": true,
+	"x-codex-turn-state":      true,
+	"x-codex-turn-metadata":   true,
+	"x-codex-window-id":       true,
+	responsesLiteHeaderKey:    true,
 }
 
 // codex_cli_only 拒绝时记录的请求头白名单（仅用于诊断日志，不参与上游透传）
@@ -4423,6 +4431,9 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	}
 	// OAuth 安全透传：对非 Codex UA 统一兜底，降低被上游风控拦截概率。
 	applyOpenAIOAuthCodexUserAgentFallback(req.Header, account)
+	if account.Type == AccountTypeOAuth {
+		enforceCodexIdentityHeaders(req.Header)
+	}
 
 	if req.Header.Get("content-type") == "" {
 		req.Header.Set("content-type", "application/json")
@@ -5385,6 +5396,9 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	}
 	// OAuth 安全兜底：浏览器/未知 UA 容易触发上游风控，统一改成 Codex CLI UA。
 	applyOpenAIOAuthCodexUserAgentFallback(req.Header, account)
+	if account.Type == AccountTypeOAuth {
+		enforceCodexIdentityHeaders(req.Header)
+	}
 
 	// Ensure required headers exist
 	if req.Header.Get("content-type") == "" {

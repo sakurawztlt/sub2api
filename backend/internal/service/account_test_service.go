@@ -634,6 +634,9 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 
 	// Set common headers
 	req.Header.Set("Content-Type", "application/json")
+	if !isOAuth {
+		applyOpenAICodexProbeHeaders(req.Header)
+	}
 	req.Header.Set("Authorization", "Bearer "+authToken)
 
 	// Set OAuth-specific headers for ChatGPT internal API
@@ -650,6 +653,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		if chatgptAccountID != "" {
 			req.Header.Set("chatgpt-account-id", chatgptAccountID)
 		}
+		enforceCodexIdentityHeaders(req.Header)
 	}
 
 	// Get proxy URL
@@ -886,10 +890,7 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+authToken)
-	req.Header.Set("OpenAI-Beta", "responses=experimental")
-	req.Header.Set("Originator", "codex_cli_rs")
-	req.Header.Set("User-Agent", codexCLIUserAgent)
-	req.Header.Set("Version", codexCLIVersion)
+	applyOpenAICodexProbeHeaders(req.Header)
 	probeSessionID := compactProbeSessionID(account.ID)
 	req.Header.Set("Session_ID", probeSessionID)
 	req.Header.Set("Conversation_ID", probeSessionID)
@@ -1745,7 +1746,7 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("OpenAI-Beta", "responses=experimental")
-	req.Header.Set("originator", "opencode")
+	req.Header.Set("originator", "codex_cli_rs")
 	if customUA := strings.TrimSpace(account.GetOpenAIUserAgent()); customUA != "" {
 		req.Header.Set("User-Agent", customUA)
 	} else {
@@ -1754,6 +1755,7 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	if chatgptAccountID := strings.TrimSpace(account.GetChatGPTAccountID()); chatgptAccountID != "" {
 		req.Header.Set("chatgpt-account-id", chatgptAccountID)
 	}
+	enforceCodexIdentityHeaders(req.Header)
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {

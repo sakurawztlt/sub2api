@@ -60,6 +60,7 @@ func TestAccountTestService_TestAccountConnection_OpenAICompactOAuthSuccessPersi
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(upstream.lastReq.Context()))
 	require.Equal(t, codexCLIUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, "chatgpt-acc", upstream.lastReq.Header.Get("chatgpt-account-id"))
+	requireOpenAICodexProbeHeaders(t, upstream.lastReq.Header)
 	require.Equal(t, "gpt-5.4", gjson.GetBytes(upstream.lastBody, "model").String())
 
 	updates := <-updateCalls

@@ -1134,6 +1134,16 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 		if v := strings.TrimSpace(c.Request.Header.Get("accept-language")); v != "" {
 			headers.Set("accept-language", v)
 		}
+		for _, value := range c.Request.Header.Values("x-codex-beta-features") {
+			if value = strings.TrimSpace(value); value != "" {
+				headers.Add("x-codex-beta-features", value)
+			}
+		}
+		for _, name := range [...]string{"x-codex-window-id", "x-codex-installation-id"} {
+			if value := strings.TrimSpace(c.Request.Header.Get(name)); value != "" {
+				headers.Set(name, value)
+			}
+		}
 	}
 	// OAuth 账号：将 apiKeyID 混入 session 标识符，防止跨用户会话碰撞。
 	if account != nil && account.Type == AccountTypeOAuth {
@@ -1186,8 +1196,8 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 	if s != nil && s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
 		headers.Set("user-agent", codexCLIUserAgent)
 	}
-	if account != nil && account.Type == AccountTypeOAuth && !openai.IsCodexCLIRequest(headers.Get("user-agent")) {
-		headers.Set("user-agent", codexCLIUserAgent)
+	if account != nil && account.Type == AccountTypeOAuth {
+		enforceCodexIdentityHeaders(headers)
 	}
 
 	return headers, sessionResolution

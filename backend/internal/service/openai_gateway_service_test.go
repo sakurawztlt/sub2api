@@ -2930,6 +2930,12 @@ func TestApplyOpenAIOAuthCodexUserAgentFallback(t *testing.T) {
 		require.Equal(t, "codex_cli_rs/0.126.0", headers.Get("User-Agent"))
 	})
 
+	t.Run("oauth codex tui UA preserved", func(t *testing.T) {
+		headers := http.Header{"User-Agent": []string{"codex-tui/0.144.1 (Mac OS X; arm64) iTerm"}}
+		applyOpenAIOAuthCodexUserAgentFallback(headers, &Account{Type: AccountTypeOAuth})
+		require.Equal(t, "codex-tui/0.144.1 (Mac OS X; arm64) iTerm", headers.Get("User-Agent"))
+	})
+
 	t.Run("api key browser UA preserved", func(t *testing.T) {
 		headers := http.Header{"User-Agent": []string{"Mozilla/5.0"}}
 		applyOpenAIOAuthCodexUserAgentFallback(headers, &Account{Type: AccountTypeAPIKey})
@@ -2977,6 +2983,32 @@ func TestOpenAIBuildUpstreamRequestPreservesCompactPathForAPIKeyBaseURL(t *testi
 	require.Equal(t, "https://example.com/v1/responses/compact", req.URL.String())
 }
 
+func TestOpenAIBuildUpstreamRequestPreservesCodexIdentityHeaders(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.144.1")
+	c.Request.Header.Set("X-Codex-Window-ID", "window-http")
+	c.Request.Header.Set("X-Codex-Installation-ID", "installation-http")
+	c.Request.Header.Set("X-Test", "blocked")
+
+	body := []byte(`{"model":"gpt-5","input":"hello"}`)
+	svc := &OpenAIGatewayService{cfg: &config.Config{
+		Security: config.SecurityConfig{
+			URLAllowlist: config.URLAllowlistConfig{Enabled: false},
+		},
+	}}
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+
+	req, err := svc.buildUpstreamRequest(c.Request.Context(), c, account, body, "token", false, "", true)
+	require.NoError(t, err)
+	require.Equal(t, "window-http", req.Header.Get("X-Codex-Window-ID"))
+	require.Equal(t, "installation-http", req.Header.Get("X-Codex-Installation-ID"))
+	require.Empty(t, req.Header.Get("X-Test"))
+	require.True(t, openai.EvaluateEngineFingerprint(req.Header, body, openai.DefaultEngineFingerprintSignals))
+}
+
 func TestOpenAIBuildUpstreamRequestOAuthOfficialClientOriginatorCompatibility(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -2986,9 +3018,9 @@ func TestOpenAIBuildUpstreamRequestOAuthOfficialClientOriginatorCompatibility(t 
 		originator     string
 		wantOriginator string
 	}{
-		{name: "desktop originator preserved", originator: "Codex Desktop", wantOriginator: "Codex Desktop"},
-		{name: "vscode originator preserved", originator: "codex_vscode", wantOriginator: "codex_vscode"},
-		{name: "official ua fallback to codex_cli_rs", userAgent: "Codex Desktop/1.2.3", wantOriginator: "codex_cli_rs"},
+		{name: "desktop originator without matching ua falls back to cli pair", originator: "Codex Desktop", wantOriginator: "codex_cli_rs"},
+		{name: "vscode originator without matching ua falls back to cli pair", originator: "codex_vscode", wantOriginator: "codex_cli_rs"},
+		{name: "official desktop ua derives matching originator", userAgent: "Codex Desktop/1.2.3", wantOriginator: "Codex Desktop"},
 	}
 
 	for _, tt := range tests {

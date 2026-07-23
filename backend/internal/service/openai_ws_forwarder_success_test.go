@@ -388,6 +388,34 @@ func requestToJSONString(payload map[string]any) string {
 	return string(b)
 }
 
+func TestOpenAIGatewayService_BuildOpenAIWSHeadersPreservesCodexIdentity(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.144.1")
+	c.Request.Header.Set("X-Codex-Window-ID", "window-ws")
+	c.Request.Header.Set("X-Codex-Installation-ID", "installation-ws")
+	c.Request.Header.Set("X-Test", "blocked")
+
+	svc := &OpenAIGatewayService{}
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+	headers, _ := svc.buildOpenAIWSHeaders(
+		c,
+		account,
+		"token",
+		OpenAIWSProtocolDecision{Transport: OpenAIUpstreamTransportResponsesWebsocketV2},
+		true,
+		"",
+		"",
+		"",
+	)
+
+	require.Equal(t, "window-ws", headers.Get("X-Codex-Window-ID"))
+	require.Equal(t, "installation-ws", headers.Get("X-Codex-Installation-ID"))
+	require.Empty(t, headers.Get("X-Test"))
+}
+
 func TestLogOpenAIWSBindResponseAccountWarn(t *testing.T) {
 	require.NotPanics(t, func() {
 		logOpenAIWSBindResponseAccountWarn(1, 2, "resp_ok", nil)
@@ -743,9 +771,9 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthOriginatorCompatibility(t *testi
 		originator     string
 		wantOriginator string
 	}{
-		{name: "desktop originator preserved", originator: "Codex Desktop", wantOriginator: "Codex Desktop"},
-		{name: "vscode originator preserved", originator: "codex_vscode", wantOriginator: "codex_vscode"},
-		{name: "official ua fallback to codex_cli_rs", userAgent: "Codex Desktop/1.2.3", wantOriginator: "codex_cli_rs"},
+		{name: "desktop originator without matching ua falls back to cli pair", originator: "Codex Desktop", wantOriginator: "codex_cli_rs"},
+		{name: "vscode originator without matching ua falls back to cli pair", originator: "codex_vscode", wantOriginator: "codex_cli_rs"},
+		{name: "official desktop ua derives matching originator", userAgent: "Codex Desktop/1.2.3", wantOriginator: "Codex Desktop"},
 	}
 
 	for _, tt := range tests {
