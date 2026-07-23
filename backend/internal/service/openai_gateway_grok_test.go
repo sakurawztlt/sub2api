@@ -894,6 +894,58 @@ func TestHandleGrokAccountUpstreamErrorTempUnschedulesReadinessStates(t *testing
 	}
 }
 
+func TestHandleGrokAccountUpstreamError5xxRespectsPoolMode(t *testing.T) {
+	t.Run("pool mode keeps scheduling state", func(t *testing.T) {
+		account := &Account{
+			ID:       611,
+			Platform: PlatformGrok,
+			Type:     AccountTypeAPIKey,
+			Credentials: map[string]any{
+				"pool_mode": true,
+			},
+		}
+		repo := &grokQuotaAccountRepo{}
+		svc := &OpenAIGatewayService{accountRepo: repo}
+
+		svc.handleGrokAccountUpstreamError(context.Background(), account, http.StatusBadGateway, nil, nil)
+
+		require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
+		require.Zero(t, repo.tempUnschedCalls)
+		require.Nil(t, account.TempUnschedulableUntil)
+		require.Empty(t, account.TempUnschedulableReason)
+	})
+
+	t.Run("non-pool mode keeps two minute cooldown", func(t *testing.T) {
+		account := &Account{ID: 612, Platform: PlatformGrok, Type: AccountTypeAPIKey}
+		repo := &grokQuotaAccountRepo{}
+		svc := &OpenAIGatewayService{accountRepo: repo}
+		before := time.Now()
+
+		svc.handleGrokAccountUpstreamError(context.Background(), account, http.StatusBadGateway, nil, nil)
+
+		require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
+		require.Equal(t, 1, repo.tempUnschedCalls)
+		require.Equal(t, account.ID, repo.lastTempUnschedID)
+		require.Equal(t, "grok upstream temporary error", repo.lastTempUnschedReason)
+		require.WithinDuration(t, before.Add(2*time.Minute), repo.lastTempUnschedUntil, time.Second)
+	})
+}
+
+func TestHandleGrokAccountUpstreamError429SetsRateLimitedFromRetryAfter(t *testing.T) {
+	account := &Account{ID: 61, Platform: PlatformGrok, Type: AccountTypeOAuth}
+	repo := &grokQuotaAccountRepo{}
+	svc := &OpenAIGatewayService{accountRepo: repo}
+	before := time.Now()
+
+	svc.handleGrokAccountUpstreamError(context.Background(), account, http.StatusTooManyRequests, http.Header{"Retry-After": []string{"45"}}, nil)
+
+	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
+	require.Equal(t, 1, repo.rateLimitedCalls)
+	require.Equal(t, account.ID, repo.lastRateLimitedID)
+	require.WithinDuration(t, before.Add(45*time.Second), repo.lastRateLimitResetAt, time.Second)
+	require.Zero(t, repo.tempUnschedCalls)
+}
+
 func TestHandleGrokAccountUpstreamError402RecoversAfterCooldownExpiry(t *testing.T) {
 	account := &Account{
 		ID: 610, Platform: PlatformGrok, Type: AccountTypeOAuth,

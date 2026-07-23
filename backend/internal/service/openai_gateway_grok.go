@@ -817,7 +817,7 @@ func (s *OpenAIGatewayService) handleGrokAccountUpstreamError(ctx context.Contex
 		}
 		s.tempUnscheduleGrok(ctx, account, cooldown, "grok rate limited")
 	default:
-		if statusCode >= 500 {
+		if statusCode >= 500 && !account.IsPoolMode() {
 			s.tempUnscheduleGrok(ctx, account, 2*time.Minute, "grok upstream temporary error")
 		}
 	}
