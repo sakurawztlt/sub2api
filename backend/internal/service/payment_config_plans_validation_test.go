@@ -191,3 +191,32 @@ func TestValidatePlanPatch_AllNil(t *testing.T) {
 	err := validatePlanPatch(UpdatePlanRequest{})
 	require.NoError(t, err)
 }
+
+func TestNormalizePlanCurrency(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		want    string
+		wantErr bool
+	}{
+		{name: "empty remains unlabeled", raw: "", want: ""},
+		{name: "whitespace remains unlabeled", raw: "   ", want: ""},
+		{name: "lowercase is normalized", raw: "nzd", want: "NZD"},
+		{name: "uppercase stays unchanged", raw: "USD", want: "USD"},
+		{name: "too short", raw: "NZ", wantErr: true},
+		{name: "too long", raw: "NZDD", wantErr: true},
+		{name: "non-letter", raw: "N2D", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := normalizePlanCurrency(tt.raw)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
