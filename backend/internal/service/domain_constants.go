@@ -371,6 +371,9 @@ const (
 	// sidebar entry is hidden. Defaults to false (opt-in feature).
 	SettingKeyAvailableChannelsEnabled = "available_channels_enabled"
 
+	// SettingKeyOllamaCloudUsageSettings stores the opt-in global runner switch and interval.
+	SettingKeyOllamaCloudUsageSettings = "ollama_cloud_usage_settings"
+
 	// =========================
 	// Overload Cooldown (529)
 	// =========================

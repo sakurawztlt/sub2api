@@ -57,6 +57,7 @@ var schedulerNeutralExtraKeyPrefixes = []string{
 	"codex_5h_",
 	"codex_7d_",
 	"passive_usage_",
+	"ollama_cloud_usage",
 }
 
 var schedulerNeutralExtraKeys = map[string]struct{}{
@@ -416,13 +417,73 @@ func (r *accountRepository) Update(ctx context.Context, account *service.Account
 }
 
 func (r *accountRepository) UpdateCredentials(ctx context.Context, id int64, credentials map[string]any) error {
-	_, err := r.client.Account.UpdateOneID(id).
-		SetCredentials(normalizeJSONMap(credentials)).
-		Save(ctx)
+	payload, err := json.Marshal(normalizeJSONMap(credentials))
 	if err != nil {
-		return translatePersistenceError(err, service.ErrAccountNotFound, nil)
+		return err
 	}
-	r.syncSchedulerAccountSnapshot(ctx, id)
+
+	baseCtx := ctx
+	contextTx := dbent.TxFromContext(ctx)
+	client := r.client
+	var tx *dbent.Tx
+	if contextTx != nil {
+		client = contextTx.Client()
+	} else if r.client != nil {
+		tx, err = r.client.Tx(ctx)
+		if err != nil && !errors.Is(err, dbent.ErrTxStarted) {
+			return err
+		}
+		if tx != nil {
+			defer func() { _ = tx.Rollback() }()
+			ctx = dbent.NewTxContext(ctx, tx)
+			client = tx.Client()
+		}
+	}
+	result, err := client.ExecContext(ctx, `
+		UPDATE accounts
+		SET
+			credentials = $1::jsonb,
+			extra = CASE
+				WHEN platform IN ('openai', 'anthropic')
+					AND type = 'apikey'
+					AND credentials IS DISTINCT FROM $1::jsonb
+					AND (
+						credentials -> 'api_key' IS DISTINCT FROM $1::jsonb -> 'api_key'
+						OR NOT (
+							`+ollamaCloudBaseURLMatchesSQL("credentials ->> 'base_url'")+`
+							AND `+ollamaCloudBaseURLMatchesSQL("$1::jsonb ->> 'base_url'")+`
+						)
+					)
+				THEN COALESCE(extra, '{}'::jsonb)
+					- 'ollama_cloud_usage_session'
+					- 'ollama_cloud_usage_auto_refresh'
+					- 'ollama_cloud_usage_snapshot'
+				ELSE extra
+			END,
+			updated_at = NOW()
+		WHERE id = $2 AND deleted_at IS NULL
+	`, string(payload), id)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return service.ErrAccountNotFound
+	}
+	if err := enqueueSchedulerOutbox(ctx, client, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
+		return err
+	}
+	if tx != nil {
+		if err := tx.Commit(); err != nil {
+			return err
+		}
+	}
+	if contextTx == nil {
+		r.syncSchedulerAccountSnapshot(baseCtx, id)
+	}
 	return nil
 }
 
@@ -1573,6 +1634,7 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 	args := make([]any, 0, 8)
 
 	idx := 1
+	ollamaProxyIdentityChanged := ""
 	if updates.Name != nil {
 		setClauses = append(setClauses, "name = $"+itoa(idx))
 		args = append(args, *updates.Name)
@@ -1582,8 +1644,11 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		// 0 表示清除代理（前端发送 0 而不是 null 来表达清除意图）
 		if *updates.ProxyID == 0 {
 			setClauses = append(setClauses, "proxy_id = NULL")
+			ollamaProxyIdentityChanged = "proxy_id IS NOT NULL"
 		} else {
-			setClauses = append(setClauses, "proxy_id = $"+itoa(idx))
+			proxyPlaceholder := "$" + itoa(idx)
+			setClauses = append(setClauses, "proxy_id = "+proxyPlaceholder)
+			ollamaProxyIdentityChanged = "proxy_id IS DISTINCT FROM " + proxyPlaceholder
 			args = append(args, *updates.ProxyID)
 			idx++
 		}
@@ -1623,23 +1688,73 @@ func (r *accountRepository) BulkUpdate(ctx context.Context, ids []int64, updates
 		idx++
 	}
 	// JSONB 需要合并而非覆盖，使用 raw SQL 保持旧行为。
+	credentialPlaceholder := ""
 	if len(updates.Credentials) > 0 {
 		payload, err := json.Marshal(updates.Credentials)
 		if err != nil {
 			return 0, err
 		}
-		setClauses = append(setClauses, "credentials = COALESCE(credentials, '{}'::jsonb) || $"+itoa(idx)+"::jsonb")
+		credentialPlaceholder = "$" + itoa(idx)
+		setClauses = append(setClauses, "credentials = COALESCE(credentials, '{}'::jsonb) || "+credentialPlaceholder+"::jsonb")
 		args = append(args, payload)
 		idx++
 	}
-	if len(updates.Extra) > 0 {
-		payload, err := json.Marshal(updates.Extra)
-		if err != nil {
-			return 0, err
+
+	ollamaGroupIdentityChanges := make([]string, 0, 2)
+	if _, ok := updates.Credentials["api_key"]; ok {
+		ollamaGroupIdentityChanges = append(
+			ollamaGroupIdentityChanges,
+			"credentials -> 'api_key' IS DISTINCT FROM "+credentialPlaceholder+"::jsonb -> 'api_key'",
+		)
+	}
+	if _, ok := updates.Credentials["base_url"]; ok {
+		ollamaGroupIdentityChanges = append(
+			ollamaGroupIdentityChanges,
+			"NOT ("+ollamaCloudBaseURLMatchesSQL("credentials ->> 'base_url'")+
+				" AND "+ollamaCloudBaseURLMatchesSQL(credentialPlaceholder+"::jsonb ->> 'base_url'")+")",
+		)
+	}
+
+	if len(updates.Extra) > 0 || len(ollamaGroupIdentityChanges) > 0 || ollamaProxyIdentityChanged != "" {
+		extraExpression := "COALESCE(extra, '{}'::jsonb)"
+		if len(updates.Extra) > 0 {
+			payload, err := json.Marshal(updates.Extra)
+			if err != nil {
+				return 0, err
+			}
+			extraExpression += " || $" + itoa(idx) + "::jsonb"
+			args = append(args, payload)
+			idx++
 		}
-		setClauses = append(setClauses, "extra = COALESCE(extra, '{}'::jsonb) || $"+itoa(idx)+"::jsonb")
-		args = append(args, payload)
-		idx++
+
+		eligibleAccount := "platform IN ('openai', 'anthropic') AND type = 'apikey'"
+		groupIdentityChanged := ""
+		if len(ollamaGroupIdentityChanges) > 0 {
+			groupIdentityChanged = "(" + eligibleAccount + " AND (" + joinClauses(ollamaGroupIdentityChanges, " OR ") + "))"
+		}
+		snapshotIdentityChanged := groupIdentityChanged
+		if ollamaProxyIdentityChanged != "" {
+			proxyChanged := "(" + eligibleAccount + " AND " + ollamaProxyIdentityChanged + ")"
+			if snapshotIdentityChanged == "" {
+				snapshotIdentityChanged = proxyChanged
+			} else {
+				snapshotIdentityChanged = "(" + snapshotIdentityChanged + " OR " + proxyChanged + ")"
+			}
+		}
+		if groupIdentityChanged != "" {
+			extraExpression = "CASE" +
+				" WHEN " + groupIdentityChanged + " THEN (" + extraExpression + ")" +
+				" - 'ollama_cloud_usage_session'" +
+				" - 'ollama_cloud_usage_auto_refresh'" +
+				" - 'ollama_cloud_usage_snapshot'" +
+				" WHEN " + snapshotIdentityChanged + " THEN (" + extraExpression + ") - 'ollama_cloud_usage_snapshot'" +
+				" ELSE " + extraExpression + " END"
+		} else if snapshotIdentityChanged != "" {
+			extraExpression = "CASE WHEN " + snapshotIdentityChanged +
+				" THEN (" + extraExpression + ") - 'ollama_cloud_usage_snapshot'" +
+				" ELSE " + extraExpression + " END"
+		}
+		setClauses = append(setClauses, "extra = "+extraExpression)
 	}
 
 	if len(setClauses) == 0 {

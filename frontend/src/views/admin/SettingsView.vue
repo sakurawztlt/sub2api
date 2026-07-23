@@ -4014,6 +4014,63 @@
             </div>
           </div>
 
+          <div class="card">
+            <div
+              class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
+            >
+              <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+                {{ t("admin.settings.ollamaCloudUsage.title") }}
+              </h2>
+              <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                {{ t("admin.settings.ollamaCloudUsage.description") }}
+              </p>
+            </div>
+            <div class="space-y-5 p-6">
+              <div class="flex items-center justify-between gap-4">
+                <div>
+                  <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    {{ t("admin.settings.ollamaCloudUsage.enabled") }}
+                  </label>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.ollamaCloudUsage.enabledHint") }}
+                  </p>
+                </div>
+                <Toggle
+                  v-model="ollamaCloudUsageForm.enabled"
+                  :disabled="ollamaCloudUsageLoading || ollamaCloudUsageSaving"
+                />
+              </div>
+
+              <div>
+                <label class="input-label">
+                  {{ t("admin.settings.ollamaCloudUsage.intervalMinutes") }}
+                </label>
+                <input
+                  v-model.number="ollamaCloudUsageForm.interval_minutes"
+                  type="number"
+                  min="15"
+                  max="1440"
+                  class="input mt-2 w-full max-w-xs"
+                  :disabled="ollamaCloudUsageLoading || ollamaCloudUsageSaving"
+                />
+                <p class="input-hint">
+                  {{ t("admin.settings.ollamaCloudUsage.intervalHint") }}
+                </p>
+              </div>
+
+              <div class="flex justify-end">
+                <button
+                  type="button"
+                  class="btn btn-primary"
+                  :disabled="ollamaCloudUsageLoading || ollamaCloudUsageSaving"
+                  @click="saveOllamaCloudUsageSettings"
+                >
+                  {{ ollamaCloudUsageSaving ? t("common.saving") : t("common.save") }}
+                </button>
+              </div>
+            </div>
+          </div>
+
           <!-- Gateway Scheduling Settings -->
           <div class="card">
             <div
@@ -7322,6 +7379,13 @@ const adminApiKeyOperating = ref(false);
 const newAdminApiKey = ref("");
 const subscriptionGroups = ref<AdminGroup[]>([]);
 
+const ollamaCloudUsageLoading = ref(true);
+const ollamaCloudUsageSaving = ref(false);
+const ollamaCloudUsageForm = reactive({
+  enabled: false,
+  interval_minutes: 60,
+});
+
 // Overload Cooldown (529) 状态
 const overloadCooldownLoading = ref(true);
 const overloadCooldownSaving = ref(false);
@@ -10000,6 +10064,50 @@ async function handleDeleteProvider() {
   }
 }
 
+async function loadOllamaCloudUsageSettings() {
+  ollamaCloudUsageLoading.value = true;
+  try {
+    const settings = await adminAPI.accounts.getOllamaCloudUsageSettings();
+    ollamaCloudUsageForm.enabled = settings.enabled;
+    ollamaCloudUsageForm.interval_minutes = settings.interval_minutes;
+  } catch (err: unknown) {
+    appStore.showError(
+      extractI18nErrorMessage(
+        err,
+        t,
+        "admin.settings.ollamaCloudUsage",
+        t("admin.settings.ollamaCloudUsage.saveFailed"),
+      ),
+    );
+  } finally {
+    ollamaCloudUsageLoading.value = false;
+  }
+}
+
+async function saveOllamaCloudUsageSettings() {
+  ollamaCloudUsageSaving.value = true;
+  try {
+    const settings = await adminAPI.accounts.updateOllamaCloudUsageSettings({
+      enabled: ollamaCloudUsageForm.enabled,
+      interval_minutes: ollamaCloudUsageForm.interval_minutes,
+    });
+    ollamaCloudUsageForm.enabled = settings.enabled;
+    ollamaCloudUsageForm.interval_minutes = settings.interval_minutes;
+    appStore.showSuccess(t("admin.settings.ollamaCloudUsage.saved"));
+  } catch (err: unknown) {
+    appStore.showError(
+      extractI18nErrorMessage(
+        err,
+        t,
+        "admin.settings.ollamaCloudUsage",
+        t("admin.settings.ollamaCloudUsage.saveFailed"),
+      ),
+    );
+  } finally {
+    ollamaCloudUsageSaving.value = false;
+  }
+}
+
 onMounted(() => {
   loadSettings();
   loadSubscriptionGroups();
@@ -10010,6 +10118,7 @@ onMounted(() => {
   loadRectifierSettings();
   loadBetaPolicySettings();
   loadProviders();
+  loadOllamaCloudUsageSettings();
 });
 
 // =========================

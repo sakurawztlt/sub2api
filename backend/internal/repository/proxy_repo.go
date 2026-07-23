@@ -131,6 +131,26 @@ func (r *proxyRepository) Update(ctx context.Context, proxyIn *service.Proxy) er
 	return err
 }
 
+type proxyProbeIdentity struct {
+	protocol string
+	host     string
+	port     int
+	username string
+	password string
+	status   string
+}
+
+func proxyProbeIdentityFromService(proxyIn *service.Proxy) proxyProbeIdentity {
+	return proxyProbeIdentity{
+		protocol: proxyIn.Protocol,
+		host:     proxyIn.Host,
+		port:     proxyIn.Port,
+		username: proxyIn.Username,
+		password: proxyIn.Password,
+		status:   proxyIn.Status,
+	}
+}
+
 func (r *proxyRepository) Delete(ctx context.Context, id int64) error {
 	_, err := r.client.Proxy.Delete().Where(proxy.IDEQ(id)).Exec(ctx)
 	return err

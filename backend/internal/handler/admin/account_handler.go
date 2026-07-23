@@ -60,6 +60,11 @@ type AccountHandler struct {
 	sessionLimitCache       service.SessionLimitCache
 	rpmCache                service.RPMCache
 	tokenCacheInvalidator   service.TokenCacheInvalidator
+	ollamaCloudUsage        *service.OllamaCloudUsageService
+}
+
+func (h *AccountHandler) SetOllamaCloudUsageService(usage *service.OllamaCloudUsageService) {
+	h.ollamaCloudUsage = usage
 }
 
 // NewAccountHandler creates a new admin account handler
@@ -197,8 +202,9 @@ type AccountSchedulerGroupScore struct {
 const accountListGroupUngroupedQueryValue = "ungrouped"
 
 func (h *AccountHandler) buildAccountResponseWithRuntime(ctx context.Context, account *service.Account) AccountWithConcurrency {
+	h.resolveOllamaCloudUsageAccounts(ctx, []*service.Account{account})
 	item := AccountWithConcurrency{
-		Account:            dto.AccountFromService(account),
+		Account:            h.accountResponseFromService(account),
 		CurrentConcurrency: 0,
 	}
 	if account == nil {
@@ -238,6 +244,23 @@ func (h *AccountHandler) buildAccountResponseWithRuntime(ctx context.Context, ac
 	}
 
 	return item
+}
+
+func (h *AccountHandler) accountResponseFromService(account *service.Account) *dto.Account {
+	out := dto.AccountFromService(account)
+	if out != nil && out.OllamaCloudUsage != nil && h.ollamaCloudUsage != nil {
+		h.ollamaCloudUsage.EnrichState(out.OllamaCloudUsage)
+	}
+	return out
+}
+
+func (h *AccountHandler) resolveOllamaCloudUsageAccounts(ctx context.Context, accounts []*service.Account) {
+	if h == nil || h.ollamaCloudUsage == nil || len(accounts) == 0 {
+		return
+	}
+	if err := h.ollamaCloudUsage.ResolveAccounts(ctx, accounts); err != nil {
+		slog.Warn("resolve ollama cloud usage accounts failed", "error", err)
+	}
 }
 
 // scoreOpenAIAccountSchedulerPool 对池内 OpenAI 账号计算调度分数快照。
@@ -606,11 +629,16 @@ func (h *AccountHandler) List(c *gin.Context) {
 	}
 
 	// Build response with concurrency info
+	accountPtrs := make([]*service.Account, 0, len(accounts))
+	for i := range accounts {
+		accountPtrs = append(accountPtrs, &accounts[i])
+	}
+	h.resolveOllamaCloudUsageAccounts(c.Request.Context(), accountPtrs)
 	result := make([]AccountWithConcurrency, len(accounts))
 	for i := range accounts {
 		acc := &accounts[i]
 		item := AccountWithConcurrency{
-			Account:            dto.AccountFromService(acc),
+			Account:            h.accountResponseFromService(acc),
 			CurrentConcurrency: concurrencyCounts[acc.ID],
 			SchedulerScore:     schedulerScores[acc.ID],
 			SchedulerScores:    schedulerGroupScores[acc.ID],

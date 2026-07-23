@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -336,6 +337,11 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			result.Items = append(result.Items, item)
 			continue
 		}
+		if existing != nil {
+			extra = mergeMap(existing.Extra, extra)
+			credentials = mergeMap(existing.Credentials, credentials)
+		}
+		reconcileCRSUpstreamBillingProbeExtra(existing, PlatformAnthropic, targetType, credentials, extra)
 
 		if existing == nil {
 			if !shouldCreateAccount(src.ID, selectedSet) {
@@ -377,11 +383,11 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 		}
 
 		// Update existing
-		existing.Extra = mergeMap(existing.Extra, extra)
+		existing.Extra = extra
 		existing.Name = defaultName(src.Name, src.ID)
 		existing.Platform = PlatformAnthropic
 		existing.Type = targetType
-		existing.Credentials = mergeMap(existing.Credentials, credentials)
+		existing.Credentials = credentials
 		if proxyID != nil {
 			existing.ProxyID = proxyID
 		}
@@ -458,6 +464,11 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			result.Items = append(result.Items, item)
 			continue
 		}
+		if existing != nil {
+			extra = mergeMap(existing.Extra, extra)
+			credentials = mergeMap(existing.Credentials, credentials)
+		}
+		reconcileCRSUpstreamBillingProbeExtra(existing, PlatformAnthropic, AccountTypeAPIKey, credentials, extra)
 
 		if existing == nil {
 			if !shouldCreateAccount(src.ID, selectedSet) {
@@ -492,11 +503,11 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			continue
 		}
 
-		existing.Extra = mergeMap(existing.Extra, extra)
+		existing.Extra = extra
 		existing.Name = defaultName(src.Name, src.ID)
 		existing.Platform = PlatformAnthropic
 		existing.Type = AccountTypeAPIKey
-		existing.Credentials = mergeMap(existing.Credentials, credentials)
+		existing.Credentials = credentials
 		if proxyID != nil {
 			existing.ProxyID = proxyID
 		}
@@ -588,6 +599,11 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			result.Items = append(result.Items, item)
 			continue
 		}
+		if existing != nil {
+			extra = mergeMap(existing.Extra, extra)
+			credentials = mergeMap(existing.Credentials, credentials)
+		}
+		reconcileCRSUpstreamBillingProbeExtra(existing, PlatformOpenAI, AccountTypeOAuth, credentials, extra)
 
 		if existing == nil {
 			if !shouldCreateAccount(src.ID, selectedSet) {
@@ -626,11 +642,11 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			continue
 		}
 
-		existing.Extra = mergeMap(existing.Extra, extra)
+		existing.Extra = extra
 		existing.Name = defaultName(src.Name, src.ID)
 		existing.Platform = PlatformOpenAI
 		existing.Type = AccountTypeOAuth
-		existing.Credentials = mergeMap(existing.Credentials, credentials)
+		existing.Credentials = credentials
 		if proxyID != nil {
 			existing.ProxyID = proxyID
 		}
@@ -714,6 +730,11 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			result.Items = append(result.Items, item)
 			continue
 		}
+		if existing != nil {
+			extra = mergeMap(existing.Extra, extra)
+			credentials = mergeMap(existing.Credentials, credentials)
+		}
+		reconcileCRSUpstreamBillingProbeExtra(existing, PlatformOpenAI, AccountTypeAPIKey, credentials, extra)
 
 		if existing == nil {
 			if !shouldCreateAccount(src.ID, selectedSet) {
@@ -748,11 +769,11 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			continue
 		}
 
-		existing.Extra = mergeMap(existing.Extra, extra)
+		existing.Extra = extra
 		existing.Name = defaultName(src.Name, src.ID)
 		existing.Platform = PlatformOpenAI
 		existing.Type = AccountTypeAPIKey
-		existing.Credentials = mergeMap(existing.Credentials, credentials)
+		existing.Credentials = credentials
 		if proxyID != nil {
 			existing.ProxyID = proxyID
 		}
@@ -829,6 +850,11 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			result.Items = append(result.Items, item)
 			continue
 		}
+		if existing != nil {
+			extra = mergeMap(existing.Extra, extra)
+			credentials = mergeMap(existing.Credentials, credentials)
+		}
+		reconcileCRSUpstreamBillingProbeExtra(existing, PlatformGemini, AccountTypeOAuth, credentials, extra)
 
 		if existing == nil {
 			if !shouldCreateAccount(src.ID, selectedSet) {
@@ -866,11 +892,11 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			continue
 		}
 
-		existing.Extra = mergeMap(existing.Extra, extra)
+		existing.Extra = extra
 		existing.Name = defaultName(src.Name, src.ID)
 		existing.Platform = PlatformGemini
 		existing.Type = AccountTypeOAuth
-		existing.Credentials = mergeMap(existing.Credentials, credentials)
+		existing.Credentials = credentials
 		if proxyID != nil {
 			existing.ProxyID = proxyID
 		}
@@ -945,6 +971,11 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			result.Items = append(result.Items, item)
 			continue
 		}
+		if existing != nil {
+			extra = mergeMap(existing.Extra, extra)
+			credentials = mergeMap(existing.Credentials, credentials)
+		}
+		reconcileCRSUpstreamBillingProbeExtra(existing, PlatformGemini, AccountTypeAPIKey, credentials, extra)
 
 		if existing == nil {
 			if !shouldCreateAccount(src.ID, selectedSet) {
@@ -979,11 +1010,11 @@ func (s *CRSSyncService) SyncFromCRS(ctx context.Context, input SyncFromCRSInput
 			continue
 		}
 
-		existing.Extra = mergeMap(existing.Extra, extra)
+		existing.Extra = extra
 		existing.Name = defaultName(src.Name, src.ID)
 		existing.Platform = PlatformGemini
 		existing.Type = AccountTypeAPIKey
-		existing.Credentials = mergeMap(existing.Credentials, credentials)
+		existing.Credentials = credentials
 		if proxyID != nil {
 			existing.ProxyID = proxyID
 		}
@@ -1017,6 +1048,35 @@ func mergeMap(existing map[string]any, updates map[string]any) map[string]any {
 		out[k] = v
 	}
 	return out
+}
+
+// reconcileCRSUpstreamBillingProbeExtra keeps browser-derived usage state
+// write-only. CRS imports cannot inject it, while a sync of the same local
+// Ollama Cloud identity preserves the encrypted session and last snapshot.
+func reconcileCRSUpstreamBillingProbeExtra(
+	existing *Account,
+	targetPlatform, targetType string,
+	targetCredentials map[string]any,
+	extra map[string]any,
+) {
+	for _, key := range ollamaCloudUsageManagedExtraKeys {
+		delete(extra, key)
+	}
+	if existing == nil {
+		return
+	}
+
+	target := &Account{
+		Platform:    targetPlatform,
+		Type:        targetType,
+		Credentials: targetCredentials,
+	}
+	if !IsOllamaCloudUsageAccount(existing) ||
+		!IsOllamaCloudUsageAccount(target) ||
+		!reflect.DeepEqual(ollamaCloudUsageIdentity(existing), ollamaCloudUsageIdentity(target)) {
+		return
+	}
+	preserveOllamaCloudUsageManagedExtra(existing.Extra, extra)
 }
 
 func (s *CRSSyncService) mapOrCreateProxy(ctx context.Context, enabled bool, cached *[]Proxy, src *crsProxy, defaultName string) (*int64, error) {

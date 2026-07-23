@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -3202,6 +3203,50 @@ func normalizeAccountConcurrency(platform, accountType string, concurrency int) 
 	return concurrency
 }
 
+func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
+	extra := cloneWithoutOllamaCloudUsageManagedExtra(accountExtra)
+	account := &Account{
+		Name:        input.Name,
+		Notes:       normalizeAccountNotes(input.Notes),
+		Platform:    input.Platform,
+		Type:        input.Type,
+		Credentials: input.Credentials,
+		Extra:       extra,
+		ProxyID:     input.ProxyID,
+		Concurrency: normalizeAccountConcurrency(input.Platform, input.Type, input.Concurrency),
+		Priority:    input.Priority,
+		Status:      StatusActive,
+		Schedulable: true,
+	}
+	if err := ValidateQuotaResetConfig(account.Extra); err != nil {
+		return nil, err
+	}
+	ComputeQuotaResetAt(account.Extra)
+	NormalizeFixedQuotaWindows(account.Extra)
+	if input.ExpiresAt != nil && *input.ExpiresAt > 0 {
+		expiresAt := time.Unix(*input.ExpiresAt, 0)
+		account.ExpiresAt = &expiresAt
+	}
+	if input.AutoPauseOnExpired != nil {
+		account.AutoPauseOnExpired = *input.AutoPauseOnExpired
+	} else {
+		account.AutoPauseOnExpired = true
+	}
+	if input.RateMultiplier != nil {
+		if *input.RateMultiplier < 0 {
+			return nil, errors.New("rate_multiplier must be >= 0")
+		}
+		account.RateMultiplier = input.RateMultiplier
+	}
+	if input.LoadFactor != nil && *input.LoadFactor > 0 {
+		if *input.LoadFactor > 10000 {
+			return nil, errors.New("load_factor must be <= 10000")
+		}
+		account.LoadFactor = input.LoadFactor
+	}
+	return account, nil
+}
+
 func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error) {
 	// 绑定分组
 	groupIDs := input.GroupIDs
@@ -3226,47 +3271,9 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		}
 	}
 
-	account := &Account{
-		Name:        input.Name,
-		Notes:       normalizeAccountNotes(input.Notes),
-		Platform:    input.Platform,
-		Type:        input.Type,
-		Credentials: input.Credentials,
-		Extra:       input.Extra,
-		ProxyID:     input.ProxyID,
-		Concurrency: normalizeAccountConcurrency(input.Platform, input.Type, input.Concurrency),
-		Priority:    input.Priority,
-		Status:      StatusActive,
-		Schedulable: true,
-	}
-	// 预计算固定时间重置的下次重置时间
-	if account.Extra != nil {
-		if err := ValidateQuotaResetConfig(account.Extra); err != nil {
-			return nil, err
-		}
-		ComputeQuotaResetAt(account.Extra)
-		NormalizeFixedQuotaWindows(account.Extra)
-	}
-	if input.ExpiresAt != nil && *input.ExpiresAt > 0 {
-		expiresAt := time.Unix(*input.ExpiresAt, 0)
-		account.ExpiresAt = &expiresAt
-	}
-	if input.AutoPauseOnExpired != nil {
-		account.AutoPauseOnExpired = *input.AutoPauseOnExpired
-	} else {
-		account.AutoPauseOnExpired = true
-	}
-	if input.RateMultiplier != nil {
-		if *input.RateMultiplier < 0 {
-			return nil, errors.New("rate_multiplier must be >= 0")
-		}
-		account.RateMultiplier = input.RateMultiplier
-	}
-	if input.LoadFactor != nil && *input.LoadFactor > 0 {
-		if *input.LoadFactor > 10000 {
-			return nil, errors.New("load_factor must be <= 10000")
-		}
-		account.LoadFactor = input.LoadFactor
+	account, err := buildAccountForCreate(input, input.Extra)
+	if err != nil {
+		return nil, err
 	}
 	if err := s.accountRepo.Create(ctx, account); err != nil {
 		return nil, err
@@ -3313,6 +3320,8 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		return nil, err
 	}
 	wasOveragesEnabled := account.IsOveragesEnabled()
+	previousOllamaUsageIdentity := ollamaCloudUsageIdentity(account)
+	previousExtra := account.Extra
 
 	if input.Name != "" {
 		account.Name = input.Name
@@ -3331,13 +3340,14 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	// Extra 使用 map：需要区分“未提供(nil)”与“显式清空({})”。
 	// 关闭配额限制时前端会删除 quota_* 键并提交 extra:{}，此时也必须落库。
 	if input.Extra != nil {
+		inputExtra := cloneWithoutOllamaCloudUsageManagedExtra(input.Extra)
 		// 保留配额用量字段，防止编辑账号时意外重置
 		for _, key := range []string{"quota_used", "quota_daily_used", "quota_daily_start", "quota_weekly_used", "quota_weekly_start"} {
 			if v, ok := account.Extra[key]; ok {
-				input.Extra[key] = v
+				inputExtra[key] = v
 			}
 		}
-		account.Extra = input.Extra
+		account.Extra = inputExtra
 		if account.Platform == PlatformAntigravity && wasOveragesEnabled && !account.IsOveragesEnabled() {
 			delete(account.Extra, "antigravity_credits_overages") // 清理旧版 overages 运行态
 			// 清除 AICredits 限流 key
@@ -3402,6 +3412,17 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	if input.AutoPauseOnExpired != nil {
 		account.AutoPauseOnExpired = *input.AutoPauseOnExpired
 	}
+	if account.Extra == nil {
+		account.Extra = make(map[string]any)
+	}
+	if previousOllamaUsageIdentity != nil &&
+		reflect.DeepEqual(previousOllamaUsageIdentity, ollamaCloudUsageIdentity(account)) {
+		preserveOllamaCloudUsageManagedExtra(previousExtra, account.Extra)
+	} else {
+		for _, key := range ollamaCloudUsageManagedExtraKeys {
+			delete(account.Extra, key)
+		}
+	}
 
 	// 先验证分组是否存在（在任何写操作之前）
 	if input.GroupIDs != nil {
@@ -3442,7 +3463,11 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 	if len(updates) == 0 {
 		return nil
 	}
-	return s.accountRepo.UpdateExtra(ctx, id, updates)
+	filtered := cloneWithoutOllamaCloudUsageManagedExtra(updates)
+	if len(filtered) == 0 {
+		return nil
+	}
+	return s.accountRepo.UpdateExtra(ctx, id, filtered)
 }
 
 // BulkUpdateAccounts updates multiple accounts in one request.
@@ -3509,7 +3534,7 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 	// Prepare bulk updates for columns and JSONB fields.
 	repoUpdates := AccountBulkUpdate{
 		Credentials: input.Credentials,
-		Extra:       input.Extra,
+		Extra:       cloneWithoutOllamaCloudUsageManagedExtra(input.Extra),
 	}
 	if input.Name != "" {
 		repoUpdates.Name = &input.Name

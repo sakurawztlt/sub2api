@@ -213,7 +213,7 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		Type:                    a.Type,
 		Credentials:             redactedCreds,
 		CredentialsStatus:       credsStatus,
-		Extra:                   a.Extra,
+		Extra:                   redactAccountManagedExtra(a.Extra),
 		ProxyID:                 a.ProxyID,
 		ProxyFallbackOriginID:   a.ProxyFallbackOriginID,
 		ProxyFallbackOriginName: a.ProxyFallbackOriginName,
@@ -238,6 +238,7 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		SessionWindowEnd:        a.SessionWindowEnd,
 		SessionWindowStatus:     a.SessionWindowStatus,
 		GroupIDs:                a.GroupIDs,
+		OllamaCloudUsage:        service.OllamaCloudUsageStateFromAccount(a),
 	}
 
 	// 提取 5h 窗口费用控制和会话数量控制配置（仅 Anthropic OAuth/SetupToken 账号有效）
@@ -366,6 +367,24 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		}
 	}
 
+	return out
+}
+
+func redactAccountManagedExtra(extra map[string]any) map[string]any {
+	if extra == nil {
+		return nil
+	}
+	out := make(map[string]any, len(extra))
+	for key, value := range extra {
+		switch key {
+		case service.OllamaCloudUsageSessionExtraKey,
+			service.OllamaCloudUsageAutoRefreshExtraKey,
+			service.OllamaCloudUsageSnapshotExtraKey:
+			continue
+		default:
+			out[key] = value
+		}
+	}
 	return out
 }
 

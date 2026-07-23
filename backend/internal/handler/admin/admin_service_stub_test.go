@@ -35,6 +35,7 @@ type stubAdminService struct {
 	updateAccountErr                    error
 	bulkUpdateAccountErr                error
 	checkMixedErr                       error
+	getAccountResult                    *service.Account
 	lastMixedCheck                      struct {
 		accountID int64
 		platform  string
@@ -453,6 +454,9 @@ func (s *stubAdminService) ListOpenAISchedulableAccountsForSchedulerScore(_ cont
 }
 
 func (s *stubAdminService) GetAccount(ctx context.Context, id int64) (*service.Account, error) {
+	if s.getAccountResult != nil {
+		return s.getAccountResult, nil
+	}
 	account := service.Account{ID: id, Name: "account", Status: service.StatusActive}
 	return &account, nil
 }

@@ -41,7 +41,9 @@ func ProvideAdminHandlers(
 	paymentHandler *admin.PaymentHandler,
 	affiliateHandler *admin.AffiliateHandler,
 	trafficCaptureHandler *admin.TrafficCaptureHandler,
+	ollamaCloudUsage *service.OllamaCloudUsageService,
 ) *AdminHandlers {
+	accountHandler.SetOllamaCloudUsageService(ollamaCloudUsage)
 	return &AdminHandlers{
 		Dashboard:              dashboardHandler,
 		User:                   userHandler,
@@ -81,6 +83,27 @@ func ProvideAdminHandlers(
 // ProvideTrafficCaptureHandler — wire 注入. service 那边 ProvideTrafficCaptureService 已注 ent.Client.
 func ProvideTrafficCaptureHandler(svc *service.TrafficCaptureService) *admin.TrafficCaptureHandler {
 	return admin.NewTrafficCaptureHandler(svc)
+}
+
+// ProvideAdminSettingHandler makes the optional user attribute dependency explicit for Wire.
+func ProvideAdminSettingHandler(
+	settingService *service.SettingService,
+	emailService *service.EmailService,
+	turnstileService *service.TurnstileService,
+	opsService *service.OpsService,
+	paymentConfigService *service.PaymentConfigService,
+	paymentService *service.PaymentService,
+	userAttributeService *service.UserAttributeService,
+) *admin.SettingHandler {
+	return admin.NewSettingHandler(
+		settingService,
+		emailService,
+		turnstileService,
+		opsService,
+		paymentConfigService,
+		paymentService,
+		userAttributeService,
+	)
 }
 
 // ProvideSystemHandler creates admin.SystemHandler with UpdateService
@@ -169,7 +192,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewProxyHandler,
 	admin.NewRedeemHandler,
 	admin.NewPromoHandler,
-	admin.NewSettingHandler,
+	ProvideAdminSettingHandler,
 	admin.NewOpsHandler,
 	ProvideSystemHandler,
 	admin.NewSubscriptionHandler,
@@ -185,6 +208,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewContentModerationHandler,
 	admin.NewPaymentHandler,
 	admin.NewAffiliateHandler,
+	ProvideTrafficCaptureHandler,
 
 	// AdminHandlers and Handlers constructors
 	ProvideAdminHandlers,
