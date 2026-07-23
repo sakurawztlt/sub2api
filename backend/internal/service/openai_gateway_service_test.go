@@ -375,6 +375,56 @@ func TestOpenAIGatewayService_ExtractSessionID_UsesXSessionAffinityFallback(t *t
 	require.Equal(t, "affinity-456", svc.ExtractSessionID(c, []byte(`{}`)))
 }
 
+func TestOpenAIGatewayService_GenerateSessionHash_UsesOpenCodeAndCodeBuddyHeaders(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	svc := &OpenAIGatewayService{}
+
+	for _, tc := range []struct {
+		name   string
+		header string
+		value  string
+	}{
+		{name: "OpenCode session id", header: openCodeSessionIDHeader, value: "opencode-session-id"},
+		{name: "OpenCode native session", header: openCodeNativeSessionHeader, value: "opencode-native-session"},
+		{name: "CodeBuddy conversation", header: codeBuddyConversationHeader, value: "codebuddy-conversation"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			c.Request.Header.Set(tc.header, tc.value)
+
+			require.Equal(t, tc.value, svc.ExtractSessionID(c, []byte(`{}`)))
+			require.Equal(t, fmt.Sprintf("%016x", xxhash.Sum64String(tc.value)), svc.GenerateSessionHash(c, []byte(`{}`)))
+		})
+	}
+}
+
+func TestOpenAIGatewayService_GenerateSessionHash_PreservesLocalSessionPriority(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Request.Header.Set("conversation_id", "conversation-wins")
+	c.Request.Header.Set("session_id", "session-loses")
+	c.Request.Header.Set(openCodeSessionIDHeader, "opencode-loses")
+	c.Request.Header.Set("x-session-affinity", "affinity-loses")
+
+	svc := &OpenAIGatewayService{}
+	require.Equal(t, fmt.Sprintf("%016x", xxhash.Sum64String("conversation-wins")), svc.GenerateSessionHash(c, []byte(`{"prompt_cache_key":"body-loses"}`)))
+}
+
+func TestOpenAIGatewayService_GenerateSessionHash_PromptCacheKeyStillBeatsAffinity(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Request.Header.Set("x-session-affinity", "affinity-loses")
+
+	svc := &OpenAIGatewayService{}
+	require.Equal(t, fmt.Sprintf("%016x", xxhash.Sum64String("prompt-cache-wins")), svc.GenerateSessionHash(c, []byte(`{"prompt_cache_key":"prompt-cache-wins"}`)))
+}
+
 func TestOpenAIGatewayService_GenerateSessionHash_UsesXXHash64(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()

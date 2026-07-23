@@ -1411,6 +1411,32 @@ type AnthropicMessageSessionContext struct {
 	SessionHash    string
 }
 
+const (
+	openCodeSessionIDHeader     = "X-Session-Id"
+	openCodeNativeSessionHeader = "X-OpenCode-Session"
+	codeBuddyConversationHeader = "X-Conversation-ID"
+)
+
+// extractOpenAIExtendedSessionHeader resolves conversation-scoped identifiers
+// used by OpenCode and CodeBuddy. Keep the existing conversation_id/session_id
+// and prompt_cache_key priority unchanged; these headers only fill the gap
+// before the weaker x-session-affinity fallback.
+func extractOpenAIExtendedSessionHeader(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	for _, header := range []string{
+		openCodeSessionIDHeader,
+		openCodeNativeSessionHeader,
+		codeBuddyConversationHeader,
+	} {
+		if sessionID := strings.TrimSpace(c.GetHeader(header)); sessionID != "" {
+			return sessionID
+		}
+	}
+	return ""
+}
+
 // ExtractSessionID extracts the raw session ID from headers or body without hashing.
 // Used by ForwardAsAnthropic to pass as prompt_cache_key for upstream cache.
 func (s *OpenAIGatewayService) ExtractSessionID(c *gin.Context, body []byte) string {
@@ -1476,6 +1502,9 @@ func extractOpenAIStickySessionSignal(c *gin.Context, body []byte) string {
 		if sessionID := strings.TrimSpace(c.GetHeader("session_id")); sessionID != "" {
 			return sessionID
 		}
+		if extendedSessionID := extractOpenAIExtendedSessionHeader(c); extendedSessionID != "" {
+			return extendedSessionID
+		}
 	}
 	if len(body) > 0 {
 		if promptCacheKey := strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String()); promptCacheKey != "" {
@@ -1504,6 +1533,9 @@ func explicitOpenAISessionID(c *gin.Context, body []byte) string {
 	if sessionID == "" {
 		sessionID = strings.TrimSpace(c.GetHeader("conversation_id"))
 	}
+	if sessionID == "" {
+		sessionID = extractOpenAIExtendedSessionHeader(c)
+	}
 	if sessionID == "" && len(body) > 0 {
 		sessionID = strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String())
 	}
@@ -1529,9 +1561,10 @@ func (s *OpenAIGatewayService) GenerateExplicitSessionHash(c *gin.Context, body 
 // Priority:
 //  1. Header: conversation_id
 //  2. Header: session_id
-//  3. Body:   prompt_cache_key (opencode)
-//  4. Header: x-session-affinity
-//  5. Body:   content-based fallback (model + system + tools + first user message)
+//  3. Header: x-session-id / x-opencode-session / x-conversation-id
+//  4. Body:   prompt_cache_key (opencode)
+//  5. Header: x-session-affinity
+//  6. Body:   content-based fallback (model + system + tools + first user message)
 //
 // Why conversation_id comes first:
 // Codex clients can keep a long-lived session_id while starting a brand-new
