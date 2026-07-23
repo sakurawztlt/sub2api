@@ -794,6 +794,13 @@ func TestHandleGrokAccountUpstreamErrorTempUnschedulesReadinessStates(t *testing
 			wantMaxCooldown: 30*time.Minute + time.Second,
 		},
 		{
+			name:            "payment required",
+			status:          http.StatusPaymentRequired,
+			wantReason:      "grok payment required",
+			wantMinCooldown: 30*time.Minute - time.Second,
+			wantMaxCooldown: 30*time.Minute + time.Second,
+		},
+		{
 			name:            "rate limited retry after",
 			status:          http.StatusTooManyRequests,
 			headers:         http.Header{"Retry-After": []string{"45"}},
@@ -820,6 +827,26 @@ func TestHandleGrokAccountUpstreamErrorTempUnschedulesReadinessStates(t *testing
 			require.True(t, repo.lastTempUnschedUntil.Before(before.Add(tt.wantMaxCooldown)))
 		})
 	}
+}
+
+func TestHandleGrokAccountUpstreamError402RecoversAfterCooldownExpiry(t *testing.T) {
+	account := &Account{
+		ID: 610, Platform: PlatformGrok, Type: AccountTypeOAuth,
+		Status: StatusActive, Schedulable: true,
+	}
+	repo := &grokQuotaAccountRepo{}
+	svc := &OpenAIGatewayService{accountRepo: repo}
+
+	svc.handleGrokAccountUpstreamError(context.Background(), account, http.StatusPaymentRequired, nil, nil)
+	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))
+	require.Equal(t, 1, repo.tempUnschedCalls)
+
+	expired := time.Now().Add(-time.Second)
+	account.TempUnschedulableUntil = &expired
+	svc.openaiAccountRuntimeBlockUntil.Store(account.ID, expired)
+
+	require.False(t, svc.isOpenAIAccountRuntimeBlocked(account))
+	require.True(t, account.IsSchedulable())
 }
 
 func TestHandleGrokAccountUpstreamErrorDoesNotShortenExistingPause(t *testing.T) {
