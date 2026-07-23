@@ -161,6 +161,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	}
 	if compatReplayGuardEnabled && account.Type != AccountTypeOAuth {
 		appendOpenAICompatClaudeCodeTodoGuard(responsesReq)
+		appendOpenAICompatDeferredToolGuard(responsesReq)
 	}
 
 	logFields := []zap.Field{
@@ -253,6 +254,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		ensureCodexOAuthInstructionsField(reqBody)
 		if shouldAutoInjectPromptCacheKeyForCompat(upstreamModel) {
 			appendOpenAICompatClaudeCodeTodoGuardToRequestBody(reqBody)
+			appendOpenAICompatDeferredToolGuardToRequestBody(reqBody)
 		}
 		if codexResult.NormalizedModel != "" {
 			upstreamModel = codexResult.NormalizedModel
