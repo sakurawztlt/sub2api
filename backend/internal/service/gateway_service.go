@@ -8785,8 +8785,9 @@ func PlatformFromAPIKey(apiKey *APIKey) string {
 }
 
 // QuotaPlatform 返回 user×platform 配额计量使用的平台标识。
-// 强制平台路由（如 /antigravity）优先按 ctx 中的 ForcePlatform 计量，否则回退到
-// APIKey 关联 Group 的平台。
+// 强制平台路由（如 /antigravity）优先按 ctx 中的 ForcePlatform 计量。组合分组
+// 必须使用请求已经解析出的具体平台；尚未完成解析时返回空，避免把 composite
+// 当成可计量的平台写入配额。普通分组回退到 APIKey 关联 Group 的平台。
 //
 // 注意：必须用带 ForcePlatform 的请求 context 调用（如 handler 的 c.Request.Context()）。
 // 后扣运行在 worker 池的 background ctx 上没有 ForcePlatform，因此后扣平台由 handler
@@ -8795,7 +8796,14 @@ func QuotaPlatform(ctx context.Context, apiKey *APIKey) string {
 	if fp, ok := ctx.Value(ctxkey.ForcePlatform).(string); ok && fp != "" {
 		return fp
 	}
-	return PlatformFromAPIKey(apiKey)
+	platform := PlatformFromAPIKey(apiKey)
+	if platform != PlatformComposite {
+		return platform
+	}
+	if resolved, ok := ResolvedTargetPlatformFromContext(ctx); ok {
+		return resolved
+	}
+	return ""
 }
 
 func (p *postUsageBillingParams) shouldDeductAPIKeyQuota() bool {
