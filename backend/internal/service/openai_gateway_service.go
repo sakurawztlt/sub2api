@@ -1617,14 +1617,30 @@ func normalizeOpenAICompatiblePlatform(platform string) string {
 	return PlatformOpenAI
 }
 
-func noAvailableOpenAISelectionError(requestedModel string, compactBlocked bool) error {
+func noAvailableOpenAISelectionError(requestedModel string, compactBlocked bool, details string) error {
 	if compactBlocked {
 		return ErrNoAvailableCompactAccounts
 	}
+	message := "no available OpenAI accounts"
 	if requestedModel != "" {
-		return fmt.Errorf("no available OpenAI accounts supporting model: %s", requestedModel)
+		message = fmt.Sprintf("no available OpenAI accounts supporting model: %s", requestedModel)
 	}
-	return errors.New("no available OpenAI accounts")
+	if details != "" {
+		message += " (" + details + ")"
+	}
+	return openAINoAvailableSelectionError{message: message}
+}
+
+type openAINoAvailableSelectionError struct {
+	message string
+}
+
+func (e openAINoAvailableSelectionError) Error() string {
+	return e.message
+}
+
+func (e openAINoAvailableSelectionError) Unwrap() error {
+	return ErrNoAvailableAccounts
 }
 
 // openAICompactSupportTier classifies an OpenAI account by compact capability.
@@ -2085,7 +2101,7 @@ func (s *OpenAIGatewayService) selectOpenAICompatibleAccountForModelWithExclusio
 				return recovered, nil
 			}
 		}
-		return nil, noAvailableOpenAISelectionError(requestedModel, compactBlocked)
+		return nil, noAvailableOpenAISelectionError(requestedModel, compactBlocked, "")
 	}
 
 	hydrated, err := s.hydrateSelectedAccount(ctx, selected)
