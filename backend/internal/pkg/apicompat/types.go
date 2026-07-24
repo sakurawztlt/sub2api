@@ -30,7 +30,6 @@ type AnthropicRequest struct {
 	// user_id，进而导致请求被归类为第三方 app。
 	Metadata     json.RawMessage        `json:"metadata,omitempty"`
 	OutputConfig *AnthropicOutputConfig `json:"output_config,omitempty"`
-	Container    string                 `json:"container,omitempty"`
 }
 
 // AnthropicOutputConfig controls output generation parameters.
@@ -159,13 +158,6 @@ type AnthropicResponse struct {
 	StopReason   *string                 `json:"stop_reason"`
 	StopSequence *string                 `json:"stop_sequence,omitempty"`
 	Usage        AnthropicUsage          `json:"usage"`
-	Container    *AnthropicContainer     `json:"container,omitempty"`
-}
-
-// AnthropicContainer identifies the sandbox used by hosted code execution.
-type AnthropicContainer struct {
-	ID        string `json:"id"`
-	ExpiresAt string `json:"expires_at"`
 }
 
 func AnthropicStopReasonPtr(value string) *string {
@@ -199,8 +191,7 @@ type AnthropicUsage struct {
 // omitempty so the wire format is byte-identical to a regular non-search
 // response. Only set when WebSearchRequestCount > 0 at finalisation.
 type AnthropicServerToolUsage struct {
-	WebSearchRequests     int `json:"web_search_requests,omitempty"`
-	CodeExecutionRequests int `json:"code_execution_requests,omitempty"`
+	WebSearchRequests int `json:"web_search_requests"`
 }
 
 // ---------------------------------------------------------------------------

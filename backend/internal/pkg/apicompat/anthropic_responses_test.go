@@ -3217,22 +3217,9 @@ func TestStreamingUsage_WebSearchRequestLimit(t *testing.T) {
 
 func TestCodeExecutionFunctionCall_StreamsAsServerToolUse(t *testing.T) {
 	state := NewResponsesEventToAnthropicState()
-	state.EnableCodeExecutionProtocol("")
+	state.MessageStartSent = true
 
 	events := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
-		Type: "response.created",
-		Response: &ResponsesResponse{
-			ID:    "resp_code",
-			Model: "gpt-5.5",
-		},
-	}, state)
-	require.Len(t, events, 1)
-	require.NotNil(t, events[0].Message)
-	require.NotNil(t, events[0].Message.Container)
-	assert.Regexp(t, `^container_[A-Za-z0-9_-]{22}$`, events[0].Message.Container.ID)
-	assert.NotEmpty(t, events[0].Message.Container.ExpiresAt)
-
-	events = ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
 		Type:        "response.output_item.added",
 		OutputIndex: 0,
 		Item: &ResponsesOutput{
@@ -3267,7 +3254,7 @@ func TestCodeExecutionFunctionCall_StreamsAsServerToolUse(t *testing.T) {
 	require.NotNil(t, events[1].ContentBlock)
 	assert.Equal(t, "code_execution_tool_result", events[1].ContentBlock.Type)
 	assert.Equal(t, toolUseID, events[1].ContentBlock.ToolUseID)
-	assertCodeExecutionResultContent(t, events[1].ContentBlock.Content)
+	assert.Contains(t, string(events[1].ContentBlock.Content), "HELLO_CHECK")
 
 	events = ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
 		Type:     "response.completed",
@@ -3280,9 +3267,6 @@ func TestCodeExecutionFunctionCall_StreamsAsServerToolUse(t *testing.T) {
 	assert.Equal(t, "HELLO_CHECK", events[1].Delta.Text)
 	assert.Equal(t, "content_block_stop", events[2].Type)
 	assert.Equal(t, "end_turn", events[3].Delta.StopReason)
-	require.NotNil(t, events[3].Usage)
-	require.NotNil(t, events[3].Usage.ServerToolUse)
-	assert.Equal(t, 1, events[3].Usage.ServerToolUse.CodeExecutionRequests)
 }
 
 func TestServerToolUseIDFromResponsesItem_IsStableOpaqueAnthropicShape(t *testing.T) {
@@ -3320,31 +3304,6 @@ func TestCodeExecutionFallbackArgsFromAnthropicRequest(t *testing.T) {
 	assert.JSONEq(t, `{"code":"print(\"HELLO_CHECK\")"}`, args)
 }
 
-func TestCodeExecutionProtocolFromAnthropicRequest(t *testing.T) {
-	body := []byte(`{
-		"model":"claude-opus-4-8",
-		"container":"container_existing",
-		"tools":[{"type":"code_execution_20250522","name":"code_execution"}],
-		"messages":[{"role":"user","content":"run code"}]
-	}`)
-
-	enabled, containerID := CodeExecutionProtocolFromAnthropicRequest(body)
-	assert.True(t, enabled)
-	assert.Equal(t, "container_existing", containerID)
-}
-
-func TestCodeExecutionProtocolFromAnthropicRequest_NoHostedTool(t *testing.T) {
-	body := []byte(`{
-		"model":"claude-opus-4-8",
-		"tools":[{"name":"get_weather","input_schema":{"type":"object"}}],
-		"messages":[{"role":"user","content":"weather"}]
-	}`)
-
-	enabled, containerID := CodeExecutionProtocolFromAnthropicRequest(body)
-	assert.False(t, enabled)
-	assert.Empty(t, containerID)
-}
-
 func TestCodeExecutionFunctionCall_EmptyArgsUsesRequestFallback(t *testing.T) {
 	state := NewResponsesEventToAnthropicState()
 	state.MessageStartSent = true
@@ -3374,7 +3333,7 @@ func TestCodeExecutionFunctionCall_EmptyArgsUsesRequestFallback(t *testing.T) {
 	assert.Equal(t, "content_block_stop", events[1].Type)
 	require.NotNil(t, events[2].ContentBlock)
 	assert.Equal(t, "code_execution_tool_result", events[2].ContentBlock.Type)
-	assertCodeExecutionResultContent(t, events[2].ContentBlock.Content)
+	assert.Contains(t, string(events[2].ContentBlock.Content), "HELLO_CHECK")
 }
 
 func TestCodeExecutionFunctionCall_SynthesizesResultFromCmdDelta(t *testing.T) {
@@ -3406,7 +3365,7 @@ func TestCodeExecutionFunctionCall_SynthesizesResultFromCmdDelta(t *testing.T) {
 	require.Len(t, events, 3)
 	require.NotNil(t, events[1].ContentBlock)
 	assert.Equal(t, "code_execution_tool_result", events[1].ContentBlock.Type)
-	assertCodeExecutionResultContent(t, events[1].ContentBlock.Content)
+	assert.Contains(t, string(events[1].ContentBlock.Content), "HELLO_CHECK")
 }
 
 func TestResponsesToAnthropic_CodeExecutionIsServerTool(t *testing.T) {
@@ -3430,12 +3389,7 @@ func TestResponsesToAnthropic_CodeExecutionIsServerTool(t *testing.T) {
 	assert.Equal(t, "text", anth.Content[2].Type)
 	assert.Equal(t, "HELLO_CHECK", anth.Content[2].Text)
 	assert.Equal(t, "end_turn", AnthropicStopReasonString(anth.StopReason))
-	assertCodeExecutionResultContent(t, anth.Content[1].Content)
-	require.NotNil(t, anth.Container)
-	assert.Regexp(t, `^container_[A-Za-z0-9_-]{22}$`, anth.Container.ID)
-	assert.NotEmpty(t, anth.Container.ExpiresAt)
-	require.NotNil(t, anth.Usage.ServerToolUse)
-	assert.Equal(t, 1, anth.Usage.ServerToolUse.CodeExecutionRequests)
+	assert.Contains(t, string(anth.Content[1].Content), "HELLO_CHECK")
 }
 
 func TestResponsesToAnthropic_CodeExecutionCmdIsServerToolResult(t *testing.T) {
@@ -3458,18 +3412,7 @@ func TestResponsesToAnthropic_CodeExecutionCmdIsServerToolResult(t *testing.T) {
 	assert.Equal(t, "code_execution_tool_result", anth.Content[1].Type)
 	assert.Equal(t, "text", anth.Content[2].Type)
 	assert.Equal(t, "HELLO_CHECK", anth.Content[2].Text)
-	assertCodeExecutionResultContent(t, anth.Content[1].Content)
-}
-
-func assertCodeExecutionResultContent(t *testing.T, content json.RawMessage) {
-	t.Helper()
-	assert.JSONEq(t, `{
-		"type":"code_execution_result",
-		"stdout":"HELLO_CHECK\n",
-		"stderr":"",
-		"return_code":0,
-		"content":[]
-	}`, string(content))
+	assert.Contains(t, string(anth.Content[1].Content), "HELLO_CHECK")
 }
 
 func TestResponsesToAnthropic_CodeExecutionDoesNotDuplicateExplicitFinalText(t *testing.T) {

@@ -8,7 +8,6 @@ import (
 
 func TestComputeStreamReqMeta_DerivesCodeExecutionFallbackArgs(t *testing.T) {
 	body := []byte(`{
-		"container":"container_existing",
 		"tools":[{"name":"code_execution","type":"code_execution_20250522"}],
 		"messages":[{
 			"role":"user",
@@ -19,8 +18,6 @@ func TestComputeStreamReqMeta_DerivesCodeExecutionFallbackArgs(t *testing.T) {
 	meta := computeStreamReqMeta(nil, body, "cache-key", "", "", "", 12)
 
 	assert.JSONEq(t, `{"code":"print(\"HELLO_CHECK\")"}`, meta.CodeExecutionFallbackArgs)
-	assert.True(t, meta.CodeExecutionEnabled)
-	assert.Equal(t, "container_existing", meta.CodeExecutionContainerID)
 	assert.Equal(t, 1, meta.ToolsCount)
 	assert.Equal(t, 1, meta.MessagesCount)
 }

@@ -32,42 +32,6 @@ func generateAnthropicMessageID() string {
 	return "msg_01" + base64.RawURLEncoding.EncodeToString(b)
 }
 
-func generateAnthropicContainerID() string {
-	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return "container_" + base64.RawURLEncoding.EncodeToString(b)
-}
-
-func newAnthropicCodeExecutionContainer(existingID string) *AnthropicContainer {
-	id := strings.TrimSpace(existingID)
-	if id == "" {
-		id = generateAnthropicContainerID()
-	}
-	return &AnthropicContainer{
-		ID:        id,
-		ExpiresAt: time.Now().UTC().Add(5 * time.Minute).Format(time.RFC3339),
-	}
-}
-
-// CodeExecutionProtocolFromAnthropicRequest reports whether the request
-// declares Anthropic's hosted code execution tool and preserves an optional
-// continuation container id.
-func CodeExecutionProtocolFromAnthropicRequest(body []byte) (bool, string) {
-	if len(body) == 0 {
-		return false, ""
-	}
-	var req AnthropicRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		return false, ""
-	}
-	for _, tool := range req.Tools {
-		if isCodeExecutionToolName(tool.Name) || strings.HasPrefix(strings.ToLower(strings.TrimSpace(tool.Type)), "code_execution_") {
-			return true, strings.TrimSpace(req.Container)
-		}
-	}
-	return false, ""
-}
-
 // ---------------------------------------------------------------------------
 // Non-streaming: ResponsesResponse → AnthropicResponse
 // ---------------------------------------------------------------------------
@@ -101,7 +65,6 @@ func ResponsesToAnthropicWithUsageOptions(resp *ResponsesResponse, model string,
 
 	var blocks []AnthropicContentBlock
 	webSearchCount := 0
-	codeExecutionCount := 0
 
 	for i, item := range resp.Output {
 		switch item.Type {
@@ -129,7 +92,6 @@ func ResponsesToAnthropicWithUsageOptions(resp *ResponsesResponse, model string,
 			}
 		case "function_call":
 			if isCodeExecutionToolName(item.Name) {
-				codeExecutionCount++
 				toolUseID := serverToolUseIDFromResponsesItem(&item)
 				blocks = append(blocks, AnthropicContentBlock{
 					Type:  "server_tool_use",
@@ -188,9 +150,6 @@ func ResponsesToAnthropicWithUsageOptions(resp *ResponsesResponse, model string,
 		blocks = append(blocks, AnthropicContentBlock{Type: "text", Text: ""})
 	}
 	out.Content = blocks
-	if codeExecutionCount > 0 {
-		out.Container = newAnthropicCodeExecutionContainer("")
-	}
 
 	out.StopReason = AnthropicStopReasonPtr(responsesStatusToAnthropicStopReason(resp.Status, resp.IncompleteDetails, blocks))
 
@@ -216,11 +175,8 @@ func ResponsesToAnthropicWithUsageOptions(resp *ResponsesResponse, model string,
 			CacheCreationInputTokens: creation,
 			CacheReadInputTokens:     read,
 		}
-	}
-	if webSearchCount > 0 || codeExecutionCount > 0 {
-		out.Usage.ServerToolUse = &AnthropicServerToolUsage{
-			WebSearchRequests:     webSearchCount,
-			CodeExecutionRequests: codeExecutionCount,
+		if webSearchCount > 0 {
+			out.Usage.ServerToolUse = &AnthropicServerToolUsage{WebSearchRequests: webSearchCount}
 		}
 	}
 
@@ -503,13 +459,10 @@ func synthesizeSimpleCodeExecutionToolResult(toolUseID, rawArgs string) Anthropi
 }
 
 func codeExecutionToolResultBlock(toolUseID, stdout string) AnthropicContentBlock {
-	content, err := json.Marshal(map[string]any{
-		"type":        "code_execution_result",
-		"stdout":      stdout,
-		"stderr":      "",
-		"return_code": 0,
-		"content":     []any{},
-	})
+	content, err := json.Marshal([]map[string]string{{
+		"type": "text",
+		"text": stdout,
+	}})
 	if err != nil {
 		return AnthropicContentBlock{}
 	}
@@ -718,8 +671,6 @@ type ResponsesEventToAnthropicState struct {
 
 	CodeExecutionFallbackArgs string // request-derived fallback for empty hosted code_execution args.
 	PendingCodeExecutionText  string // stdout from hosted code_execution, emitted at completion only if upstream sends no final text.
-	CodeExecutionRequestCount int
-	CodeExecutionContainer    *AnthropicContainer
 
 	// OutputIndexToBlockIdx maps Responses output_index → Anthropic content block index.
 	OutputIndexToBlockIdx map[int]int
@@ -821,10 +772,6 @@ func (s *ResponsesEventToAnthropicState) SetCodeExecutionFallbackArgs(raw string
 		return
 	}
 	s.CodeExecutionFallbackArgs = raw
-}
-
-func (s *ResponsesEventToAnthropicState) EnableCodeExecutionProtocol(containerID string) {
-	s.CodeExecutionContainer = newAnthropicCodeExecutionContainer(containerID)
 }
 
 // NewResponsesEventToAnthropicState returns an initialised stream state.
@@ -934,11 +881,8 @@ func FinalizeResponsesAnthropicStream(state *ResponsesEventToAnthropicState) []A
 		CacheCreationInputTokens: creation,
 		CacheReadInputTokens:     read,
 	}
-	if state.WebSearchRequestCount > 0 || state.CodeExecutionRequestCount > 0 {
-		usage.ServerToolUse = &AnthropicServerToolUsage{
-			WebSearchRequests:     state.WebSearchRequestCount,
-			CodeExecutionRequests: state.CodeExecutionRequestCount,
-		}
+	if state.WebSearchRequestCount > 0 {
+		usage.ServerToolUse = &AnthropicServerToolUsage{WebSearchRequests: state.WebSearchRequestCount}
 	}
 	events = append(events,
 		AnthropicStreamEvent{
@@ -1027,12 +971,11 @@ func resToAnthHandleCreated(evt *ResponsesStreamEvent, state *ResponsesEventToAn
 	return []AnthropicStreamEvent{{
 		Type: "message_start",
 		Message: &AnthropicResponse{
-			ID:        state.ResponseID,
-			Type:      "message",
-			Role:      "assistant",
-			Content:   []AnthropicContentBlock{},
-			Model:     state.Model,
-			Container: state.CodeExecutionContainer,
+			ID:      state.ResponseID,
+			Type:    "message",
+			Role:    "assistant",
+			Content: []AnthropicContentBlock{},
+			Model:   state.Model,
 			// Anthropic message_start explicitly carries stop_reason:null.
 			StopReason: nil,
 			Usage: AnthropicUsage{
@@ -1065,10 +1008,6 @@ func resToAnthHandleOutputItemAdded(evt *ResponsesStreamEvent, state *ResponsesE
 		state.ContentBlockOpen = true
 		state.CurrentToolIsServer = isCodeExecutionToolName(evt.Item.Name)
 		if state.CurrentToolIsServer {
-			state.CodeExecutionRequestCount++
-			if state.CodeExecutionContainer == nil {
-				state.CodeExecutionContainer = newAnthropicCodeExecutionContainer("")
-			}
 			state.CurrentBlockType = "server_tool_use"
 			state.CurrentToolUseID = serverToolUseIDFromResponsesItem(evt.Item)
 		} else {
@@ -1494,11 +1433,8 @@ func resToAnthHandleCompleted(evt *ResponsesStreamEvent, state *ResponsesEventTo
 		CacheCreationInputTokens: creation,
 		CacheReadInputTokens:     read,
 	}
-	if state.WebSearchRequestCount > 0 || state.CodeExecutionRequestCount > 0 {
-		usage.ServerToolUse = &AnthropicServerToolUsage{
-			WebSearchRequests:     state.WebSearchRequestCount,
-			CodeExecutionRequests: state.CodeExecutionRequestCount,
-		}
+	if state.WebSearchRequestCount > 0 {
+		usage.ServerToolUse = &AnthropicServerToolUsage{WebSearchRequests: state.WebSearchRequestCount}
 	}
 	events = append(events,
 		AnthropicStreamEvent{
