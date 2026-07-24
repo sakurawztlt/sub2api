@@ -50,6 +50,8 @@ func TestAppendOpenAICompatDeferredToolGuard_MatchingRequest(t *testing.T) {
 	assert.Equal(t, "developer", items[0].Role)
 	assert.Equal(t, "developer", items[1].Role)
 	assert.True(t, containsPlainOrJSONEscapedText(string(items[1].Content), openAICompatDeferredToolGuardMarker))
+	assert.True(t, containsPlainOrJSONEscapedText(string(items[1].Content), "batch compatible operations into the same Bash call when safe"))
+	assert.True(t, containsPlainOrJSONEscapedText(string(items[1].Content), "verify the result before replying"))
 	assert.Equal(t, "user", items[2].Role)
 	assert.Equal(t, 2, strings.Count(string(req.Input), "sub2api-deferred-tool-guard"))
 }
@@ -135,6 +137,7 @@ func TestAppendOpenAICompatDeferredToolGuardToRequestBody_MatchingRequest(t *tes
 	guard, ok := input[0].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "developer", guard["role"])
+	assert.True(t, inputContainsText(input, "complete the requested deliverable within the available tool turns"))
 }
 
 func TestApplyOpenAICompatOAuthMessagesBridgeGuards_PreservesDeferredToolLoadingContract(t *testing.T) {
@@ -176,6 +179,8 @@ func TestApplyOpenAICompatOAuthMessagesBridgeGuards_PreservesDeferredToolLoading
 	assert.True(t, inputContainsDeferredToolNotice(input))
 	assert.True(t, inputContainsText(input, openAICompatDeferredToolGuardMarker))
 	assert.True(t, inputContainsText(input, "Do not load task or todo tracking tools only for bookkeeping."))
+	assert.True(t, inputContainsText(input, "batch compatible operations into the same Bash call when safe"))
+	assert.True(t, inputContainsText(input, "verify the result before replying"))
 	assert.True(t, inputContainsText(input, openAICompatClaudeCodeTodoGuardMarker))
 	assert.True(t, requestBodyToolsSupportDirectImplementation(reqBody["tools"]))
 }
