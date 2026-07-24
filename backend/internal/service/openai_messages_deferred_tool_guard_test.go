@@ -137,7 +137,7 @@ func TestAppendOpenAICompatDeferredToolGuardToRequestBody_MatchingRequest(t *tes
 	assert.Equal(t, "developer", guard["role"])
 }
 
-func TestAppendOpenAICompatDeferredToolGuard_OAuthMessagesBridgeShape(t *testing.T) {
+func TestApplyOpenAICompatOAuthMessagesBridgeGuards_PreservesDeferredToolLoadingContract(t *testing.T) {
 	anthropicReq := &apicompat.AnthropicRequest{
 		Model:     "claude-opus-4-8",
 		MaxTokens: 64000,
@@ -169,14 +169,14 @@ func TestAppendOpenAICompatDeferredToolGuard_OAuthMessagesBridgeShape(t *testing
 		SkipDefaultInstructions: true,
 		PreserveToolCallIDs:     true,
 	})
-	require.True(t, appendOpenAICompatDeferredToolGuardToRequestBody(reqBody))
+	applyOpenAICompatOAuthMessagesBridgeGuards(reqBody)
 
-	transformed, err := json.Marshal(reqBody)
-	require.NoError(t, err)
-	assert.Contains(t, string(transformed), "sub2api-deferred-tool-guard")
-	assert.Contains(t, string(transformed), `"name":"ToolSearch"`)
-	assert.Contains(t, string(transformed), `"name":"Bash"`)
-	assert.Contains(t, string(transformed), `"name":"Write"`)
+	input, ok := reqBody["input"].([]any)
+	require.True(t, ok)
+	assert.True(t, inputContainsDeferredToolNotice(input))
+	assert.False(t, inputContainsText(input, openAICompatDeferredToolGuardMarker))
+	assert.True(t, inputContainsText(input, openAICompatClaudeCodeTodoGuardMarker))
+	assert.True(t, requestBodyToolsSupportDirectImplementation(reqBody["tools"]))
 }
 
 func TestAppendOpenAICompatClaudeCodeTodoGuard_IdempotentWithJSONEscaping(t *testing.T) {

@@ -253,8 +253,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		// so Codex SSE stops emitting "instructions: null" rejection paths.
 		ensureCodexOAuthInstructionsField(reqBody)
 		if shouldAutoInjectPromptCacheKeyForCompat(upstreamModel) {
-			appendOpenAICompatClaudeCodeTodoGuardToRequestBody(reqBody)
-			appendOpenAICompatDeferredToolGuardToRequestBody(reqBody)
+			applyOpenAICompatOAuthMessagesBridgeGuards(reqBody)
 		}
 		if codexResult.NormalizedModel != "" {
 			upstreamModel = codexResult.NormalizedModel
