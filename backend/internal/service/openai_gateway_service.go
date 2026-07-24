@@ -285,6 +285,8 @@ type streamReqMeta struct {
 	MessagesCount             int    // gjson 数 body.messages 长度
 	ToolsCount                int    // gjson 数 body.tools 长度
 	CodeExecutionFallbackArgs string // request-derived fallback for empty hosted code_execution args
+	CodeExecutionEnabled      bool   // request declares Anthropic hosted code_execution
+	CodeExecutionContainerID  string // optional continuation container from inbound request
 	PromptCacheKeySha256      string // sha256(promptCacheKey) hex 前 16 位
 	HasPreviousResponseID     bool
 

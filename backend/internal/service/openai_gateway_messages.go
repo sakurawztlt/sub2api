@@ -1474,6 +1474,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	state.Model = originalModel
 	state.SetWebSearchRequestLimit(webSearchRequestLimit)
 	state.SetCodeExecutionFallbackArgs(meta.CodeExecutionFallbackArgs)
+	if meta.CodeExecutionEnabled {
+		state.EnableCodeExecutionProtocol(meta.CodeExecutionContainerID)
+	}
 	state.SetExternalInputTokenEstimate(positiveIntHeader(c.Request, "X-GCR-Estimated-Tokens"))
 	// 2026-05-12 cctest profile 项 5 (codex audit): message_start.usage.input_tokens
 	// 不能是 0, 用客户请求 body 长度粗估 token (bytes/4). 真 Claude 这里报

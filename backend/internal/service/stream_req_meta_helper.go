@@ -28,12 +28,15 @@ func computeStreamReqMeta(
 	proxyURL string,
 	timeToHeadersMs int,
 ) streamReqMeta {
+	codeExecutionEnabled, codeExecutionContainerID := apicompat.CodeExecutionProtocolFromAnthropicRequest(body)
 	return streamReqMeta{
 		Account:                   account,
 		TimeToHeadersMs:           timeToHeadersMs,
 		MessagesCount:             countMessagesInBody(body),
 		ToolsCount:                countToolsInBody(body),
 		CodeExecutionFallbackArgs: apicompat.CodeExecutionFallbackArgsFromAnthropicRequest(body),
+		CodeExecutionEnabled:      codeExecutionEnabled,
+		CodeExecutionContainerID:  codeExecutionContainerID,
 		PromptCacheKeySha256:      shortSHA256(promptCacheKey),
 		HasPreviousResponseID:     strings.TrimSpace(previousResponseID) != "",
 		HasTurnState:              strings.TrimSpace(turnState) != "",
