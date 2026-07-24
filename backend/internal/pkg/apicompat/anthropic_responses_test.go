@@ -3254,7 +3254,7 @@ func TestCodeExecutionFunctionCall_StreamsAsServerToolUse(t *testing.T) {
 	require.NotNil(t, events[1].ContentBlock)
 	assert.Equal(t, "code_execution_tool_result", events[1].ContentBlock.Type)
 	assert.Equal(t, toolUseID, events[1].ContentBlock.ToolUseID)
-	assert.Contains(t, string(events[1].ContentBlock.Content), "HELLO_CHECK")
+	assertCodeExecutionResultContent(t, events[1].ContentBlock.Content)
 
 	events = ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
 		Type:     "response.completed",
@@ -3333,7 +3333,7 @@ func TestCodeExecutionFunctionCall_EmptyArgsUsesRequestFallback(t *testing.T) {
 	assert.Equal(t, "content_block_stop", events[1].Type)
 	require.NotNil(t, events[2].ContentBlock)
 	assert.Equal(t, "code_execution_tool_result", events[2].ContentBlock.Type)
-	assert.Contains(t, string(events[2].ContentBlock.Content), "HELLO_CHECK")
+	assertCodeExecutionResultContent(t, events[2].ContentBlock.Content)
 }
 
 func TestCodeExecutionFunctionCall_SynthesizesResultFromCmdDelta(t *testing.T) {
@@ -3365,7 +3365,7 @@ func TestCodeExecutionFunctionCall_SynthesizesResultFromCmdDelta(t *testing.T) {
 	require.Len(t, events, 3)
 	require.NotNil(t, events[1].ContentBlock)
 	assert.Equal(t, "code_execution_tool_result", events[1].ContentBlock.Type)
-	assert.Contains(t, string(events[1].ContentBlock.Content), "HELLO_CHECK")
+	assertCodeExecutionResultContent(t, events[1].ContentBlock.Content)
 }
 
 func TestResponsesToAnthropic_CodeExecutionIsServerTool(t *testing.T) {
@@ -3389,7 +3389,7 @@ func TestResponsesToAnthropic_CodeExecutionIsServerTool(t *testing.T) {
 	assert.Equal(t, "text", anth.Content[2].Type)
 	assert.Equal(t, "HELLO_CHECK", anth.Content[2].Text)
 	assert.Equal(t, "end_turn", AnthropicStopReasonString(anth.StopReason))
-	assert.Contains(t, string(anth.Content[1].Content), "HELLO_CHECK")
+	assertCodeExecutionResultContent(t, anth.Content[1].Content)
 }
 
 func TestResponsesToAnthropic_CodeExecutionCmdIsServerToolResult(t *testing.T) {
@@ -3412,7 +3412,18 @@ func TestResponsesToAnthropic_CodeExecutionCmdIsServerToolResult(t *testing.T) {
 	assert.Equal(t, "code_execution_tool_result", anth.Content[1].Type)
 	assert.Equal(t, "text", anth.Content[2].Type)
 	assert.Equal(t, "HELLO_CHECK", anth.Content[2].Text)
-	assert.Contains(t, string(anth.Content[1].Content), "HELLO_CHECK")
+	assertCodeExecutionResultContent(t, anth.Content[1].Content)
+}
+
+func assertCodeExecutionResultContent(t *testing.T, content json.RawMessage) {
+	t.Helper()
+	assert.JSONEq(t, `{
+		"type":"code_execution_result",
+		"stdout":"HELLO_CHECK\n",
+		"stderr":"",
+		"return_code":0,
+		"content":[]
+	}`, string(content))
 }
 
 func TestResponsesToAnthropic_CodeExecutionDoesNotDuplicateExplicitFinalText(t *testing.T) {

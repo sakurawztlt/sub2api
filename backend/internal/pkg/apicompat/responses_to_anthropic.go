@@ -459,10 +459,13 @@ func synthesizeSimpleCodeExecutionToolResult(toolUseID, rawArgs string) Anthropi
 }
 
 func codeExecutionToolResultBlock(toolUseID, stdout string) AnthropicContentBlock {
-	content, err := json.Marshal([]map[string]string{{
-		"type": "text",
-		"text": stdout,
-	}})
+	content, err := json.Marshal(map[string]any{
+		"type":        "code_execution_result",
+		"stdout":      stdout,
+		"stderr":      "",
+		"return_code": 0,
+		"content":     []any{},
+	})
 	if err != nil {
 		return AnthropicContentBlock{}
 	}

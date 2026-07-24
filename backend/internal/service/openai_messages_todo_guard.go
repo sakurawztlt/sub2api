@@ -97,13 +97,10 @@ func appendOpenAICompatClaudeCodeTodoGuardToRequestBody(reqBody map[string]any) 
 }
 
 // applyOpenAICompatOAuthMessagesBridgeGuards adds bridge-local compatibility
-// guidance without changing the tool-loading contract supplied by the client.
-// In particular, a Claude Code deferred-tool reminder may explicitly require
-// ToolSearch before a deferred tool is called. Adding a direct-tool preference
-// after that reminder changes the request semantics, so it is intentionally
-// not applied on the OAuth Messages bridge.
+// guidance while preserving deferred tools for tasks that actually need them.
 func applyOpenAICompatOAuthMessagesBridgeGuards(reqBody map[string]any) {
 	appendOpenAICompatClaudeCodeTodoGuardToRequestBody(reqBody)
+	appendOpenAICompatDeferredToolGuardToRequestBody(reqBody)
 }
 
 func appendOpenAICompatDeferredToolGuard(req *apicompat.ResponsesRequest) bool {

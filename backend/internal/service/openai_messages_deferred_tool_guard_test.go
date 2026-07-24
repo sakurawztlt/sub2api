@@ -174,7 +174,8 @@ func TestApplyOpenAICompatOAuthMessagesBridgeGuards_PreservesDeferredToolLoading
 	input, ok := reqBody["input"].([]any)
 	require.True(t, ok)
 	assert.True(t, inputContainsDeferredToolNotice(input))
-	assert.False(t, inputContainsText(input, openAICompatDeferredToolGuardMarker))
+	assert.True(t, inputContainsText(input, openAICompatDeferredToolGuardMarker))
+	assert.True(t, inputContainsText(input, "Do not load task or todo tracking tools only for bookkeeping."))
 	assert.True(t, inputContainsText(input, openAICompatClaudeCodeTodoGuardMarker))
 	assert.True(t, requestBodyToolsSupportDirectImplementation(reqBody["tools"]))
 }
