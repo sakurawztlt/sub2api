@@ -2,6 +2,7 @@ package apicompat
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -120,7 +121,7 @@ func ResponsesToAnthropicWithUsageOptions(resp *ResponsesResponse, model string,
 			if query == "" {
 				continue
 			}
-			toolUseID := "srvtoolu_" + item.ID
+			toolUseID := serverToolUseIDFromResponsesItem(&item)
 			inputJSON, _ := json.Marshal(map[string]string{"query": query})
 			blocks = append(blocks, AnthropicContentBlock{
 				Type:  "server_tool_use",
@@ -431,18 +432,17 @@ func isCodeExecutionToolName(name string) bool {
 }
 
 func serverToolUseIDFromResponsesItem(item *ResponsesOutput) string {
-	if item == nil {
-		return "srvtoolu_unknown"
+	parts := []string{"server_tool_use"}
+	if item != nil {
+		parts = append(parts,
+			strings.TrimSpace(item.Type),
+			strings.TrimSpace(item.ID),
+			strings.TrimSpace(item.CallID),
+			strings.TrimSpace(item.Name),
+		)
 	}
-	if id := strings.TrimSpace(item.ID); id != "" {
-		return "srvtoolu_" + id
-	}
-	if callID := strings.TrimSpace(item.CallID); callID != "" {
-		callID = strings.TrimPrefix(callID, "call_")
-		callID = strings.TrimPrefix(callID, "fc_")
-		return "srvtoolu_" + callID
-	}
-	return "srvtoolu_unknown"
+	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return "srvtoolu_01" + base64.RawURLEncoding.EncodeToString(sum[:16])
 }
 
 func isEmptyJSONObject(raw string) bool {
@@ -1317,7 +1317,7 @@ func resToAnthHandleWebSearchDone(evt *ResponsesStreamEvent, state *ResponsesEve
 	var events []AnthropicStreamEvent
 	events = append(events, closeCurrentBlock(state)...)
 
-	toolUseID := "srvtoolu_" + evt.Item.ID
+	toolUseID := serverToolUseIDFromResponsesItem(evt.Item)
 	query, sources := webSearchQueryAndSources(evt.Item.Action)
 	if query == "" {
 		return nil

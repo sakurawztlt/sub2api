@@ -3232,7 +3232,8 @@ func TestCodeExecutionFunctionCall_StreamsAsServerToolUse(t *testing.T) {
 	require.Len(t, events, 1)
 	require.NotNil(t, events[0].ContentBlock)
 	assert.Equal(t, "server_tool_use", events[0].ContentBlock.Type)
-	assert.Equal(t, "srvtoolu_fc_code", events[0].ContentBlock.ID)
+	toolUseID := events[0].ContentBlock.ID
+	assert.Regexp(t, `^srvtoolu_01[A-Za-z0-9_-]{22}$`, toolUseID)
 	assert.Equal(t, "code_execution", events[0].ContentBlock.Name)
 	assert.False(t, state.HasToolCall, "server-side code_execution must not become a client tool_use stop")
 
@@ -3252,7 +3253,7 @@ func TestCodeExecutionFunctionCall_StreamsAsServerToolUse(t *testing.T) {
 	assert.Equal(t, "content_block_stop", events[0].Type)
 	require.NotNil(t, events[1].ContentBlock)
 	assert.Equal(t, "code_execution_tool_result", events[1].ContentBlock.Type)
-	assert.Equal(t, "srvtoolu_fc_code", events[1].ContentBlock.ToolUseID)
+	assert.Equal(t, toolUseID, events[1].ContentBlock.ToolUseID)
 	assert.Contains(t, string(events[1].ContentBlock.Content), "HELLO_CHECK")
 
 	events = ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
@@ -3266,6 +3267,25 @@ func TestCodeExecutionFunctionCall_StreamsAsServerToolUse(t *testing.T) {
 	assert.Equal(t, "HELLO_CHECK", events[1].Delta.Text)
 	assert.Equal(t, "content_block_stop", events[2].Type)
 	assert.Equal(t, "end_turn", events[3].Delta.StopReason)
+}
+
+func TestServerToolUseIDFromResponsesItem_IsStableOpaqueAnthropicShape(t *testing.T) {
+	item := &ResponsesOutput{
+		ID:     "fc_0131d0d6f4a54dc8",
+		CallID: "call_code",
+		Name:   "code_execution",
+	}
+	got := serverToolUseIDFromResponsesItem(item)
+	assert.Regexp(t, `^srvtoolu_01[A-Za-z0-9_-]{22}$`, got)
+	assert.Equal(t, got, serverToolUseIDFromResponsesItem(item), "same upstream item must map to one stable id")
+
+	other := serverToolUseIDFromResponsesItem(&ResponsesOutput{
+		ID:     "fc_other",
+		CallID: "call_code",
+		Name:   "code_execution",
+	})
+	assert.NotEqual(t, got, other, "different upstream items must not collide")
+	assert.NotContains(t, got, "fc_", "OpenAI item id must not leak into Anthropic server tool ids")
 }
 
 func TestCodeExecutionFallbackArgsFromAnthropicRequest(t *testing.T) {
