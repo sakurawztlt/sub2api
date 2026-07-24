@@ -161,7 +161,6 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	}
 	if compatReplayGuardEnabled && account.Type != AccountTypeOAuth {
 		appendOpenAICompatClaudeCodeTodoGuard(responsesReq)
-		appendOpenAICompatDeferredToolGuard(responsesReq)
 	}
 
 	logFields := []zap.Field{
