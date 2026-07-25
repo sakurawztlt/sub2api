@@ -4014,7 +4014,7 @@
             </div>
           </div>
 
-          <div class="card">
+          <div class="card" data-testid="ollama-cloud-usage-global-settings">
             <div
               class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
             >
@@ -4038,24 +4038,51 @@
                 <Toggle
                   v-model="ollamaCloudUsageForm.enabled"
                   :disabled="ollamaCloudUsageLoading || ollamaCloudUsageSaving"
+                  :aria-label="t('admin.settings.ollamaCloudUsage.enabled')"
+                  data-testid="ollama-cloud-usage-global-enabled"
                 />
               </div>
 
-              <div>
-                <label class="input-label">
-                  {{ t("admin.settings.ollamaCloudUsage.intervalMinutes") }}
-                </label>
-                <input
-                  v-model.number="ollamaCloudUsageForm.interval_minutes"
-                  type="number"
-                  min="15"
-                  max="1440"
-                  class="input mt-2 w-full max-w-xs"
-                  :disabled="ollamaCloudUsageLoading || ollamaCloudUsageSaving"
-                />
-                <p class="input-hint">
-                  {{ t("admin.settings.ollamaCloudUsage.intervalHint") }}
-                </p>
+              <div v-if="ollamaCloudUsageForm.enabled" class="space-y-5 border-t border-gray-100 pt-5 dark:border-dark-700">
+                <div>
+                  <label class="input-label" for="ollama-cloud-usage-debounce">
+                    {{ t("admin.settings.ollamaCloudUsage.debounceMinutes") }}
+                  </label>
+                  <input
+                    id="ollama-cloud-usage-debounce"
+                    v-model.number="ollamaCloudUsageForm.debounce_minutes"
+                    type="number"
+                    min="1"
+                    max="60"
+                    class="input mt-2 w-full max-w-xs"
+                    :disabled="ollamaCloudUsageLoading || ollamaCloudUsageSaving"
+                    data-testid="ollama-cloud-usage-global-debounce"
+                    @keydown.enter.prevent="saveOllamaCloudUsageSettings"
+                  />
+                  <p class="input-hint">
+                    {{ t("admin.settings.ollamaCloudUsage.debounceHint") }}
+                  </p>
+                </div>
+
+                <div>
+                  <label class="input-label" for="ollama-cloud-usage-interval">
+                    {{ t("admin.settings.ollamaCloudUsage.intervalMinutes") }}
+                  </label>
+                  <input
+                    id="ollama-cloud-usage-interval"
+                    v-model.number="ollamaCloudUsageForm.interval_minutes"
+                    type="number"
+                    min="15"
+                    max="1440"
+                    class="input mt-2 w-full max-w-xs"
+                    :disabled="ollamaCloudUsageLoading || ollamaCloudUsageSaving"
+                    data-testid="ollama-cloud-usage-global-interval"
+                    @keydown.enter.prevent="saveOllamaCloudUsageSettings"
+                  />
+                  <p class="input-hint">
+                    {{ t("admin.settings.ollamaCloudUsage.intervalHint") }}
+                  </p>
+                </div>
               </div>
 
               <div class="flex justify-end">
@@ -4063,6 +4090,7 @@
                   type="button"
                   class="btn btn-primary"
                   :disabled="ollamaCloudUsageLoading || ollamaCloudUsageSaving"
+                  data-testid="ollama-cloud-usage-global-save"
                   @click="saveOllamaCloudUsageSettings"
                 >
                   {{ ollamaCloudUsageSaving ? t("common.saving") : t("common.save") }}
@@ -7384,6 +7412,7 @@ const ollamaCloudUsageSaving = ref(false);
 const ollamaCloudUsageForm = reactive({
   enabled: false,
   interval_minutes: 60,
+  debounce_minutes: 1,
 });
 
 // Overload Cooldown (529) 状态
@@ -10070,6 +10099,7 @@ async function loadOllamaCloudUsageSettings() {
     const settings = await adminAPI.accounts.getOllamaCloudUsageSettings();
     ollamaCloudUsageForm.enabled = settings.enabled;
     ollamaCloudUsageForm.interval_minutes = settings.interval_minutes;
+    ollamaCloudUsageForm.debounce_minutes = settings.debounce_minutes;
   } catch (err: unknown) {
     appStore.showError(
       extractI18nErrorMessage(
@@ -10090,9 +10120,11 @@ async function saveOllamaCloudUsageSettings() {
     const settings = await adminAPI.accounts.updateOllamaCloudUsageSettings({
       enabled: ollamaCloudUsageForm.enabled,
       interval_minutes: ollamaCloudUsageForm.interval_minutes,
+      debounce_minutes: ollamaCloudUsageForm.debounce_minutes,
     });
     ollamaCloudUsageForm.enabled = settings.enabled;
     ollamaCloudUsageForm.interval_minutes = settings.interval_minutes;
+    ollamaCloudUsageForm.debounce_minutes = settings.debounce_minutes;
     appStore.showSuccess(t("admin.settings.ollamaCloudUsage.saved"));
   } catch (err: unknown) {
     appStore.showError(

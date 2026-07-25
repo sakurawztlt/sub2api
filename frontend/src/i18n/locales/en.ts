@@ -5924,11 +5924,13 @@ export default {
       },
       ollamaCloudUsage: {
         title: 'Ollama Cloud Usage Refresh',
-        description: 'Periodically refresh official Ollama settings-page usage for individually opted-in accounts. Disabled by default.',
+        description: 'Refresh official Ollama settings-page usage after model activity for individually opted-in accounts. Disabled by default.',
         enabled: 'Enable global automatic refresh',
         enabledHint: 'Only accounts with a stored browser session and their own automatic refresh switch enabled are refreshed. Manual refresh remains available.',
-        intervalMinutes: 'Refresh interval (minutes)',
-        intervalHint: 'Range: 15–1440 minutes. Failures use bounded exponential backoff.',
+        intervalMinutes: 'Maximum wait (minutes)',
+        intervalHint: 'Range: 15–1440 minutes. When requests keep sliding the quiet period, force a refresh after this wait.',
+        debounceMinutes: 'Quiet period after last request (minutes)',
+        debounceHint: 'Range: 1–60 minutes and less than the maximum wait. Refresh after the latest model request has been quiet for this long.',
         saved: 'Ollama Cloud usage refresh settings saved',
         saveFailed: 'Failed to save Ollama Cloud usage refresh settings'
       },
