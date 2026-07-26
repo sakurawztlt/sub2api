@@ -3,6 +3,7 @@ package apicompat
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -366,6 +367,287 @@ func TestResponsesEventToAnthropicEvents_MapsTerminalResponseAnnotationsWithoutI
 	assert.Equal(t, "content_block_stop", events[1].Type)
 	assert.Equal(t, "message_delta", events[len(events)-2].Type)
 	assert.Equal(t, "message_stop", events[len(events)-1].Type)
+}
+
+func TestResponsesEventToAnthropicEvents_UnmappableTerminalAnnotationsWaitForLiteralFallback(t *testing.T) {
+	const sourceURL = "https://example.com/real-source"
+	annotationCases := []struct {
+		name       string
+		annotation json.RawMessage
+	}{
+		{
+			name: "file citation",
+			annotation: json.RawMessage(`{
+				"type":"file_citation",
+				"file_id":"file_unmappable",
+				"index":0
+			}`),
+		},
+		{
+			name: "unknown URL source",
+			annotation: json.RawMessage(`{
+				"type":"url_citation",
+				"start_index":0,
+				"end_index":7,
+				"url":"https://unknown.example/not-a-search-result"
+			}`),
+		},
+		{
+			name: "empty URL citation range",
+			annotation: json.RawMessage(`{
+				"type":"url_citation",
+				"start_index":0,
+				"end_index":0,
+				"url":"https://example.com/real-source"
+			}`),
+		},
+	}
+	terminalCases := []struct {
+		name string
+		done func(state *ResponsesEventToAnthropicState, part ResponsesContentPart) []AnthropicStreamEvent
+	}{
+		{
+			name: "content part done",
+			done: func(state *ResponsesEventToAnthropicState, part ResponsesContentPart) []AnthropicStreamEvent {
+				return ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+					Type:         "response.content_part.done",
+					OutputIndex:  1,
+					ContentIndex: 0,
+					Part:         &part,
+				}, state)
+			},
+		},
+		{
+			name: "output item done",
+			done: func(state *ResponsesEventToAnthropicState, part ResponsesContentPart) []AnthropicStreamEvent {
+				return ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+					Type:        "response.output_item.done",
+					OutputIndex: 1,
+					Item: &ResponsesOutput{
+						Type:    "message",
+						Content: []ResponsesContentPart{part},
+					},
+				}, state)
+			},
+		},
+	}
+
+	for _, terminalCase := range terminalCases {
+		for _, annotationCase := range annotationCases {
+			t.Run(terminalCase.name+"/"+annotationCase.name, func(t *testing.T) {
+				state := NewResponsesEventToAnthropicState()
+				state.MessageStartSent = true
+				state.webSearchCitationSources[normalizeWebSearchCitationURL(sourceURL)] = webSearchCitationSource{
+					URL:            sourceURL,
+					Title:          "Real source",
+					EncryptedIndex: "opaque",
+				}
+				text := "Result: " + sourceURL
+				ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+					Type:         "response.output_text.delta",
+					OutputIndex:  1,
+					ContentIndex: 0,
+					Delta:        text,
+				}, state)
+				ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+					Type:         "response.output_text.done",
+					OutputIndex:  1,
+					ContentIndex: 0,
+					Text:         text,
+				}, state)
+
+				doneEvents := terminalCase.done(state, ResponsesContentPart{
+					Type:        "output_text",
+					Text:        text,
+					Annotations: []json.RawMessage{annotationCase.annotation},
+				})
+				assert.Empty(t, doneEvents, "an unmappable annotation must not close the text block")
+				require.True(t, state.ContentBlockOpen)
+				require.NotEmpty(t, state.outputTextByPart)
+
+				completedEvents := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+					Type:     "response.completed",
+					Response: &ResponsesResponse{Status: "completed"},
+				}, state)
+				require.GreaterOrEqual(t, len(completedEvents), 4)
+				require.NotNil(t, completedEvents[0].Delta)
+				assert.Equal(t, "citations_delta", completedEvents[0].Delta.Type)
+				assert.Equal(t, "content_block_stop", completedEvents[1].Type)
+
+				var citation struct {
+					URL       string `json:"url"`
+					CitedText string `json:"cited_text"`
+				}
+				require.NoError(t, json.Unmarshal(completedEvents[0].Delta.Citation, &citation))
+				assert.Equal(t, sourceURL, citation.URL)
+				assert.Equal(t, sourceURL, citation.CitedText)
+			})
+		}
+	}
+}
+
+func TestResponsesEventToAnthropicEvents_CapturedCodexTerminalWithoutAnnotationsUsesLiteralRealURLs(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/websearch_codex_terminal_no_annotations.jsonl")
+	require.NoError(t, err)
+
+	state := NewResponsesEventToAnthropicState()
+	var emitted []AnthropicStreamEvent
+	rawAnnotationEvents := 0
+	for lineNumber, line := range strings.Split(strings.TrimSpace(string(fixture)), "\n") {
+		var upstream ResponsesStreamEvent
+		require.NoErrorf(t, json.Unmarshal([]byte(line), &upstream), "fixture line %d", lineNumber+1)
+		if upstream.Type == "response.output_text.annotation.added" {
+			rawAnnotationEvents++
+		}
+		emitted = append(emitted, ResponsesEventToAnthropicEvents(&upstream, state)...)
+	}
+	require.Zero(t, rawAnnotationEvents, "the captured Codex shape has no upstream annotation events")
+
+	resultURLs := make(map[string]struct{})
+	textBlockIndex := -1
+	textStopPosition := -1
+	citationPositions := make([]int, 0)
+	citationURLs := make([]string, 0)
+	citedTexts := make([]string, 0)
+	for position, event := range emitted {
+		if event.Type == "content_block_start" && event.ContentBlock != nil {
+			switch event.ContentBlock.Type {
+			case "web_search_tool_result":
+				var results []struct {
+					URL string `json:"url"`
+				}
+				require.NoError(t, json.Unmarshal(event.ContentBlock.Content, &results))
+				for _, result := range results {
+					resultURLs[result.URL] = struct{}{}
+				}
+			case "text":
+				require.NotNil(t, event.Index)
+				textBlockIndex = *event.Index
+			}
+		}
+		if event.Type == "content_block_stop" && event.Index != nil &&
+			*event.Index == textBlockIndex {
+			textStopPosition = position
+		}
+		if event.Delta == nil || event.Delta.Type != "citations_delta" {
+			continue
+		}
+		citationPositions = append(citationPositions, position)
+		var citation struct {
+			URL       string `json:"url"`
+			CitedText string `json:"cited_text"`
+		}
+		require.NoError(t, json.Unmarshal(event.Delta.Citation, &citation))
+		citationURLs = append(citationURLs, citation.URL)
+		citedTexts = append(citedTexts, citation.CitedText)
+	}
+
+	require.Equal(t, []string{
+		"https://creati.ai/ai-news/2026-07-26/",
+		"https://techcrunch.com/2026/07/",
+		"https://aidailypost.com/archives/2026/07",
+	}, citationURLs)
+	assert.Equal(t, citationURLs, citedTexts, "literal URL rune ranges must exclude Markdown punctuation")
+	require.Len(t, citationPositions, 3, "duplicate and non-source URLs must not become citations")
+	require.GreaterOrEqual(t, textStopPosition, 0)
+	for index, position := range citationPositions {
+		assert.Lessf(t, position, textStopPosition, "citation %d must precede content_block_stop", index)
+		_, exists := resultURLs[citationURLs[index]]
+		assert.Truef(t, exists, "citation URL %q must exist in the emitted real results", citationURLs[index])
+	}
+	assert.Empty(t, state.outputTextByPart)
+	assert.Zero(t, state.cachedOutputTextBytes)
+}
+
+func TestLiteralWebSearchCitationMatches_DeduplicatesAndCapsAt64(t *testing.T) {
+	sources := make(map[string]webSearchCitationSource)
+	var text strings.Builder
+	for index := 0; index < maxAnnotationsPerTextPart+10; index++ {
+		rawURL := fmt.Sprintf("https://example.com/source/%d", index)
+		key := normalizeWebSearchCitationURL(rawURL)
+		sources[key] = webSearchCitationSource{
+			URL:            rawURL,
+			Title:          fmt.Sprintf("Source %d", index),
+			EncryptedIndex: "opaque",
+		}
+		fmt.Fprintf(&text, "%s ", rawURL)
+	}
+	text.WriteString("https://example.com/source/0")
+
+	matches := literalWebSearchCitationMatches(
+		[]rune(text.String()),
+		sources,
+		maxAnnotationsPerTextPart,
+	)
+	require.Len(t, matches, maxAnnotationsPerTextPart)
+	seen := make(map[string]struct{}, len(matches))
+	for _, match := range matches {
+		_, duplicate := seen[match.URL]
+		assert.False(t, duplicate)
+		seen[match.URL] = struct{}{}
+	}
+}
+
+func TestLiteralWebSearchCitationMatches_ASCIIHTTPCaseAndMarkdownSuffixes(t *testing.T) {
+	tests := []struct {
+		name      string
+		sourceURL string
+		text      string
+		literal   string
+	}{
+		{
+			name:      "mixed-case HTTPS scheme",
+			sourceURL: "https://example.com/mixed",
+			text:      "See HtTpS://Example.COM/mixed for details",
+			literal:   "HtTpS://Example.COM/mixed",
+		},
+		{
+			name:      "uppercase HTTP scheme",
+			sourceURL: "http://example.com/plain",
+			text:      "See HTTP://EXAMPLE.COM/plain for details",
+			literal:   "HTTP://EXAMPLE.COM/plain",
+		},
+		{
+			name:      "Markdown bold",
+			sourceURL: "https://example.com/bold",
+			text:      "See **https://example.com/bold** now",
+			literal:   "https://example.com/bold",
+		},
+		{
+			name:      "Markdown underline",
+			sourceURL: "https://example.com/underline",
+			text:      "See __https://example.com/underline__ now",
+			literal:   "https://example.com/underline",
+		},
+		{
+			name:      "Markdown strikethrough",
+			sourceURL: "https://example.com/strike",
+			text:      "See ~~https://example.com/strike~~ now",
+			literal:   "https://example.com/strike",
+		},
+		{
+			name:      "Markdown table cell",
+			sourceURL: "https://example.com/table",
+			text:      "source|https://example.com/table|notes",
+			literal:   "https://example.com/table",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sources := map[string]webSearchCitationSource{
+				normalizeWebSearchCitationURL(test.sourceURL): {
+					URL:            test.sourceURL,
+					Title:          test.name,
+					EncryptedIndex: "opaque",
+				},
+			}
+			matches := literalWebSearchCitationMatches([]rune(test.text), sources, 1)
+			require.Len(t, matches, 1)
+			assert.Equal(t, test.literal, matches[0].URL)
+			assert.Equal(t, test.literal, string([]rune(test.text)[matches[0].StartIndex:matches[0].EndIndex]))
+		})
+	}
 }
 
 func TestResponsesEventToAnthropicEvents_RetainsEveryRealWebSearchSource(t *testing.T) {

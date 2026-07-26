@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/tidwall/sjson"
 )
@@ -1289,6 +1291,9 @@ func resToAnthHandleContentPartDone(evt *ResponsesStreamEvent, state *ResponsesE
 		evt.Part,
 		state,
 	)
+	if !textPartHasSeenCitation(evt.OutputIndex, evt.ContentIndex, state) {
+		return events
+	}
 	return append(events, closeCurrentBlock(state)...)
 }
 
@@ -1556,7 +1561,7 @@ func resToAnthHandleOutputItemDone(evt *ResponsesStreamEvent, state *ResponsesEv
 		// carrying annotations. Any citations present here are emitted now and
 		// deduplicated against both incremental and terminal annotations.
 		events := resToAnthHandleTerminalTextAnnotations(evt.OutputIndex, evt.Item.Content, state)
-		if terminalTextAnnotationsMatchCurrentBlock(evt.OutputIndex, evt.Item.Content, state) {
+		if terminalTextAnnotationsHaveMappedCitation(evt.OutputIndex, evt.Item.Content, state) {
 			return append(events, closeCurrentBlock(state)...)
 		}
 		return events
@@ -1568,22 +1573,41 @@ func resToAnthHandleOutputItemDone(evt *ResponsesStreamEvent, state *ResponsesEv
 	return nil
 }
 
-func terminalTextAnnotationsMatchCurrentBlock(
+func terminalTextAnnotationsHaveMappedCitation(
 	outputIndex int,
 	content []ResponsesContentPart,
 	state *ResponsesEventToAnthropicState,
 ) bool {
 	for contentIndex := range content {
-		if terminalTextPartMatchesCurrentBlock(
+		part := &content[contentIndex]
+		if !terminalTextPartMatchesCurrentBlock(
 			outputIndex,
 			contentIndex,
-			&content[contentIndex],
+			part,
 			state,
 		) {
+			continue
+		}
+		if textPartHasSeenCitation(outputIndex, contentIndex, state) {
 			return true
 		}
 	}
 	return false
+}
+
+func textPartHasSeenCitation(
+	outputIndex int,
+	contentIndex int,
+	state *ResponsesEventToAnthropicState,
+) bool {
+	if state == nil {
+		return false
+	}
+	partKey := responsesTextPartKey{
+		OutputIndex:  outputIndex,
+		ContentIndex: contentIndex,
+	}
+	return len(state.seenTextAnnotations[partKey]) != 0
 }
 
 func terminalTextPartMatchesCurrentBlock(
@@ -1683,6 +1707,212 @@ func resToAnthHandleTerminalResponseAnnotations(
 		)
 	}
 	return events
+}
+
+type literalWebSearchCitationMatch struct {
+	StartIndex int
+	EndIndex   int
+	URL        string
+}
+
+const (
+	maxLiteralWebSearchURLRunes      = 8192
+	maxLiteralWebSearchURLCandidates = 256
+)
+
+// resToAnthHandleLiteralURLCitations is a terminal-only fallback for the
+// ChatGPT/Codex Responses upstream. That upstream can return real
+// web_search_call.action.sources and then write those exact URLs into the final
+// text while omitting every annotation event and terminal annotation array.
+//
+// Run this only after all real annotations have been inspected. A part that
+// already emitted any citation is left untouched. Otherwise, only literal
+// http(s) URLs whose normalized value is present in the real-source lookup are
+// converted; no URL or source text is guessed.
+func resToAnthHandleLiteralURLCitations(state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
+	if state == nil || state.citationTrackingDisabled ||
+		!state.ContentBlockOpen || state.CurrentBlockType != "text" ||
+		len(state.webSearchCitationSources) == 0 {
+		return nil
+	}
+
+	partKeys := make([]responsesTextPartKey, 0, len(state.textPartToBlockIdx))
+	for partKey, blockIdx := range state.textPartToBlockIdx {
+		if blockIdx != state.ContentBlockIndex {
+			continue
+		}
+		if _, overflowed := state.overflowedTextParts[partKey]; overflowed {
+			continue
+		}
+		if state.outputTextByPart[partKey] == nil ||
+			len(state.seenTextAnnotations[partKey]) != 0 {
+			continue
+		}
+		partKeys = append(partKeys, partKey)
+	}
+	sort.Slice(partKeys, func(i, j int) bool {
+		if partKeys[i].OutputIndex != partKeys[j].OutputIndex {
+			return partKeys[i].OutputIndex < partKeys[j].OutputIndex
+		}
+		return partKeys[i].ContentIndex < partKeys[j].ContentIndex
+	})
+
+	remaining := maxAnnotationsPerTextPart
+	var events []AnthropicStreamEvent
+	for _, partKey := range partKeys {
+		if remaining == 0 {
+			break
+		}
+		textRunes := []rune(state.outputTextByPart[partKey].String())
+		matches := literalWebSearchCitationMatches(
+			textRunes,
+			state.webSearchCitationSources,
+			remaining,
+		)
+		for annotationIndex, match := range matches {
+			annotation, err := json.Marshal(map[string]any{
+				"type":        "url_citation",
+				"start_index": match.StartIndex,
+				"end_index":   match.EndIndex,
+				"url":         match.URL,
+			})
+			if err != nil {
+				continue
+			}
+			mapped := resToAnthHandleTextAnnotationAddedWithRunes(&ResponsesStreamEvent{
+				Type:            "response.output_text.annotation.added",
+				OutputIndex:     partKey.OutputIndex,
+				ContentIndex:    partKey.ContentIndex,
+				AnnotationIndex: annotationIndex,
+				Annotation:      annotation,
+			}, state, textRunes)
+			if len(mapped) == 0 {
+				continue
+			}
+			events = append(events, mapped...)
+			remaining--
+			if remaining == 0 {
+				break
+			}
+		}
+	}
+	return events
+}
+
+func literalWebSearchCitationMatches(
+	text []rune,
+	sources map[string]webSearchCitationSource,
+	limit int,
+) []literalWebSearchCitationMatch {
+	if len(text) == 0 || len(sources) == 0 || limit <= 0 {
+		return nil
+	}
+
+	matches := make([]literalWebSearchCitationMatch, 0, min(limit, len(sources)))
+	seenSources := make(map[string]struct{}, min(limit, len(sources)))
+	candidates := 0
+	for start := 0; start < len(text) && len(matches) < limit; start++ {
+		schemeLen := literalHTTPSchemeLength(text, start)
+		if schemeLen == 0 {
+			continue
+		}
+		candidates++
+		if candidates > maxLiteralWebSearchURLCandidates {
+			break
+		}
+
+		tokenEnd := start + schemeLen
+		maxEnd := min(len(text), start+maxLiteralWebSearchURLRunes)
+		for tokenEnd < maxEnd && !literalURLDelimiter(text[tokenEnd]) {
+			tokenEnd++
+		}
+		if tokenEnd <= start+schemeLen {
+			continue
+		}
+
+		matchEnd, key := matchLiteralWebSearchURL(text, start, tokenEnd, sources)
+		if key == "" {
+			continue
+		}
+		if _, duplicate := seenSources[key]; duplicate {
+			start = matchEnd - 1
+			continue
+		}
+		seenSources[key] = struct{}{}
+		matches = append(matches, literalWebSearchCitationMatch{
+			StartIndex: start,
+			EndIndex:   matchEnd,
+			URL:        string(text[start:matchEnd]),
+		})
+		start = matchEnd - 1
+	}
+	return matches
+}
+
+func literalHTTPSchemeLength(text []rune, start int) int {
+	if start+7 > len(text) ||
+		!literalASCIIEqualFold(text[start], 'h') ||
+		!literalASCIIEqualFold(text[start+1], 't') ||
+		!literalASCIIEqualFold(text[start+2], 't') ||
+		!literalASCIIEqualFold(text[start+3], 'p') {
+		return 0
+	}
+	schemeEnd := start + 4
+	if literalASCIIEqualFold(text[schemeEnd], 's') {
+		if start+8 <= len(text) &&
+			text[start+5] == ':' &&
+			text[start+6] == '/' &&
+			text[start+7] == '/' {
+			return 8
+		}
+		return 0
+	}
+	if text[schemeEnd] == ':' &&
+		text[start+5] == '/' &&
+		text[start+6] == '/' {
+		return 7
+	}
+	return 0
+}
+
+func literalASCIIEqualFold(value rune, lowercase rune) bool {
+	return value == lowercase || value == lowercase-('a'-'A')
+}
+
+func literalURLDelimiter(value rune) bool {
+	return unicode.IsSpace(value) || unicode.IsControl(value) ||
+		value == '"' || value == '\'' || value == '<' ||
+		value == '>' || value == '`' || value == '|'
+}
+
+func matchLiteralWebSearchURL(
+	text []rune,
+	start int,
+	tokenEnd int,
+	sources map[string]webSearchCitationSource,
+) (int, string) {
+	end := tokenEnd
+	for trims := 0; trims <= 16 && end > start; trims++ {
+		key := normalizeWebSearchCitationURL(string(text[start:end]))
+		if _, ok := sources[key]; ok {
+			return end, key
+		}
+		if !literalURLTrailingPunctuation(text[end-1]) {
+			break
+		}
+		end--
+	}
+	return 0, ""
+}
+
+func literalURLTrailingPunctuation(value rune) bool {
+	switch value {
+	case '.', ',', ';', ':', '!', '?', ')', ']', '}', '*', '_', '~', '|',
+		'。', '，', '；', '：', '！', '？', '）', '】', '》':
+		return true
+	default:
+		return false
+	}
 }
 
 // resToAnthHandleWebSearchDone converts an OpenAI web_search_call output item
@@ -1852,6 +2082,7 @@ func resToAnthHandleCompleted(evt *ResponsesStreamEvent, state *ResponsesEventTo
 	if evt.Response != nil {
 		events = append(events, resToAnthHandleTerminalResponseAnnotations(evt.Response, state)...)
 	}
+	events = append(events, resToAnthHandleLiteralURLCitations(state)...)
 	events = append(events, closeCurrentBlock(state)...)
 	events = append(events, flushPendingCodeExecutionText(state)...)
 
