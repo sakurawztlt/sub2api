@@ -1717,6 +1717,10 @@ func (h *AuthHandler) createPendingOAuthAccount(c *gin.Context, provider string)
 		if errors.Is(err, service.ErrEmailExists) {
 			existingUser, lookupErr := findUserByNormalizedEmail(c.Request.Context(), client, email)
 			if lookupErr != nil {
+				if errors.Is(lookupErr, service.ErrUserNotFound) {
+					response.ErrorFrom(c, service.ErrEmailExists)
+					return
+				}
 				response.ErrorFrom(c, lookupErr)
 				return
 			}

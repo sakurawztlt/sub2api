@@ -1235,6 +1235,102 @@ func TestSendPendingOAuthVerifyCodeExistingEmailReturnsBindLoginState(t *testing
 	require.Equal(t, "owner@example.com", storedSession.ResolvedEmail)
 }
 
+func TestSendPendingOAuthVerifyCodeRejectsRegisteredEmailAlias(t *testing.T) {
+	cache := &oauthPendingFlowEmailCacheStub{verificationCodes: map[string]*service.VerificationCodeData{}}
+	handler, client := newOAuthPendingFlowTestHandlerWithDependencies(t, oauthPendingFlowTestHandlerOptions{
+		emailVerifyEnabled: true,
+		emailCache:         cache,
+	})
+	ctx := context.Background()
+
+	_, err := client.User.Create().
+		SetEmail("some.one@gmail.com").
+		SetUsername("alias-owner").
+		SetPasswordHash("hash").
+		SetRole(service.RoleUser).
+		SetStatus(service.StatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+
+	session, err := client.PendingAuthSession.Create().
+		SetSessionToken("alias-send-code-session-token").
+		SetIntent("login").
+		SetProviderType("oidc").
+		SetProviderKey("https://issuer.example").
+		SetProviderSubject("oidc-alias-send-code-123").
+		SetBrowserSessionKey("alias-send-code-browser-session-key").
+		SetLocalFlowState(map[string]any{
+			oauthCompletionResponseKey: map[string]any{"step": "email_required"},
+		}).
+		SetExpiresAt(time.Now().UTC().Add(10 * time.Minute)).
+		Save(ctx)
+	require.NoError(t, err)
+
+	recorder := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/auth/oauth/pending/send-verify-code",
+		bytes.NewBufferString(`{"email":"someone@gmail.com"}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: oauthPendingSessionCookieName, Value: encodeCookieValue(session.SessionToken)})
+	req.AddCookie(&http.Cookie{Name: oauthPendingBrowserCookieName, Value: encodeCookieValue(session.BrowserSessionKey)})
+	ginCtx.Request = req
+
+	handler.SendPendingOAuthVerifyCode(ginCtx)
+
+	require.Equal(t, http.StatusConflict, recorder.Code)
+	require.NotContains(t, cache.verificationCodes, "someone@gmail.com")
+}
+
+func TestCreateOIDCOAuthAccountPreservesAliasConflictInsteadOfReturningNotFound(t *testing.T) {
+	handler, client := newOAuthPendingFlowTestHandlerWithEmailVerification(t, false, "someone@gmail.com", "135790")
+	ctx := context.Background()
+
+	_, err := client.User.Create().
+		SetEmail("some.one@gmail.com").
+		SetUsername("alias-owner").
+		SetPasswordHash("hash").
+		SetRole(service.RoleUser).
+		SetStatus(service.StatusActive).
+		Save(ctx)
+	require.NoError(t, err)
+
+	session, err := client.PendingAuthSession.Create().
+		SetSessionToken("alias-create-account-session-token").
+		SetIntent("login").
+		SetProviderType("oidc").
+		SetProviderKey("https://issuer.example").
+		SetProviderSubject("oidc-alias-create-123").
+		SetBrowserSessionKey("alias-create-account-browser-session-key").
+		SetExpiresAt(time.Now().UTC().Add(10 * time.Minute)).
+		Save(ctx)
+	require.NoError(t, err)
+
+	recorder := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(recorder)
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/v1/auth/oauth/oidc/create-account",
+		bytes.NewBufferString(`{"email":"someone@gmail.com","verify_code":"135790","password":"secret-123"}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: oauthPendingSessionCookieName, Value: encodeCookieValue(session.SessionToken)})
+	req.AddCookie(&http.Cookie{Name: oauthPendingBrowserCookieName, Value: encodeCookieValue(session.BrowserSessionKey)})
+	ginCtx.Request = req
+
+	handler.CreateOIDCOAuthAccount(ginCtx)
+
+	require.Equal(t, http.StatusConflict, recorder.Code)
+	userCount, err := client.User.Query().Count(ctx)
+	require.NoError(t, err)
+	require.Equal(t, 1, userCount)
+	storedSession, err := client.PendingAuthSession.Get(ctx, session.ID)
+	require.NoError(t, err)
+	require.Nil(t, storedSession.ConsumedAt)
+}
+
 func TestCreateOIDCOAuthAccountBlocksBackendModeBeforeCreatingUser(t *testing.T) {
 	handler, client := newOAuthPendingFlowTestHandlerWithDependencies(t, oauthPendingFlowTestHandlerOptions{
 		emailVerifyEnabled: true,

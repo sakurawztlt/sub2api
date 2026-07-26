@@ -160,3 +160,16 @@ func TestExistsByEmailOrAlias(t *testing.T) {
 		require.Error(t, err)
 	})
 }
+
+func TestSendPendingOAuthVerifyCodeRejectsRegisteredAliasBeforeSending(t *testing.T) {
+	repo := &aliasDedupRepoStub{stored: []string{"some.one@gmail.com"}}
+	svc := &AuthService{
+		userRepo:     repo,
+		emailService: &EmailService{},
+	}
+
+	result, err := svc.SendPendingOAuthVerifyCode(context.Background(), "someone@gmail.com")
+
+	require.Nil(t, result)
+	require.ErrorIs(t, err, ErrEmailExists)
+}

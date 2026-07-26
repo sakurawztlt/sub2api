@@ -37,8 +37,15 @@ func (s *AuthService) SendPendingOAuthVerifyCode(ctx context.Context, email stri
 	if isReservedEmail(email) {
 		return nil, ErrEmailReserved
 	}
-	if s == nil || s.emailService == nil {
+	if s == nil || s.emailService == nil || s.userRepo == nil {
 		return nil, ErrServiceUnavailable
+	}
+	exists, err := s.existsByEmailOrAlias(ctx, email)
+	if err != nil {
+		return nil, ErrServiceUnavailable
+	}
+	if exists {
+		return nil, ErrEmailExists
 	}
 
 	siteName := "Sub2API"
