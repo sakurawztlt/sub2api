@@ -495,7 +495,7 @@ func TestCodexInputItemRequiresNameTypesAllowCallID(t *testing.T) {
 	}
 }
 
-func TestFilterCodexInput_StripsInvalidCallInputIDWhenPreservingReferences(t *testing.T) {
+func TestFilterCodexInput_StripsInvalidReplayIDsWhenPreservingReferences(t *testing.T) {
 	input := []any{
 		map[string]any{
 			"type":    "function_call",
@@ -534,7 +534,8 @@ func TestFilterCodexInput_StripsInvalidCallInputIDWhenPreservingReferences(t *te
 
 	message, ok := filtered[2].(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, "item_msg_kept", message["id"])
+	_, hasID = message["id"]
+	require.False(t, hasID)
 }
 
 func TestFilterCodexInput_KeepsValidCallInputIDWhenPreservingReferences(t *testing.T) {
