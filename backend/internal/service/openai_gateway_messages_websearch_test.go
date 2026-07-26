@@ -119,6 +119,7 @@ func TestForwardAsAnthropic_ExactWebSearchProbeCompletesFromRealSources(t *testi
 		"model":"claude-opus-4-8",
 		"max_tokens":64000,
 		"stream":true,
+		"output_config":{"effort":"high"},
 		"messages":[{
 			"role":"user",
 			"content":[{"type":"text","text":"Perform a web search for the query: AI news 2026-07-26"}]
@@ -145,6 +146,7 @@ func TestForwardAsAnthropic_ExactWebSearchProbeCompletesFromRealSources(t *testi
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set(gcrCCTestWebSearchProbeHeader, "1")
 	result, err := svc.ForwardAsAnthropic(
 		context.Background(),
 		c,
@@ -180,9 +182,61 @@ func TestForwardAsAnthropic_OrdinaryWebSearchStillReadsTerminalResponse(t *testi
 		"model":"claude-opus-4-8",
 		"max_tokens":64000,
 		"stream":true,
+		"output_config":{"effort":"high"},
 		"messages":[{
 			"role":"user",
 			"content":[{"type":"text","text":"Perform a web search for the query: AI news 2026-07-26\nThen write a detailed report"}]
+		}],
+		"tools":[{
+			"type":"web_search_20250305",
+			"name":"web_search",
+			"max_uses":8
+		}],
+		"tool_choice":{"type":"tool","name":"web_search"}
+	}`)
+	upstreamBody := &chunkTrackingReadCloser{chunks: exactWebSearchProbeUpstreamFrames()}
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       upstreamBody,
+	}}
+	svc := &OpenAIGatewayService{httpUpstream: upstream}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set(gcrCCTestWebSearchProbeHeader, "1")
+	result, err := svc.ForwardAsAnthropic(
+		context.Background(),
+		c,
+		webSearchStreamingTestAccount(),
+		body,
+		"",
+		"gpt-5.4",
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "resp_websearch_fast", result.ResponseID)
+	require.Equal(t, 4, upstreamBody.readCalls,
+		"non-exact requests must keep the ordinary terminal-usage path")
+	require.True(t, upstreamBody.closed)
+	require.Contains(t, rec.Body.String(), "late model-authored answer")
+	require.Equal(t, 1, strings.Count(rec.Body.String(), "event: message_stop"))
+}
+
+func TestForwardAsAnthropic_ExactWebSearchWithoutInternalMarkerReadsTerminalResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := []byte(`{
+		"model":"claude-opus-4-8",
+		"max_tokens":64000,
+		"stream":true,
+		"output_config":{"effort":"high"},
+		"messages":[{
+			"role":"user",
+			"content":[{"type":"text","text":"Perform a web search for the query: AI news 2026-07-26"}]
 		}],
 		"tools":[{
 			"type":"web_search_20250305",
@@ -214,12 +268,10 @@ func TestForwardAsAnthropic_OrdinaryWebSearchStillReadsTerminalResponse(t *testi
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Equal(t, "resp_websearch_fast", result.ResponseID)
 	require.Equal(t, 4, upstreamBody.readCalls,
-		"non-exact requests must keep the ordinary terminal-usage path")
+		"request shape alone must not activate gcr's internal fast path")
 	require.True(t, upstreamBody.closed)
 	require.Contains(t, rec.Body.String(), "late model-authored answer")
-	require.Equal(t, 1, strings.Count(rec.Body.String(), "event: message_stop"))
 }
 
 func webSearchStreamingTestAccount() *Account {

@@ -26,6 +26,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const gcrCCTestWebSearchProbeHeader = "X-GCR-CCTest-WebSearch-Probe"
+
 var (
 	errOpenAICompatBufferedTotalTimeout           = errors.New("buffered total timeout")
 	errOpenAICompatBufferedFirstMeaningfulTimeout = errors.New("buffered first meaningful timeout")
@@ -61,12 +63,23 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// the replay-guard sliding window — otherwise the same conversation
 	// produces a different digest each turn and prompt cache is invalidated.
 	anthropicDigestReq := cloneAnthropicRequestForDigest(&anthropicReq)
+	lowLatencyWebSearchProbe := false
+	if strings.TrimSpace(c.GetHeader(gcrCCTestWebSearchProbeHeader)) == "1" {
+		// gcr derives this marker from the original pre-injection request and
+		// strips any client-supplied copy. Ignore only gcr's injected effort
+		// while revalidating the rest of the exact detector envelope locally.
+		probeCandidate := anthropicReq
+		probeCandidate.OutputConfig = nil
+		lowLatencyWebSearchProbe = apicompat.IsLowLatencyWebSearchProbe(&probeCandidate)
+		if lowLatencyWebSearchProbe {
+			anthropicReq.OutputConfig = nil
+		}
+	}
 	originalModel := anthropicReq.Model
 	applyOpenAICompatModelNormalization(&anthropicReq)
 	normalizedModel := anthropicReq.Model
 	clientStream := anthropicReq.Stream // client's original stream preference
 	forceThinkingBlock := anthropicThinkingEnabledForResponse(&anthropicReq)
-	lowLatencyWebSearchProbe := apicompat.IsLowLatencyWebSearchProbe(&anthropicReq)
 	webSearchRequestLimit := anthropicWebSearchRequestLimitForResponse(&anthropicReq)
 
 	// 2. Model mapping (computed early so 058 prompt-cache derivation can
