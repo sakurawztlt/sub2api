@@ -3205,6 +3205,19 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	requestView := newOpenAIRequestView(body)
 	reqModel, reqStream, promptCacheKey := requestView.Model, requestView.Stream, requestView.PromptCacheKey
 	originalModel := reqModel
+	if account.IsOpenAIApiKey() {
+		sanitizedBody, changed, sanitizeErr := sanitizeOpenAIResponsesInputItemIDs(body)
+		if sanitizeErr != nil {
+			return nil, fmt.Errorf("sanitize Responses input item IDs: %w", sanitizeErr)
+		}
+		if changed {
+			body = sanitizedBody
+			originalBody = sanitizedBody
+			requestView = newOpenAIRequestView(sanitizedBody)
+			reqModel, reqStream, promptCacheKey = requestView.Model, requestView.Stream, requestView.PromptCacheKey
+			originalModel = reqModel
+		}
+	}
 	compatMessagesBridge := isOpenAICompatMessagesBridgeBody(body)
 	setOpenAICompatMessagesBridgeContext(c, compatMessagesBridge)
 
@@ -3706,6 +3719,22 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 		requestView = newOpenAIRequestView(body)
 	}
+	// API-key HTTP upstreams reject the namespace field on direct input items.
+	// Keep OAuth and WSv2 untouched here: those paths need their full
+	// flatten/restore lifecycle to preserve namespaced tool identities.
+	if account.IsOpenAIApiKey() && wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2 {
+		strippedBody, stripErr := stripOpenAIResponsesInputNamespaces(body)
+		if stripErr != nil {
+			setOpsUpstreamError(c, http.StatusBadRequest, stripErr.Error(), "")
+			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
+				"type": "invalid_request_error", "message": "Invalid request input", "param": "input",
+			}})
+			return nil, stripErr
+		}
+		body = strippedBody
+		requestView = newOpenAIRequestView(body)
+		reqBody = nil
+	}
 	imageBillingModel := ""
 	imageSizeTier := ""
 	imageInputSize := ""
@@ -4160,6 +4189,13 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			body = normalizedBody
 		}
 		reqStream = gjson.GetBytes(body, "stream").Bool()
+	}
+	if account != nil && account.IsOpenAIApiKey() {
+		strippedBody, stripErr := stripOpenAIResponsesInputNamespaces(body)
+		if stripErr != nil {
+			return nil, stripErr
+		}
+		body = strippedBody
 	}
 
 	sanitizedBody, sanitized, err := sanitizeEmptyBase64InputImagesInOpenAIBody(body)
