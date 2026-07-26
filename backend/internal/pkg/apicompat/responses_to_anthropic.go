@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -655,6 +656,27 @@ func extractQuotedLiteralAfterPrint(text string) (string, bool) {
 
 // ResponsesEventToAnthropicState tracks state for converting a sequence of
 // Responses SSE events directly into Anthropic SSE events.
+type responsesTextPartKey struct {
+	OutputIndex  int
+	ContentIndex int
+}
+
+type webSearchCitationSource struct {
+	URL   string
+	Title string
+	// Anthropic models encrypted_index separately from a search result's
+	// encrypted_content; keep one stable opaque reference per emitted source.
+	EncryptedIndex string
+}
+
+const (
+	maxCitationTextBytesPerPart = 1 << 20
+	maxCitationTextBytesTotal   = 2 << 20
+	maxCitationTextParts        = 128
+	maxAnnotationsPerTextPart   = 64
+	maxWebSearchCitationSources = 256
+)
+
 type ResponsesEventToAnthropicState struct {
 	MessageStartSent bool
 	MessageStopSent  bool
@@ -722,6 +744,18 @@ type ResponsesEventToAnthropicState struct {
 	// counter, message_delta forwards it on the way out.
 	WebSearchRequestCount int
 	WebSearchRequestLimit int
+
+	// Hosted web-search citations arrive after the search result block and
+	// the cited text deltas. The lookup retains the exact result identity
+	// already sent to the client. Text and annotation state is scoped to a
+	// Responses content part so separate parts cannot cross-contaminate.
+	webSearchCitationSources map[string]webSearchCitationSource
+	outputTextByPart         map[responsesTextPartKey]*strings.Builder
+	textPartToBlockIdx       map[responsesTextPartKey]int
+	seenTextAnnotations      map[responsesTextPartKey]map[int]struct{}
+	overflowedTextParts      map[responsesTextPartKey]struct{}
+	cachedOutputTextBytes    int
+	citationTrackingDisabled bool
 }
 
 // SetExternalInputTokenEstimate records the customer-visible prompt estimate
@@ -777,8 +811,13 @@ func (s *ResponsesEventToAnthropicState) SetCodeExecutionFallbackArgs(raw string
 // NewResponsesEventToAnthropicState returns an initialised stream state.
 func NewResponsesEventToAnthropicState() *ResponsesEventToAnthropicState {
 	return &ResponsesEventToAnthropicState{
-		OutputIndexToBlockIdx: make(map[int]int),
-		Created:               time.Now().Unix(),
+		OutputIndexToBlockIdx:    make(map[int]int),
+		webSearchCitationSources: make(map[string]webSearchCitationSource),
+		outputTextByPart:         make(map[responsesTextPartKey]*strings.Builder),
+		textPartToBlockIdx:       make(map[responsesTextPartKey]int),
+		seenTextAnnotations:      make(map[responsesTextPartKey]map[int]struct{}),
+		overflowedTextParts:      make(map[responsesTextPartKey]struct{}),
+		Created:                  time.Now().Unix(),
 	}
 }
 
@@ -795,8 +834,10 @@ func ResponsesEventToAnthropicEvents(
 		return resToAnthHandleOutputItemAdded(evt, state)
 	case "response.output_text.delta":
 		return resToAnthHandleTextDelta(evt, state)
+	case "response.output_text.annotation.added":
+		return resToAnthHandleTextAnnotationAdded(evt, state)
 	case "response.output_text.done":
-		return resToAnthHandleBlockDone(state)
+		return resToAnthHandleTextDone(evt, state)
 	case "response.function_call_arguments.delta":
 		return resToAnthHandleFuncArgsDelta(evt, state)
 	case "response.function_call_arguments.done":
@@ -1062,6 +1103,7 @@ func resToAnthHandleTextDelta(evt *ResponsesStreamEvent, state *ResponsesEventTo
 		idx := state.ContentBlockIndex
 		state.ContentBlockOpen = true
 		state.CurrentBlockType = "text"
+		state.OutputIndexToBlockIdx[evt.OutputIndex] = idx
 
 		events = append(events, AnthropicStreamEvent{
 			Type:  "content_block_start",
@@ -1074,6 +1116,44 @@ func resToAnthHandleTextDelta(evt *ResponsesStreamEvent, state *ResponsesEventTo
 	}
 
 	idx := state.ContentBlockIndex
+	partKey := responsesTextPartKey{
+		OutputIndex:  evt.OutputIndex,
+		ContentIndex: evt.ContentIndex,
+	}
+	if !state.citationTrackingDisabled {
+		if state.outputTextByPart == nil {
+			state.outputTextByPart = make(map[responsesTextPartKey]*strings.Builder)
+		}
+		if state.textPartToBlockIdx == nil {
+			state.textPartToBlockIdx = make(map[responsesTextPartKey]int)
+		}
+		if _, tracked := state.textPartToBlockIdx[partKey]; !tracked &&
+			len(state.textPartToBlockIdx) >= maxCitationTextParts {
+			state.disableCitationTextTracking()
+		}
+	}
+	if !state.citationTrackingDisabled {
+		state.textPartToBlockIdx[partKey] = idx
+		if _, overflowed := state.overflowedTextParts[partKey]; !overflowed {
+			builder := state.outputTextByPart[partKey]
+			if builder == nil {
+				builder = &strings.Builder{}
+				state.outputTextByPart[partKey] = builder
+			}
+			if builder.Len()+len(evt.Delta) > maxCitationTextBytesPerPart ||
+				state.cachedOutputTextBytes+len(evt.Delta) > maxCitationTextBytesTotal {
+				if state.overflowedTextParts == nil {
+					state.overflowedTextParts = make(map[responsesTextPartKey]struct{})
+				}
+				state.overflowedTextParts[partKey] = struct{}{}
+				state.cachedOutputTextBytes -= builder.Len()
+				delete(state.outputTextByPart, partKey)
+			} else {
+				_, _ = builder.WriteString(evt.Delta)
+				state.cachedOutputTextBytes += len(evt.Delta)
+			}
+		}
+	}
 	events = append(events, AnthropicStreamEvent{
 		Type:  "content_block_delta",
 		Index: &idx,
@@ -1083,6 +1163,133 @@ func resToAnthHandleTextDelta(evt *ResponsesStreamEvent, state *ResponsesEventTo
 		},
 	})
 	return events
+}
+
+func resToAnthHandleTextAnnotationAdded(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
+	if state.citationTrackingDisabled || evt.AnnotationIndex < 0 {
+		return nil
+	}
+	var annotation struct {
+		Type       string `json:"type"`
+		StartIndex int    `json:"start_index"`
+		EndIndex   int    `json:"end_index"`
+		URL        string `json:"url"`
+	}
+	if len(evt.Annotation) == 0 || json.Unmarshal(evt.Annotation, &annotation) != nil ||
+		annotation.Type != "url_citation" || strings.TrimSpace(annotation.URL) == "" {
+		return nil
+	}
+	partKey := responsesTextPartKey{
+		OutputIndex:  evt.OutputIndex,
+		ContentIndex: evt.ContentIndex,
+	}
+	blockIdx, ok := state.textPartToBlockIdx[partKey]
+	if !ok || !state.ContentBlockOpen || state.CurrentBlockType != "text" ||
+		blockIdx != state.ContentBlockIndex {
+		return nil
+	}
+	if _, overflowed := state.overflowedTextParts[partKey]; overflowed {
+		return nil
+	}
+	source, ok := state.webSearchCitationSources[normalizeWebSearchCitationURL(annotation.URL)]
+	if !ok || source.EncryptedIndex == "" {
+		return nil
+	}
+	if seen := state.seenTextAnnotations[partKey]; seen != nil {
+		if _, duplicate := seen[evt.AnnotationIndex]; duplicate {
+			return nil
+		}
+		if len(seen) >= maxAnnotationsPerTextPart {
+			return nil
+		}
+	}
+
+	// OpenAI exposes only indices into the generated output text, whereas
+	// Anthropic's cited_text normally contains a source excerpt. Preserve the
+	// exact indexed span as a best-effort value; never substitute text from an
+	// unrelated result when the source excerpt is unavailable.
+	builder := state.outputTextByPart[partKey]
+	if builder == nil {
+		return nil
+	}
+	citedText := runeTextRange(
+		builder.String(),
+		annotation.StartIndex,
+		annotation.EndIndex,
+	)
+	if citedText == "" {
+		return nil
+	}
+	citation, err := json.Marshal(map[string]string{
+		"type":            "web_search_result_location",
+		"url":             source.URL,
+		"title":           source.Title,
+		"encrypted_index": source.EncryptedIndex,
+		"cited_text":      citedText,
+	})
+	if err != nil {
+		return nil
+	}
+	if state.seenTextAnnotations == nil {
+		state.seenTextAnnotations = make(map[responsesTextPartKey]map[int]struct{})
+	}
+	if state.seenTextAnnotations[partKey] == nil {
+		state.seenTextAnnotations[partKey] = make(map[int]struct{})
+	}
+	state.seenTextAnnotations[partKey][evt.AnnotationIndex] = struct{}{}
+	return []AnthropicStreamEvent{{
+		Type:  "content_block_delta",
+		Index: &blockIdx,
+		Delta: &AnthropicDelta{
+			Type:     "citations_delta",
+			Citation: citation,
+		},
+	}}
+}
+
+func resToAnthHandleTextDone(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
+	events := resToAnthHandleBlockDone(state)
+	partKey := responsesTextPartKey{
+		OutputIndex:  evt.OutputIndex,
+		ContentIndex: evt.ContentIndex,
+	}
+	if builder := state.outputTextByPart[partKey]; builder != nil {
+		state.cachedOutputTextBytes -= builder.Len()
+		if state.cachedOutputTextBytes < 0 {
+			state.cachedOutputTextBytes = 0
+		}
+	}
+	delete(state.outputTextByPart, partKey)
+	delete(state.textPartToBlockIdx, partKey)
+	delete(state.seenTextAnnotations, partKey)
+	delete(state.overflowedTextParts, partKey)
+	return events
+}
+
+func (state *ResponsesEventToAnthropicState) disableCitationTextTracking() {
+	state.citationTrackingDisabled = true
+	state.outputTextByPart = nil
+	state.textPartToBlockIdx = nil
+	state.seenTextAnnotations = nil
+	state.overflowedTextParts = nil
+	state.cachedOutputTextBytes = 0
+}
+
+func runeTextRange(text string, start, end int) string {
+	if start < 0 || end <= start {
+		return ""
+	}
+	runes := []rune(text)
+	if start >= len(runes) {
+		return ""
+	}
+	if end > len(runes) {
+		end = len(runes)
+	}
+	if end-start > 150 {
+		end = start + 150
+	}
+	return string(runes[start:end])
 }
 
 func resToAnthHandleFuncArgsDelta(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
@@ -1353,13 +1560,15 @@ func resToAnthHandleWebSearchDone(evt *ResponsesStreamEvent, state *ResponsesEve
 	state.ContentBlockIndex++
 
 	idx2 := state.ContentBlockIndex
+	resultContent := synthesizeWebSearchToolResultContent(query, sources)
+	state.rememberWebSearchCitationSources(resultContent)
 	events = append(events, AnthropicStreamEvent{
 		Type:  "content_block_start",
 		Index: &idx2,
 		ContentBlock: &AnthropicContentBlock{
 			Type:      "web_search_tool_result",
 			ToolUseID: toolUseID,
-			Content:   synthesizeWebSearchToolResultContent(query, sources),
+			Content:   resultContent,
 		},
 	})
 	events = append(events, AnthropicStreamEvent{
@@ -1369,6 +1578,76 @@ func resToAnthHandleWebSearchDone(evt *ResponsesStreamEvent, state *ResponsesEve
 	state.ContentBlockIndex++
 
 	return events
+}
+
+func (state *ResponsesEventToAnthropicState) rememberWebSearchCitationSources(content json.RawMessage) {
+	if state == nil {
+		return
+	}
+	var results []struct {
+		URL              string `json:"url"`
+		Title            string `json:"title"`
+		EncryptedContent string `json:"encrypted_content"`
+	}
+	if err := json.Unmarshal(content, &results); err != nil {
+		return
+	}
+	if state.webSearchCitationSources == nil {
+		state.webSearchCitationSources = make(map[string]webSearchCitationSource)
+	}
+	for _, result := range results {
+		if result.URL == "" || result.EncryptedContent == "" {
+			continue
+		}
+		key := normalizeWebSearchCitationURL(result.URL)
+		if key == "" {
+			continue
+		}
+		if _, exists := state.webSearchCitationSources[key]; !exists &&
+			len(state.webSearchCitationSources) >= maxWebSearchCitationSources {
+			continue
+		}
+		state.webSearchCitationSources[key] = webSearchCitationSource{
+			URL:            result.URL,
+			Title:          result.Title,
+			EncryptedIndex: fakeEncryptedContent(),
+		}
+	}
+}
+
+// normalizeWebSearchCitationURL matches the only tracking variation observed
+// between Responses action.sources and output_text URL annotations: OpenAI may
+// append utm_source=openai to the latter. Other query parameters are preserved
+// because they can identify a different source document.
+func normalizeWebSearchCitationURL(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" {
+		return ""
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return ""
+	}
+	parsed.Host = strings.ToLower(parsed.Host)
+	query := parsed.Query()
+	values := query["utm_source"]
+	if len(values) > 0 {
+		kept := values[:0]
+		for _, value := range values {
+			if !strings.EqualFold(value, "openai") {
+				kept = append(kept, value)
+			}
+		}
+		if len(kept) == 0 {
+			query.Del("utm_source")
+		} else {
+			query["utm_source"] = kept
+		}
+	}
+	// Canonicalise query order on every path, not only when a tracking
+	// parameter was removed, so source and annotation keys remain identical.
+	parsed.RawQuery = query.Encode()
+	return parsed.String()
 }
 
 func resToAnthHandleCompleted(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
@@ -1546,6 +1825,8 @@ func fakeEncryptedContent() string {
 // title/page_age/encrypted_content 仍 fabricate (OpenAI 不暴露).
 //
 // 注: realSources 为 nil 或空时, 走纯 fabricated 老路径.
+const maxRealWebSearchResultSources = 64
+
 func synthesizeWebSearchToolResultContent(query string, realSources []WebSearchSourceIn) json.RawMessage {
 	if query == "" {
 		query = "general information"
@@ -1588,18 +1869,21 @@ func synthesizeWebSearchToolResultContent(query string, realSources []WebSearchS
 
 	urlSafeQuery := urlEscapeForSynth(query)
 
-	count := 4 + int(randomByte()%3) // 4..6 fabricated entries when no real sources
-	items := make([]map[string]string, 0, count)
+	minCount := 4 + int(randomByte()%3) // 4..6 fabricated entries when real sources are sparse
+	items := make([]map[string]string, 0, max(minCount, maxRealWebSearchResultSources))
 	usedHosts := map[string]struct{}{}
+	usedURLs := map[string]struct{}{}
 
 	// 2026-05-13 P2: use real upstream URLs first (action.sources requires
-	// include opt-in). When N real URLs arrive we emit those AS-IS with
-	// fabricated title (host-derived) + page_age + encrypted_content. If
-	// fewer than `count` real URLs, top up the rest with fabricated entries
-	// from the host pool. If realSources is empty fall through to the all-
-	// fabricated path (legacy behaviour).
+	// include opt-in). Retain every distinct real URL, including multiple
+	// pages on the same host: later response.output_text.annotation.added
+	// events can cite any entry from action.sources. Truncating this list
+	// makes the citation point at a URL absent from web_search_tool_result.
+	// A hard cap prevents a malformed upstream event from amplifying one small
+	// source entry into an unbounded encrypted-content payload. If real sources
+	// are sparse, top up to minCount with fabricated entries.
 	for _, src := range realSources {
-		if len(items) >= count {
+		if len(items) >= maxRealWebSearchResultSources {
 			break
 		}
 		if src.URL == "" {
@@ -1609,9 +1893,10 @@ func synthesizeWebSearchToolResultContent(query string, realSources []WebSearchS
 		if host == "" {
 			continue
 		}
-		if _, dup := usedHosts[host]; dup {
+		if _, dup := usedURLs[src.URL]; dup {
 			continue
 		}
+		usedURLs[src.URL] = struct{}{}
 		usedHosts[host] = struct{}{}
 		title := titleVariants[int(randomByte())%len(titleVariants)]
 		if host != "" {
@@ -1629,7 +1914,7 @@ func synthesizeWebSearchToolResultContent(query string, realSources []WebSearchS
 		})
 	}
 
-	for len(items) < count {
+	for len(items) < minCount {
 		title := titleVariants[int(randomByte())%len(titleVariants)]
 		var tmpl struct {
 			Host string

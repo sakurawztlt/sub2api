@@ -237,10 +237,13 @@ type AnthropicErrorBody struct {
 
 // AnthropicDelta carries incremental content in streaming events.
 type AnthropicDelta struct {
-	Type string `json:"type,omitempty"` // "text_delta" | "input_json_delta" | "thinking_delta" | "signature_delta"
+	Type string `json:"type,omitempty"` // "text_delta" | "citations_delta" | "input_json_delta" | "thinking_delta" | "signature_delta"
 
 	// text_delta
 	Text string `json:"text,omitempty"`
+
+	// citations_delta
+	Citation json.RawMessage `json:"citation,omitempty"`
 
 	// input_json_delta
 	PartialJSON string `json:"partial_json,omitempty"`
@@ -596,6 +599,13 @@ type ResponsesStreamEvent struct {
 	Delta        string `json:"delta,omitempty"`
 	Text         string `json:"text,omitempty"`
 	ItemID       string `json:"item_id,omitempty"`
+
+	// response.output_text.annotation.added
+	// Keep the payload raw: Responses also uses this event for annotation
+	// variants that are unrelated to URL citations. The Anthropic converter
+	// narrows only the url_citation shape it understands.
+	Annotation      json.RawMessage `json:"annotation,omitempty"`
+	AnnotationIndex int             `json:"annotation_index,omitempty"`
 
 	// response.function_call_arguments.delta / done
 	CallID    string `json:"call_id,omitempty"`

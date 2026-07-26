@@ -35,6 +35,17 @@ func (e ResponsesStreamEvent) MarshalJSON() ([]byte, error) {
 		}
 		return json.Marshal(m)
 
+	case "response.output_text.annotation.added":
+		m := e.wireBase()
+		e.putItemID(m)
+		m["output_index"] = e.OutputIndex
+		m["content_index"] = e.ContentIndex
+		m["annotation_index"] = e.AnnotationIndex
+		if len(e.Annotation) > 0 {
+			m["annotation"] = e.Annotation
+		}
+		return json.Marshal(m)
+
 	case "response.content_part.added", "response.content_part.done":
 		m := e.wireBase()
 		e.putItemID(m)
