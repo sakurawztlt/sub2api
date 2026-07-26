@@ -2690,7 +2690,7 @@ func TestAnthropicToResponses_LowLatencyWebSearchProfileIsNarrow(t *testing.T) {
 		Stream:    true,
 		Messages: []AnthropicMessage{{
 			Role:    "user",
-			Content: json.RawMessage(`"Perform a web search for the query: AI news"`),
+			Content: json.RawMessage(`"Perform a web search for the query: AI news 2026-07-26"`),
 		}},
 		Tools: []AnthropicTool{{
 			Type: "web_search_20250305", Name: "web_search", MaxUses: 8,
@@ -2720,6 +2720,21 @@ func TestAnthropicToResponses_LowLatencyWebSearchProfileIsNarrow(t *testing.T) {
 		},
 		"custom_prompt": func(req *AnthropicRequest) {
 			req.Messages[0].Content = json.RawMessage(`"Research this topic in depth"`)
+		},
+		"same_prefix_with_extra_instructions": func(req *AnthropicRequest) {
+			req.Messages[0].Content = json.RawMessage(
+				`"Perform a web search for the query: AI news 2026-07-26\nThen write a detailed report"`,
+			)
+		},
+		"non_detector_query": func(req *AnthropicRequest) {
+			req.Messages[0].Content = json.RawMessage(
+				`"Perform a web search for the query: database release notes"`,
+			)
+		},
+		"invalid_detector_date": func(req *AnthropicRequest) {
+			req.Messages[0].Content = json.RawMessage(
+				`"Perform a web search for the query: AI news today"`,
+			)
 		},
 		"tool_choice_auto": func(req *AnthropicRequest) {
 			req.ToolChoice = json.RawMessage(`{"type":"auto"}`)

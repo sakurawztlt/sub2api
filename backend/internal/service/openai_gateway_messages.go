@@ -1462,7 +1462,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	inboundBodyLen int,
 	meta streamReqMeta,
 	webSearchRequestLimit int,
-	incrementalLiteralCitations bool,
+	lowLatencyWebSearchProbe bool,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 
@@ -1489,7 +1489,8 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	state := apicompat.NewResponsesEventToAnthropicState()
 	state.Model = originalModel
 	state.SetWebSearchRequestLimit(webSearchRequestLimit)
-	state.SetIncrementalLiteralCitationsEnabled(incrementalLiteralCitations)
+	state.SetIncrementalLiteralCitationsEnabled(lowLatencyWebSearchProbe)
+	state.SetLowLatencyWebSearchFastPathEnabled(lowLatencyWebSearchProbe)
 	state.SetCodeExecutionFallbackArgs(meta.CodeExecutionFallbackArgs)
 	state.SetExternalInputTokenEstimate(positiveIntHeader(c.Request, "X-GCR-Estimated-Tokens"))
 	// 2026-05-12 cctest profile 项 5 (codex audit): message_start.usage.input_tokens
@@ -1725,6 +1726,24 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 
 		// Convert to Anthropic events
 		events := apicompat.ResponsesEventToAnthropicEvents(&event, state)
+		// The exact compatibility probe intentionally terminates once the
+		// upstream has returned real search sources. This cancels the remaining
+		// model-authored answer to avoid the observed 15-25s tail. Since the
+		// upstream terminal usage will not arrive, expose the converter's
+		// non-zero estimate for accounting; ordinary WebSearch never enters
+		// this branch and continues to use terminal upstream usage. The result
+		// intentionally carries no upstream ResponseID because the cancelled
+		// response must never be reused as previous_response_id.
+		lowLatencyWebSearchComplete := lowLatencyWebSearchProbe &&
+			state.MessageStopSent && !isTerminalEvent
+		if lowLatencyWebSearchComplete {
+			if usage.InputTokens <= 0 {
+				usage.InputTokens = max(1, state.RawTotalInputTokens)
+			}
+			if usage.OutputTokens <= 0 {
+				usage.OutputTokens = max(1, state.RawOutputTokens)
+			}
+		}
 
 		// codex 5/8 #1 + R29 修: 见到首个 meaningful event 才 WriteHeader(200),
 		// 但**累积** metadata events (message_start / content_block_start /
@@ -1742,7 +1761,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 					zap.Int("max_pending", maxPendingEvents),
 				)
 				pendingEvents = nil
-				return isTerminalEvent
+				return isTerminalEvent || lowLatencyWebSearchComplete
 			}
 
 			// 检查 events 里是否有 meaningful
@@ -1793,7 +1812,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 				}
 			}
 			pendingEvents = nil // 释放, 后续走 normal 路径
-			return isTerminalEvent
+			return isTerminalEvent || lowLatencyWebSearchComplete
 		}
 
 		// 此时 header 已写, 正常 forward
@@ -1822,7 +1841,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		if len(events) > 0 && !clientDisconnected {
 			c.Writer.Flush()
 		}
-		return isTerminalEvent
+		return isTerminalEvent || lowLatencyWebSearchComplete
 	}
 
 	// finalizeStream sends any remaining Anthropic events and returns the result.

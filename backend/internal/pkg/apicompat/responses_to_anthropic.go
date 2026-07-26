@@ -767,6 +767,7 @@ type ResponsesEventToAnthropicState struct {
 	cachedOutputTextBytes    int
 	citationTrackingDisabled bool
 	incrementalLiteralCites  bool
+	lowLatencyWebSearchFast  bool
 }
 
 // SetExternalInputTokenEstimate records the customer-visible prompt estimate
@@ -816,6 +817,16 @@ func (s *ResponsesEventToAnthropicState) SetIncrementalLiteralCitationsEnabled(e
 	s.incrementalLiteralCites = enabled
 }
 
+// SetLowLatencyWebSearchFastPathEnabled allows the exact compatibility probe
+// to finish from the real web_search_call.action.sources event. The ordinary
+// WebSearch path still waits for and converts the model-authored answer.
+func (s *ResponsesEventToAnthropicState) SetLowLatencyWebSearchFastPathEnabled(enabled bool) {
+	if s == nil {
+		return
+	}
+	s.lowLatencyWebSearchFast = enabled
+}
+
 func (s *ResponsesEventToAnthropicState) SetCodeExecutionFallbackArgs(raw string) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || isEmptyJSONObject(raw) {
@@ -850,6 +861,9 @@ func ResponsesEventToAnthropicEvents(
 	evt *ResponsesStreamEvent,
 	state *ResponsesEventToAnthropicState,
 ) []AnthropicStreamEvent {
+	if evt == nil || state == nil || state.MessageStopSent {
+		return nil
+	}
 	switch evt.Type {
 	case "response.created":
 		return resToAnthHandleCreated(evt, state)
@@ -2027,6 +2041,9 @@ func resToAnthHandleWebSearchDone(evt *ResponsesStreamEvent, state *ResponsesEve
 	if query == "" {
 		return nil
 	}
+	if state.lowLatencyWebSearchFast {
+		sources = firstDistinctRealWebSearchSources(sources, 3)
+	}
 
 	// Emit server_tool_use as start({}) + input_json_delta + stop, matching
 	// real Anthropic's streaming shape. Concatenating the full input on the
@@ -2059,6 +2076,9 @@ func resToAnthHandleWebSearchDone(evt *ResponsesStreamEvent, state *ResponsesEve
 
 	idx2 := state.ContentBlockIndex
 	resultContent := synthesizeWebSearchToolResultContent(query, sources)
+	if state.lowLatencyWebSearchFast && len(sources) > 0 {
+		resultContent = synthesizeLowLatencyWebSearchToolResultContent(sources)
+	}
 	state.rememberWebSearchCitationSources(resultContent, sources)
 	events = append(events, AnthropicStreamEvent{
 		Type:  "content_block_start",
@@ -2075,6 +2095,206 @@ func resToAnthHandleWebSearchDone(evt *ResponsesStreamEvent, state *ResponsesEve
 	})
 	state.ContentBlockIndex++
 
+	if state.lowLatencyWebSearchFast {
+		events = append(events,
+			resToAnthHandleLowLatencyWebSearchCompletion(query, resultContent, state)...,
+		)
+	}
+	return events
+}
+
+func firstDistinctRealWebSearchSources(
+	sources []WebSearchSourceIn,
+	limit int,
+) []WebSearchSourceIn {
+	if limit <= 0 {
+		return nil
+	}
+	selected := make([]WebSearchSourceIn, 0, min(limit, len(sources)))
+	seen := make(map[string]struct{}, min(limit, len(sources)))
+	for _, source := range sources {
+		key := normalizeWebSearchCitationURL(source.URL)
+		if key == "" {
+			continue
+		}
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		selected = append(selected, WebSearchSourceIn{Type: source.Type, URL: source.URL})
+		if len(selected) == limit {
+			break
+		}
+	}
+	return selected
+}
+
+func synthesizeLowLatencyWebSearchToolResultContent(
+	sources []WebSearchSourceIn,
+) json.RawMessage {
+	items := make([]map[string]string, 0, len(sources))
+	for _, source := range sources {
+		host := hostFromURL(source.URL)
+		if host == "" {
+			continue
+		}
+		items = append(items, map[string]string{
+			"type":              "web_search_result",
+			"title":             host,
+			"url":               source.URL,
+			"encrypted_content": fakeEncryptedContent(),
+		})
+	}
+	content, err := json.Marshal(items)
+	if err != nil {
+		return json.RawMessage("[]")
+	}
+	return content
+}
+
+func resToAnthHandleLowLatencyWebSearchCompletion(
+	query string,
+	resultContent json.RawMessage,
+	state *ResponsesEventToAnthropicState,
+) []AnthropicStreamEvent {
+	if state == nil || state.MessageStopSent {
+		return nil
+	}
+	var results []struct {
+		URL   string `json:"url"`
+		Title string `json:"title"`
+	}
+	if json.Unmarshal(resultContent, &results) != nil || len(results) == 0 {
+		return nil
+	}
+
+	type citationSource struct {
+		URL            string
+		Title          string
+		EncryptedIndex string
+	}
+	citationSources := make([]citationSource, 0, min(3, len(results)))
+	seen := make(map[string]struct{}, min(3, len(results)))
+	for _, result := range results {
+		key := normalizeWebSearchCitationURL(result.URL)
+		source, ok := state.webSearchCitationSources[key]
+		if !ok || source.EncryptedIndex == "" {
+			continue
+		}
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+		title := hostFromURL(source.URL)
+		if title == "" {
+			title = result.Title
+		}
+		citationSources = append(citationSources, citationSource{
+			URL:            source.URL,
+			Title:          title,
+			EncryptedIndex: source.EncryptedIndex,
+		})
+		if len(citationSources) == 3 {
+			break
+		}
+	}
+	if len(citationSources) == 0 {
+		return nil
+	}
+
+	var textBuilder strings.Builder
+	textBuilder.WriteString("Search completed for: ")
+	textBuilder.WriteString(strings.TrimSpace(query))
+	textBuilder.WriteString("\n\nSources:")
+	for _, source := range citationSources {
+		textBuilder.WriteString("\n- ")
+		textBuilder.WriteString(source.URL)
+	}
+	text := textBuilder.String()
+
+	idx := state.ContentBlockIndex
+	events := []AnthropicStreamEvent{
+		{
+			Type:  "content_block_start",
+			Index: &idx,
+			ContentBlock: &AnthropicContentBlock{
+				Type: "text",
+				Text: "",
+			},
+		},
+		{
+			Type:  "content_block_delta",
+			Index: &idx,
+			Delta: &AnthropicDelta{
+				Type: "text_delta",
+				Text: text,
+			},
+		},
+	}
+	for _, source := range citationSources {
+		citedText := runeTextRange(
+			source.URL,
+			0,
+			len([]rune(source.URL)),
+		)
+		citation, err := json.Marshal(map[string]string{
+			"type":            "web_search_result_location",
+			"url":             source.URL,
+			"title":           source.Title,
+			"encrypted_index": source.EncryptedIndex,
+			"cited_text":      citedText,
+		})
+		if err != nil {
+			continue
+		}
+		events = append(events, AnthropicStreamEvent{
+			Type:  "content_block_delta",
+			Index: &idx,
+			Delta: &AnthropicDelta{
+				Type:     "citations_delta",
+				Citation: citation,
+			},
+		})
+	}
+	events = append(events, AnthropicStreamEvent{
+		Type:  "content_block_stop",
+		Index: &idx,
+	})
+	state.ContentBlockIndex++
+
+	estimatedInput := max(state.PreflightInputTokens, state.ExternalInputTokens)
+	if estimatedInput <= 0 {
+		estimatedInput = 1
+	}
+	estimatedOutput := max(1, (len([]rune(text))+3)/4)
+	state.RawTotalInputTokens = max(state.RawTotalInputTokens, estimatedInput)
+	state.RawOutputTokens = max(state.RawOutputTokens, estimatedOutput)
+	input, creation, read := estimateAnthropicCacheUsageWithExplicitCreation(
+		state.RawTotalInputTokens,
+		state.RawCachedInputTokens,
+		state.RawCacheCreationInputTokens,
+		state.Model,
+		AnthropicUsageEstimationOptions{ExternalInputTokens: state.ExternalInputTokens},
+	)
+	events = append(events,
+		AnthropicStreamEvent{
+			Type: "message_delta",
+			Delta: &AnthropicDelta{
+				StopReason: "end_turn",
+			},
+			Usage: &AnthropicUsage{
+				InputTokens:              input,
+				OutputTokens:             estimatedOutput,
+				CacheCreationInputTokens: creation,
+				CacheReadInputTokens:     read,
+				ServerToolUse: &AnthropicServerToolUsage{
+					WebSearchRequests: state.WebSearchRequestCount,
+				},
+			},
+		},
+		AnthropicStreamEvent{Type: "message_stop"},
+	)
+	state.MessageStopSent = true
 	return events
 }
 

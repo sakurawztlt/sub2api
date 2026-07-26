@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 )
 
 const (
@@ -203,7 +204,16 @@ func IsLowLatencyWebSearchProbe(req *AnthropicRequest) bool {
 	}
 
 	prompt := strings.ToLower(strings.TrimSpace(latestAnthropicUserVisibleText(req)))
-	return strings.HasPrefix(prompt, "perform a web search for the query:")
+	const prefix = "perform a web search for the query:"
+	if !strings.HasPrefix(prompt, prefix) {
+		return false
+	}
+	queryFields := strings.Fields(strings.TrimSpace(strings.TrimPrefix(prompt, prefix)))
+	if len(queryFields) != 3 || queryFields[0] != "ai" || queryFields[1] != "news" {
+		return false
+	}
+	_, err := time.Parse("2006-01-02", queryFields[2])
+	return err == nil
 }
 
 // shouldUseToolsAsBackground reports whether a request should be treated as
