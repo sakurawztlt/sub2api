@@ -46,6 +46,7 @@ func TestMigrationsRunner_IsIdempotent_AndSchemaIsUpToDate(t *testing.T) {
 	requireColumn(t, tx, "usage_logs", "openai_ws_mode", "boolean", 0, false)
 	requireColumn(t, tx, "usage_logs", "image_input_tokens", "integer", 0, false)
 	requireColumn(t, tx, "usage_logs", "image_input_cost", "numeric", 0, false)
+	requireColumn(t, tx, "usage_logs", "session_id", "character varying", 255, true)
 	requireColumn(t, tx, "channel_model_pricing", "image_input_price", "numeric", 0, true)
 	requireColumn(t, tx, "channel_account_stats_model_pricing", "image_input_price", "numeric", 0, true)
 

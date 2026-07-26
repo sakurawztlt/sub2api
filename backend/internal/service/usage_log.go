@@ -164,6 +164,10 @@ type UsageLog struct {
 	FirstTokenMs *int
 	UserAgent    *string
 	IPAddress    *string
+	// SessionID is accepted only from a validated explicit inbound session
+	// header. It is never derived from metadata.user_id, prompt_cache_key, or a
+	// relay-synthesized identifier.
+	SessionID *string
 
 	// Cache TTL Override 标记（管理员强制替换了缓存 TTL 计费）
 	CacheTTLOverridden bool
