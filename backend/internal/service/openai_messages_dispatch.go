@@ -19,6 +19,7 @@ const (
 	// 客户绕过 gcr 直打 sub2api 的 Anthropic-shape 请求也走相同路径.
 	// Group.MessagesDispatchModelConfig.OpusMappedModel / ExactModelMappings
 	// 仍优先 (DB 可显式覆盖此默认值).
+	defaultOpenAIMessagesDispatchOpusFiveMappedModel     = "gpt-5.6-sol"
 	defaultOpenAIMessagesDispatchOpusMappedModel         = "gpt-5.5"
 	defaultOpenAIMessagesDispatchSonnetFiveMappedModel   = "gpt-5.5"
 	defaultOpenAIMessagesDispatchSonnetFiveFallbackModel = "gpt-5.4"
@@ -83,6 +84,24 @@ func isClaudeSonnetFiveMessagesModel(model string) bool {
 	return strings.HasPrefix(normalized, "claude-sonnet-5")
 }
 
+func isClaudeOpusFiveMessagesModel(model string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	return normalized == "claude-opus-5"
+}
+
+func guardOpusMessagesDispatchMappedModel(requestedModel, mappedModel string) string {
+	mappedModel = strings.TrimSpace(mappedModel)
+	if !isClaudeOpusFiveMessagesModel(requestedModel) {
+		return mappedModel
+	}
+	switch strings.ToLower(mappedModel) {
+	case "", "gpt-5.5", "gpt-5.4", "gpt-5.3-codex", "gpt-5.3":
+		return defaultOpenAIMessagesDispatchOpusFiveMappedModel
+	default:
+		return mappedModel
+	}
+}
+
 func isLegacySonnetFiveDispatchModel(mappedModel string) bool {
 	switch strings.ToLower(strings.TrimSpace(mappedModel)) {
 	case "", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.3-codex-high", "gpt-5.3-codex-xhigh", "gpt-5.3":
@@ -139,9 +158,8 @@ func guardSonnetMessagesDispatchMappedModel(requestedModel, mappedModel string) 
 //     cctest opus-4-7 behavior validation regressed from 85% to 60% because
 //     groups that relied on DefaultMappedModel for Claude requests were
 //     silently falling to the hard-coded family defaults.)
-//  4. Hard-coded family default (gpt-5.5 Opus / gpt-5.3-codex Sonnet /
-//     gpt-5.4-mini Haiku). codex round54 fu64 (2026-05-21) Phase 1: Opus
-//     升 gpt-5.5; Sonnet/Haiku 不动. See const block above.
+//  4. Hard-coded family default (gpt-5.6-sol Opus 5 / gpt-5.5 older Opus /
+//     gpt-5.4 Sonnet / gpt-5.4-mini Haiku). See the const block above.
 //
 // Fork deliberately diverges from upstream/main here: upstream went back to
 // no groupDefault fallback. Our groups historically configured
@@ -172,10 +190,13 @@ func (g *Group) ResolveMessagesDispatchModel(requestedModel string) string {
 	switch claudeMessagesDispatchFamily(requestedModel) {
 	case "opus":
 		if mappedModel := strings.TrimSpace(cfg.OpusMappedModel); mappedModel != "" {
-			return mappedModel
+			return guardOpusMessagesDispatchMappedModel(requestedModel, mappedModel)
 		}
 		if groupDefault != "" {
-			return groupDefault
+			return guardOpusMessagesDispatchMappedModel(requestedModel, groupDefault)
+		}
+		if isClaudeOpusFiveMessagesModel(requestedModel) {
+			return defaultOpenAIMessagesDispatchOpusFiveMappedModel
 		}
 		return defaultOpenAIMessagesDispatchOpusMappedModel
 	case "sonnet":

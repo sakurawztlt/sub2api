@@ -95,6 +95,59 @@ func TestResolveMessagesDispatchModel_GroupDefaultFallback(t *testing.T) {
 			want:           "gpt-5.5",
 		},
 		{
+			name:           "opus 5 defaults to gpt-5.6-sol",
+			group:          &Group{},
+			requestedModel: "claude-opus-5",
+			want:           "gpt-5.6-sol",
+		},
+		{
+			name:           "future opus 5.1 keeps generic opus default",
+			group:          &Group{},
+			requestedModel: "claude-opus-5-1",
+			want:           "gpt-5.5",
+		},
+		{
+			name: "opus 5 upgrades the legacy opus family mapping",
+			group: &Group{
+				MessagesDispatchModelConfig: OpenAIMessagesDispatchModelConfig{
+					OpusMappedModel: "gpt-5.5",
+				},
+			},
+			requestedModel: "claude-opus-5",
+			want:           "gpt-5.6-sol",
+		},
+		{
+			name: "opus 5 upgrades the legacy group default",
+			group: &Group{
+				DefaultMappedModel: "gpt-5.4",
+			},
+			requestedModel: "claude-opus-5",
+			want:           "gpt-5.6-sol",
+		},
+		{
+			name: "opus 5 preserves a non-legacy family mapping",
+			group: &Group{
+				MessagesDispatchModelConfig: OpenAIMessagesDispatchModelConfig{
+					OpusMappedModel: "gpt-5.6-sol-pro",
+				},
+			},
+			requestedModel: "claude-opus-5",
+			want:           "gpt-5.6-sol-pro",
+		},
+		{
+			name: "opus 5 exact mapping beats the generation guard",
+			group: &Group{
+				MessagesDispatchModelConfig: OpenAIMessagesDispatchModelConfig{
+					OpusMappedModel: "gpt-5.5",
+					ExactModelMappings: map[string]string{
+						"claude-opus-5": "gpt-5.5-pro",
+					},
+				},
+			},
+			requestedModel: "claude-opus-5",
+			want:           "gpt-5.5-pro",
+		},
+		{
 			name:           "no config at all: sonnet hard-coded default",
 			group:          &Group{},
 			requestedModel: "claude-sonnet-4-5",
