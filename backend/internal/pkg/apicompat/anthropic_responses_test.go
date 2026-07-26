@@ -2609,7 +2609,7 @@ func TestAnthropicToResponses_WebSearchTranslatedToPreview(t *testing.T) {
 	}
 }
 
-func TestAnthropicToResponses_WebSearchMaxUsesMapsToMaxToolCallsOnlyWhenSafe(t *testing.T) {
+func TestAnthropicToResponses_WebSearchMaxUsesIsNotForwardedAsUnsupportedMaxToolCalls(t *testing.T) {
 	base := AnthropicRequest{
 		Model:     "gpt-5.2",
 		MaxTokens: 1024,
@@ -2622,8 +2622,11 @@ func TestAnthropicToResponses_WebSearchMaxUsesMapsToMaxToolCallsOnlyWhenSafe(t *
 	}}
 	resp, err := AnthropicToResponses(&onlySearch)
 	require.NoError(t, err)
-	require.NotNil(t, resp.MaxToolCalls)
-	assert.Equal(t, 1, *resp.MaxToolCalls)
+	require.Len(t, resp.Tools, 1)
+	assert.Equal(t, "web_search", resp.Tools[0].Type)
+	wire, err := json.Marshal(resp)
+	require.NoError(t, err)
+	assert.NotContains(t, string(wire), `"max_tool_calls"`)
 
 	mixed := base
 	mixed.Tools = []AnthropicTool{
@@ -2632,8 +2635,9 @@ func TestAnthropicToResponses_WebSearchMaxUsesMapsToMaxToolCallsOnlyWhenSafe(t *
 	}
 	resp, err = AnthropicToResponses(&mixed)
 	require.NoError(t, err)
-	require.NotNil(t, resp.MaxToolCalls)
-	assert.Equal(t, 1, *resp.MaxToolCalls, "custom function calls do not consume OpenAI's built-in tool budget")
+	wire, err = json.Marshal(resp)
+	require.NoError(t, err)
+	assert.NotContains(t, string(wire), `"max_tool_calls"`)
 
 	singularProbe := base
 	singularProbe.Messages = []AnthropicMessage{{
@@ -2646,8 +2650,10 @@ func TestAnthropicToResponses_WebSearchMaxUsesMapsToMaxToolCallsOnlyWhenSafe(t *
 	}}
 	resp, err = AnthropicToResponses(&singularProbe)
 	require.NoError(t, err)
-	require.NotNil(t, resp.MaxToolCalls)
-	assert.Equal(t, 1, *resp.MaxToolCalls, "singular CCTest search must not fan out into multiple built-in calls")
+	wire, err = json.Marshal(resp)
+	require.NoError(t, err)
+	assert.NotContains(t, string(wire), `"max_tool_calls"`,
+		"the current OpenAI upstream rejects max_tool_calls; cap only the Anthropic response projection")
 }
 
 func TestAnthropicToResponses_EmptyAssistantStringIsSkipped(t *testing.T) {

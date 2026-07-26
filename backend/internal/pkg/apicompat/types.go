@@ -277,7 +277,6 @@ type ResponsesRequest struct {
 	Tools           []ResponsesTool `json:"tools,omitempty"`
 	Include         []string        `json:"include,omitempty"`
 	Store           *bool           `json:"store,omitempty"`
-	MaxToolCalls    *int            `json:"max_tool_calls,omitempty"`
 	// 2026-05-06 partial port of upstream 0584305e (Claude Code compat).
 	// ParallelToolCalls/PromptCacheKey/PreviousResponseID/Text.Verbosity
 	// are needed by openai_messages_continuation/replay_guard wiring to
