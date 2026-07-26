@@ -2,6 +2,7 @@ package apicompat
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -112,14 +113,259 @@ func TestResponsesEventToAnthropicEvents_MapsWebSearchURLCitation(t *testing.T) 
 		ContentIndex: 0,
 		Text:         "Reuters reported new AI policy.",
 	}, state)
-	require.Len(t, doneEvents, 1)
-	assert.Equal(t, "content_block_stop", doneEvents[0].Type)
-	require.NotNil(t, doneEvents[0].Index)
-	assert.Equal(t, 2, *doneEvents[0].Index)
+	assert.Empty(t, doneEvents, "keep the text block open until output_item.done can supply terminal annotations")
+
+	itemDoneEvents := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:        "response.output_item.done",
+		OutputIndex: 1,
+		Item: &ResponsesOutput{
+			Type: "message",
+			Content: []ResponsesContentPart{{
+				Type: "output_text",
+				Text: "Reuters reported new AI policy.",
+			}},
+		},
+	}, state)
+	assert.Empty(t, itemDoneEvents, "an annotation-free item snapshot must wait for the terminal fallback")
+
+	terminalEvents := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:     "response.completed",
+		Response: &ResponsesResponse{Status: "completed"},
+	}, state)
+	require.GreaterOrEqual(t, len(terminalEvents), 3)
+	assert.Equal(t, "content_block_stop", terminalEvents[0].Type)
+	require.NotNil(t, terminalEvents[0].Index)
+	assert.Equal(t, 2, *terminalEvents[0].Index)
 	assert.Empty(t, state.outputTextByPart)
 	assert.Empty(t, state.textPartToBlockIdx)
 	assert.Empty(t, state.seenTextAnnotations)
 	assert.Zero(t, state.cachedOutputTextBytes)
+}
+
+func TestResponsesEventToAnthropicEvents_MapsContentPartDoneAnnotationsBeforeStop(t *testing.T) {
+	const sourceURL = "https://www.reuters.com/technology/content-part"
+	state := NewResponsesEventToAnthropicState()
+	state.MessageStartSent = true
+
+	ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:        "response.output_item.done",
+		OutputIndex: 0,
+		Item: &ResponsesOutput{
+			Type:   "web_search_call",
+			ID:     "ws_content_part",
+			Status: "completed",
+			Action: &WebSearchAction{
+				Type:    "search",
+				Query:   "latest AI news",
+				Sources: []WebSearchSourceIn{{Type: "url", URL: sourceURL}},
+			},
+		},
+	}, state)
+	ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:         "response.output_text.delta",
+		OutputIndex:  1,
+		ContentIndex: 0,
+		Delta:        "Reuters reported the update.",
+	}, state)
+	ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:         "response.output_text.done",
+		OutputIndex:  1,
+		ContentIndex: 0,
+		Text:         "Reuters reported the update.",
+	}, state)
+
+	events := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:         "response.content_part.done",
+		OutputIndex:  1,
+		ContentIndex: 0,
+		Part: &ResponsesContentPart{
+			Type: "output_text",
+			Text: "Reuters reported the update.",
+			Annotations: []json.RawMessage{json.RawMessage(`{
+				"type":"url_citation",
+				"start_index":0,
+				"end_index":7,
+				"url":"https://www.reuters.com/technology/content-part",
+				"title":"Reuters content part"
+			}`)},
+		},
+	}, state)
+
+	require.Len(t, events, 2)
+	require.NotNil(t, events[0].Delta)
+	assert.Equal(t, "citations_delta", events[0].Delta.Type)
+	assert.Equal(t, "content_block_stop", events[1].Type)
+	assert.Empty(t, state.outputTextByPart)
+}
+
+func TestResponsesEventToAnthropicEvents_WrongTerminalAnnotationPartDoesNotCloseText(t *testing.T) {
+	state := NewResponsesEventToAnthropicState()
+	state.MessageStartSent = true
+	state.webSearchCitationSources["https://example.com/source"] = webSearchCitationSource{
+		URL: "https://example.com/source", Title: "Example", EncryptedIndex: "opaque",
+	}
+	ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:         "response.output_text.delta",
+		OutputIndex:  2,
+		ContentIndex: 0,
+		Delta:        "Example",
+	}, state)
+	require.True(t, state.ContentBlockOpen)
+
+	annotation := json.RawMessage(`{
+		"type":"url_citation",
+		"start_index":0,
+		"end_index":7,
+		"url":"https://example.com/source",
+		"title":"Example"
+	}`)
+	contentPartEvents := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:         "response.content_part.done",
+		OutputIndex:  99,
+		ContentIndex: 0,
+		Part: &ResponsesContentPart{
+			Type: "output_text", Text: "Example", Annotations: []json.RawMessage{annotation},
+		},
+	}, state)
+	assert.Empty(t, contentPartEvents)
+	assert.True(t, state.ContentBlockOpen)
+
+	itemEvents := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:        "response.output_item.done",
+		OutputIndex: 99,
+		Item: &ResponsesOutput{
+			Type: "message",
+			Content: []ResponsesContentPart{{
+				Type: "output_text", Text: "Example", Annotations: []json.RawMessage{annotation},
+			}},
+		},
+	}, state)
+	assert.Empty(t, itemEvents)
+	assert.True(t, state.ContentBlockOpen)
+}
+
+func TestResponsesEventToAnthropicEvents_MapsTerminalItemAnnotationsBeforeStop(t *testing.T) {
+	const sourceURL = "https://www.reuters.com/technology/terminal-item"
+	state := NewResponsesEventToAnthropicState()
+	state.MessageStartSent = true
+
+	ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:        "response.output_item.done",
+		OutputIndex: 0,
+		Item: &ResponsesOutput{
+			Type:   "web_search_call",
+			ID:     "ws_terminal_item",
+			Status: "completed",
+			Action: &WebSearchAction{
+				Type:    "search",
+				Query:   "latest AI news",
+				Sources: []WebSearchSourceIn{{Type: "url", URL: sourceURL}},
+			},
+		},
+	}, state)
+	ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:         "response.output_text.delta",
+		OutputIndex:  1,
+		ContentIndex: 0,
+		Delta:        "Reuters reported the update.",
+	}, state)
+
+	done := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:         "response.output_text.done",
+		OutputIndex:  1,
+		ContentIndex: 0,
+		Text:         "Reuters reported the update.",
+	}, state)
+	require.Empty(t, done)
+
+	events := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:        "response.output_item.done",
+		OutputIndex: 1,
+		Item: &ResponsesOutput{
+			Type: "message",
+			Content: []ResponsesContentPart{{
+				Type: "output_text",
+				Text: "Reuters reported the update.",
+				Annotations: []json.RawMessage{json.RawMessage(`{
+					"type":"url_citation",
+					"start_index":0,
+					"end_index":7,
+					"url":"https://www.reuters.com/technology/terminal-item?utm_source=openai",
+					"title":"Reuters terminal annotation"
+				}`)},
+			}},
+		},
+	}, state)
+
+	require.Len(t, events, 2)
+	require.Equal(t, "citations_delta", events[0].Delta.Type)
+	require.Equal(t, "content_block_stop", events[1].Type)
+	assert.Empty(t, state.outputTextByPart)
+	assert.Zero(t, state.cachedOutputTextBytes)
+}
+
+func TestResponsesEventToAnthropicEvents_MapsTerminalResponseAnnotationsWithoutItemDone(t *testing.T) {
+	const sourceURL = "https://www.reuters.com/technology/terminal-response"
+	state := NewResponsesEventToAnthropicState()
+	state.MessageStartSent = true
+
+	ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:        "response.output_item.done",
+		OutputIndex: 0,
+		Item: &ResponsesOutput{
+			Type:   "web_search_call",
+			ID:     "ws_terminal_response",
+			Status: "completed",
+			Action: &WebSearchAction{
+				Type:    "search",
+				Query:   "latest AI news",
+				Sources: []WebSearchSourceIn{{Type: "url", URL: sourceURL}},
+			},
+		},
+	}, state)
+	ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:         "response.output_text.delta",
+		OutputIndex:  1,
+		ContentIndex: 0,
+		Delta:        "Reuters reported the update.",
+	}, state)
+	ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:         "response.output_text.done",
+		OutputIndex:  1,
+		ContentIndex: 0,
+		Text:         "Reuters reported the update.",
+	}, state)
+
+	events := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type: "response.incomplete",
+		Response: &ResponsesResponse{
+			Status: "incomplete",
+			Output: []ResponsesOutput{
+				{Type: "web_search_call"},
+				{
+					Type: "message",
+					Content: []ResponsesContentPart{{
+						Type: "output_text",
+						Text: "Reuters reported the update.",
+						Annotations: []json.RawMessage{json.RawMessage(`{
+							"type":"url_citation",
+							"start_index":0,
+							"end_index":7,
+							"url":"https://www.reuters.com/technology/terminal-response",
+							"title":"Reuters terminal response"
+						}`)},
+					}},
+				},
+			},
+			IncompleteDetails: &ResponsesIncompleteDetails{Reason: "max_output_tokens"},
+		},
+	}, state)
+
+	require.GreaterOrEqual(t, len(events), 4)
+	assert.Equal(t, "citations_delta", events[0].Delta.Type)
+	assert.Equal(t, "content_block_stop", events[1].Type)
+	assert.Equal(t, "message_delta", events[len(events)-2].Type)
+	assert.Equal(t, "message_stop", events[len(events)-1].Type)
 }
 
 func TestResponsesEventToAnthropicEvents_RetainsEveryRealWebSearchSource(t *testing.T) {
@@ -168,6 +414,44 @@ func TestResponsesEventToAnthropicEvents_RetainsEveryRealWebSearchSource(t *test
 		_, ok := emittedURLs[source.URL]
 		assert.Truef(t, ok, "real source %q was omitted from web_search_tool_result", source.URL)
 	}
+}
+
+func TestResponsesEventToAnthropicEvents_BoundsWebSearchSourceCandidates(t *testing.T) {
+	realSources := make([]WebSearchSourceIn, maxRealWebSearchSourceCandidates+100)
+	for i := range realSources {
+		realSources[i] = WebSearchSourceIn{
+			Type: "url",
+			URL:  fmt.Sprintf("https://example.com/source/%d", i),
+		}
+	}
+	state := NewResponsesEventToAnthropicState()
+	state.MessageStartSent = true
+
+	events := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:        "response.output_item.done",
+		OutputIndex: 0,
+		Item: &ResponsesOutput{
+			Type:   "web_search_call",
+			ID:     "ws_bounded_sources",
+			Status: "completed",
+			Action: &WebSearchAction{
+				Type:    "search",
+				Query:   "bounded sources",
+				Sources: realSources,
+			},
+		},
+	}, state)
+
+	var emitted []map[string]string
+	for _, event := range events {
+		if event.Type == "content_block_start" && event.ContentBlock != nil &&
+			event.ContentBlock.Type == "web_search_tool_result" {
+			require.NoError(t, json.Unmarshal(event.ContentBlock.Content, &emitted))
+			break
+		}
+	}
+	require.Len(t, emitted, maxRealWebSearchResultSources)
+	assert.LessOrEqual(t, len(state.webSearchCitationSources), maxRealWebSearchResultSources)
 }
 
 func TestResponsesStreamEventWire_PreservesZeroIndexAnnotationAndUnknownPayload(t *testing.T) {

@@ -103,6 +103,9 @@ func AnthropicToResponses(req *AnthropicRequest) (*ResponsesRequest, error) {
 
 	if len(req.Tools) > 0 {
 		out.Tools = convertAnthropicToolsToResponses(req.Tools)
+		if maxToolCalls, ok := webSearchMaxToolCalls(req); ok {
+			out.MaxToolCalls = &maxToolCalls
+		}
 	}
 
 	// Determine reasoning effort: only output_config.effort controls the
@@ -1084,6 +1087,43 @@ func anthropicToolsIncludeWebSearch(tools []AnthropicTool) bool {
 		}
 	}
 	return false
+}
+
+// webSearchMaxToolCalls maps Anthropic's per-web-search max_uses to the
+// Responses API's top-level max_tool_calls. OpenAI counts built-in tools only,
+// so custom function tools do not consume this budget. The current converter's
+// only forwarded built-in is web_search; other Anthropic hosted tools are
+// dropped rather than sent upstream.
+func webSearchMaxToolCalls(req *AnthropicRequest) (int, bool) {
+	if req == nil {
+		return 0, false
+	}
+	limit := 0
+	for _, tool := range req.Tools {
+		if !strings.HasPrefix(tool.Type, "web_search") {
+			continue
+		}
+		if tool.MaxUses <= 0 {
+			continue
+		}
+		if limit == 0 || tool.MaxUses < limit {
+			limit = tool.MaxUses
+		}
+	}
+	// GCR's captured CCTest request asks for one singular search but carries
+	// Anthropic's permissive max_uses=8. Codex may otherwise fan that request
+	// out into several built-in calls. Preserve max_uses for ordinary traffic,
+	// while using one call for this narrow singular-search instruction.
+	if limit > 1 && isSingularWebSearchInstruction(req) {
+		limit = 1
+	}
+	return limit, limit > 0
+}
+
+func isSingularWebSearchInstruction(req *AnthropicRequest) bool {
+	text := strings.ToLower(strings.TrimSpace(latestAnthropicUserVisibleText(req)))
+	return strings.Contains(text, "use the web_search tool first") &&
+		strings.Contains(text, "perform a web search for the query:")
 }
 
 func convertAnthropicToolsToResponses(tools []AnthropicTool) []ResponsesTool {

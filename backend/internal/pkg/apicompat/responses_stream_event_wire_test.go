@@ -81,9 +81,10 @@ func TestWire_ReasoningItemSummaryAlwaysArray(t *testing.T) {
 
 // TestWire_ContentPartCarriesAnnotationsLogprobs guards the output_text part shape.
 func TestWire_ContentPartCarriesAnnotationsLogprobs(t *testing.T) {
+	annotation := json.RawMessage(`{"type":"url_citation","url":"https://example.com","start_index":0,"end_index":7}`)
 	m := marshalEvent(t, ResponsesStreamEvent{
 		Type: "response.content_part.added", OutputIndex: 0, ContentIndex: 0, ItemID: "msg_1",
-		Part: &ResponsesContentPart{Type: "output_text", Text: ""},
+		Part: &ResponsesContentPart{Type: "output_text", Text: "", Annotations: []json.RawMessage{annotation}},
 	})
 	part, ok := m["part"].(map[string]any)
 	require.True(t, ok, "part must be an object")
@@ -91,6 +92,7 @@ func TestWire_ContentPartCarriesAnnotationsLogprobs(t *testing.T) {
 	require.Contains(t, part, "text")
 	require.Contains(t, part, "annotations")
 	require.Contains(t, part, "logprobs")
+	require.Len(t, part["annotations"], 1)
 }
 
 // TestWire_ArgumentsDonePresentEvenEmpty guards arguments presence on done.

@@ -134,6 +134,7 @@ type AnthropicImageSource struct {
 type AnthropicTool struct {
 	Type         string                 `json:"type,omitempty"` // e.g. "web_search_20250305" for server tools
 	Name         string                 `json:"name"`
+	MaxUses      int                    `json:"max_uses,omitempty"`
 	Description  string                 `json:"description,omitempty"`
 	InputSchema  json.RawMessage        `json:"input_schema"` // JSON Schema object
 	CacheControl *AnthropicCacheControl `json:"cache_control,omitempty"`
@@ -276,6 +277,7 @@ type ResponsesRequest struct {
 	Tools           []ResponsesTool `json:"tools,omitempty"`
 	Include         []string        `json:"include,omitempty"`
 	Store           *bool           `json:"store,omitempty"`
+	MaxToolCalls    *int            `json:"max_tool_calls,omitempty"`
 	// 2026-05-06 partial port of upstream 0584305e (Claude Code compat).
 	// ParallelToolCalls/PromptCacheKey/PreviousResponseID/Text.Verbosity
 	// are needed by openai_messages_continuation/replay_guard wiring to
@@ -334,6 +336,13 @@ type ResponsesInputItem struct {
 type ResponsesContentPart struct {
 	Type string `json:"type"` // "input_text" | "output_text" | "input_image" | "input_file"
 	Text string `json:"text,omitempty"`
+
+	// type=output_text. Some Responses-compatible upstreams omit the
+	// incremental response.output_text.annotation.added event and expose URL
+	// citations only on output_item.done / the terminal response snapshot.
+	// Preserve the raw variants here so the Anthropic stream converter can
+	// narrow only the url_citation shape it understands.
+	Annotations []json.RawMessage `json:"annotations,omitempty"`
 
 	// type=input_image
 	ImageURL string `json:"image_url,omitempty"` // data URI

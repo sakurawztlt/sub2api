@@ -838,6 +838,8 @@ func ResponsesEventToAnthropicEvents(
 		return resToAnthHandleTextAnnotationAdded(evt, state)
 	case "response.output_text.done":
 		return resToAnthHandleTextDone(evt, state)
+	case "response.content_part.done":
+		return resToAnthHandleContentPartDone(evt, state)
 	case "response.function_call_arguments.delta":
 		return resToAnthHandleFuncArgsDelta(evt, state)
 	case "response.function_call_arguments.done":
@@ -1166,6 +1168,14 @@ func resToAnthHandleTextDelta(evt *ResponsesStreamEvent, state *ResponsesEventTo
 }
 
 func resToAnthHandleTextAnnotationAdded(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
+	return resToAnthHandleTextAnnotationAddedWithRunes(evt, state, nil)
+}
+
+func resToAnthHandleTextAnnotationAddedWithRunes(
+	evt *ResponsesStreamEvent,
+	state *ResponsesEventToAnthropicState,
+	cachedRunes []rune,
+) []AnthropicStreamEvent {
 	if state.citationTrackingDisabled || evt.AnnotationIndex < 0 {
 		return nil
 	}
@@ -1212,11 +1222,12 @@ func resToAnthHandleTextAnnotationAdded(evt *ResponsesStreamEvent, state *Respon
 	if builder == nil {
 		return nil
 	}
-	citedText := runeTextRange(
-		builder.String(),
-		annotation.StartIndex,
-		annotation.EndIndex,
-	)
+	citedText := ""
+	if cachedRunes != nil {
+		citedText = runeSliceRange(cachedRunes, annotation.StartIndex, annotation.EndIndex)
+	} else {
+		citedText = runeTextRange(builder.String(), annotation.StartIndex, annotation.EndIndex)
+	}
 	if citedText == "" {
 		return nil
 	}
@@ -1248,22 +1259,37 @@ func resToAnthHandleTextAnnotationAdded(evt *ResponsesStreamEvent, state *Respon
 }
 
 func resToAnthHandleTextDone(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
-	events := resToAnthHandleBlockDone(state)
-	partKey := responsesTextPartKey{
-		OutputIndex:  evt.OutputIndex,
-		ContentIndex: evt.ContentIndex,
+	if len(state.webSearchCitationSources) == 0 {
+		return resToAnthHandleBlockDone(state)
 	}
-	if builder := state.outputTextByPart[partKey]; builder != nil {
-		state.cachedOutputTextBytes -= builder.Len()
-		if state.cachedOutputTextBytes < 0 {
-			state.cachedOutputTextBytes = 0
-		}
+	// The public Responses API normally emits annotation.added before this
+	// event. The Codex-compatible HTTP stream used by the relay can instead
+	// expose annotations only on output_item.done or the terminal response
+	// snapshot. Keep the Anthropic text block and its bounded text cache alive
+	// until one of those final snapshots has been inspected. The next block or
+	// terminal event still closes it if no snapshot arrives.
+	return nil
+}
+
+func resToAnthHandleContentPartDone(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
+	if evt.Part == nil || len(evt.Part.Annotations) == 0 {
+		return nil
 	}
-	delete(state.outputTextByPart, partKey)
-	delete(state.textPartToBlockIdx, partKey)
-	delete(state.seenTextAnnotations, partKey)
-	delete(state.overflowedTextParts, partKey)
-	return events
+	if !terminalTextPartMatchesCurrentBlock(
+		evt.OutputIndex,
+		evt.ContentIndex,
+		evt.Part,
+		state,
+	) {
+		return nil
+	}
+	events := resToAnthHandleTerminalTextPartAnnotations(
+		evt.OutputIndex,
+		evt.ContentIndex,
+		evt.Part,
+		state,
+	)
+	return append(events, closeCurrentBlock(state)...)
 }
 
 func (state *ResponsesEventToAnthropicState) disableCitationTextTracking() {
@@ -1279,8 +1305,28 @@ func runeTextRange(text string, start, end int) string {
 	if start < 0 || end <= start {
 		return ""
 	}
-	runes := []rune(text)
-	if start >= len(runes) {
+	if end-start > 150 {
+		end = start + 150
+	}
+	var out strings.Builder
+	runeIndex := 0
+	for _, value := range text {
+		if runeIndex >= end {
+			break
+		}
+		if runeIndex >= start {
+			_, _ = out.WriteRune(value)
+		}
+		runeIndex++
+	}
+	if runeIndex <= start {
+		return ""
+	}
+	return out.String()
+}
+
+func runeSliceRange(runes []rune, start, end int) string {
+	if start < 0 || end <= start || start >= len(runes) {
 		return ""
 	}
 	if end > len(runes) {
@@ -1505,10 +1551,138 @@ func resToAnthHandleOutputItemDone(evt *ResponsesStreamEvent, state *ResponsesEv
 		return resToAnthHandleWebSearchDone(evt, state)
 	}
 
+	if evt.Item.Type == "message" {
+		// Do not close yet: a later terminal response may be the only snapshot
+		// carrying annotations. Any citations present here are emitted now and
+		// deduplicated against both incremental and terminal annotations.
+		events := resToAnthHandleTerminalTextAnnotations(evt.OutputIndex, evt.Item.Content, state)
+		if terminalTextAnnotationsMatchCurrentBlock(evt.OutputIndex, evt.Item.Content, state) {
+			return append(events, closeCurrentBlock(state)...)
+		}
+		return events
+	}
+
 	if state.ContentBlockOpen {
 		return closeCurrentBlock(state)
 	}
 	return nil
+}
+
+func terminalTextAnnotationsMatchCurrentBlock(
+	outputIndex int,
+	content []ResponsesContentPart,
+	state *ResponsesEventToAnthropicState,
+) bool {
+	for contentIndex := range content {
+		if terminalTextPartMatchesCurrentBlock(
+			outputIndex,
+			contentIndex,
+			&content[contentIndex],
+			state,
+		) {
+			return true
+		}
+	}
+	return false
+}
+
+func terminalTextPartMatchesCurrentBlock(
+	outputIndex int,
+	contentIndex int,
+	part *ResponsesContentPart,
+	state *ResponsesEventToAnthropicState,
+) bool {
+	if state == nil || part == nil || part.Type != "output_text" ||
+		len(part.Annotations) == 0 || !state.ContentBlockOpen ||
+		state.CurrentBlockType != "text" {
+		return false
+	}
+	partKey := responsesTextPartKey{
+		OutputIndex:  outputIndex,
+		ContentIndex: contentIndex,
+	}
+	blockIdx, ok := state.textPartToBlockIdx[partKey]
+	return ok && blockIdx == state.ContentBlockIndex
+}
+
+func resToAnthHandleTerminalTextAnnotations(
+	outputIndex int,
+	content []ResponsesContentPart,
+	state *ResponsesEventToAnthropicState,
+) []AnthropicStreamEvent {
+	if state == nil || state.citationTrackingDisabled || !state.ContentBlockOpen ||
+		state.CurrentBlockType != "text" {
+		return nil
+	}
+
+	var events []AnthropicStreamEvent
+	for contentIndex, part := range content {
+		events = append(events,
+			resToAnthHandleTerminalTextPartAnnotations(outputIndex, contentIndex, &part, state)...,
+		)
+	}
+	return events
+}
+
+func resToAnthHandleTerminalTextPartAnnotations(
+	outputIndex int,
+	contentIndex int,
+	part *ResponsesContentPart,
+	state *ResponsesEventToAnthropicState,
+) []AnthropicStreamEvent {
+	if part == nil || part.Type != "output_text" || len(part.Annotations) == 0 {
+		return nil
+	}
+	if !terminalTextPartMatchesCurrentBlock(outputIndex, contentIndex, part, state) {
+		return nil
+	}
+	partKey := responsesTextPartKey{
+		OutputIndex:  outputIndex,
+		ContentIndex: contentIndex,
+	}
+	builder := state.outputTextByPart[partKey]
+	if builder == nil {
+		return nil
+	}
+	// Terminal snapshots can carry dozens of annotations at once. Convert the
+	// bounded text cache to runes once for this part instead of allocating a
+	// full rune slice for every citation.
+	textRunes := []rune(builder.String())
+
+	var events []AnthropicStreamEvent
+	for annotationIndex, annotation := range part.Annotations {
+		if annotationIndex >= maxAnnotationsPerTextPart {
+			break
+		}
+		events = append(events, resToAnthHandleTextAnnotationAddedWithRunes(&ResponsesStreamEvent{
+			Type:            "response.output_text.annotation.added",
+			OutputIndex:     outputIndex,
+			ContentIndex:    contentIndex,
+			AnnotationIndex: annotationIndex,
+			Annotation:      annotation,
+		}, state, textRunes)...)
+	}
+	return events
+}
+
+func resToAnthHandleTerminalResponseAnnotations(
+	resp *ResponsesResponse,
+	state *ResponsesEventToAnthropicState,
+) []AnthropicStreamEvent {
+	if resp == nil {
+		return nil
+	}
+	var events []AnthropicStreamEvent
+	for outputIndex := range resp.Output {
+		item := &resp.Output[outputIndex]
+		if item.Type != "message" {
+			continue
+		}
+		events = append(events,
+			resToAnthHandleTerminalTextAnnotations(outputIndex, item.Content, state)...,
+		)
+	}
+	return events
 }
 
 // resToAnthHandleWebSearchDone converts an OpenAI web_search_call output item
@@ -1561,7 +1735,7 @@ func resToAnthHandleWebSearchDone(evt *ResponsesStreamEvent, state *ResponsesEve
 
 	idx2 := state.ContentBlockIndex
 	resultContent := synthesizeWebSearchToolResultContent(query, sources)
-	state.rememberWebSearchCitationSources(resultContent)
+	state.rememberWebSearchCitationSources(resultContent, sources)
 	events = append(events, AnthropicStreamEvent{
 		Type:  "content_block_start",
 		Index: &idx2,
@@ -1580,8 +1754,24 @@ func resToAnthHandleWebSearchDone(evt *ResponsesStreamEvent, state *ResponsesEve
 	return events
 }
 
-func (state *ResponsesEventToAnthropicState) rememberWebSearchCitationSources(content json.RawMessage) {
+func (state *ResponsesEventToAnthropicState) rememberWebSearchCitationSources(
+	content json.RawMessage,
+	realSources []WebSearchSourceIn,
+) {
 	if state == nil {
+		return
+	}
+	allowed := make(map[string]struct{}, maxRealWebSearchResultSources)
+	for sourceIndex, source := range realSources {
+		if sourceIndex >= maxRealWebSearchSourceCandidates ||
+			len(allowed) >= maxRealWebSearchResultSources {
+			break
+		}
+		if key := normalizeWebSearchCitationURL(source.URL); key != "" {
+			allowed[key] = struct{}{}
+		}
+	}
+	if len(allowed) == 0 {
 		return
 	}
 	var results []struct {
@@ -1601,6 +1791,9 @@ func (state *ResponsesEventToAnthropicState) rememberWebSearchCitationSources(co
 		}
 		key := normalizeWebSearchCitationURL(result.URL)
 		if key == "" {
+			continue
+		}
+		if _, isRealSource := allowed[key]; !isRealSource {
 			continue
 		}
 		if _, exists := state.webSearchCitationSources[key]; !exists &&
@@ -1656,6 +1849,9 @@ func resToAnthHandleCompleted(evt *ResponsesStreamEvent, state *ResponsesEventTo
 	}
 
 	var events []AnthropicStreamEvent
+	if evt.Response != nil {
+		events = append(events, resToAnthHandleTerminalResponseAnnotations(evt.Response, state)...)
+	}
 	events = append(events, closeCurrentBlock(state)...)
 	events = append(events, flushPendingCodeExecutionText(state)...)
 
@@ -1787,6 +1983,9 @@ func closeCurrentBlock(state *ResponsesEventToAnthropicState) []AnthropicStreamE
 	}
 
 	idx := state.ContentBlockIndex
+	if state.CurrentBlockType == "text" {
+		cleanupCitationTextPartsForBlock(state, idx)
+	}
 	state.ContentBlockOpen = false
 	state.ContentBlockIndex++
 	state.CurrentToolName = ""
@@ -1799,6 +1998,27 @@ func closeCurrentBlock(state *ResponsesEventToAnthropicState) []AnthropicStreamE
 		Index: &idx,
 	})
 	return events
+}
+
+func cleanupCitationTextPartsForBlock(state *ResponsesEventToAnthropicState, blockIdx int) {
+	if state == nil {
+		return
+	}
+	for partKey, mappedBlockIdx := range state.textPartToBlockIdx {
+		if mappedBlockIdx != blockIdx {
+			continue
+		}
+		if builder := state.outputTextByPart[partKey]; builder != nil {
+			state.cachedOutputTextBytes -= builder.Len()
+		}
+		delete(state.outputTextByPart, partKey)
+		delete(state.textPartToBlockIdx, partKey)
+		delete(state.seenTextAnnotations, partKey)
+		delete(state.overflowedTextParts, partKey)
+	}
+	if state.cachedOutputTextBytes < 0 {
+		state.cachedOutputTextBytes = 0
+	}
 }
 
 // fakeEncryptedContent 生成 ~512 bytes random base64 (~700 chars) 占位
@@ -1825,7 +2045,10 @@ func fakeEncryptedContent() string {
 // title/page_age/encrypted_content 仍 fabricate (OpenAI 不暴露).
 //
 // 注: realSources 为 nil 或空时, 走纯 fabricated 老路径.
-const maxRealWebSearchResultSources = 64
+const (
+	maxRealWebSearchResultSources    = 64
+	maxRealWebSearchSourceCandidates = 256
+)
 
 func synthesizeWebSearchToolResultContent(query string, realSources []WebSearchSourceIn) json.RawMessage {
 	if query == "" {
@@ -1882,7 +2105,10 @@ func synthesizeWebSearchToolResultContent(query string, realSources []WebSearchS
 	// A hard cap prevents a malformed upstream event from amplifying one small
 	// source entry into an unbounded encrypted-content payload. If real sources
 	// are sparse, top up to minCount with fabricated entries.
-	for _, src := range realSources {
+	for sourceIndex, src := range realSources {
+		if sourceIndex >= maxRealWebSearchSourceCandidates {
+			break
+		}
 		if len(items) >= maxRealWebSearchResultSources {
 			break
 		}

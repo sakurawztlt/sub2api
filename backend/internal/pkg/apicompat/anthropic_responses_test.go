@@ -2609,6 +2609,47 @@ func TestAnthropicToResponses_WebSearchTranslatedToPreview(t *testing.T) {
 	}
 }
 
+func TestAnthropicToResponses_WebSearchMaxUsesMapsToMaxToolCallsOnlyWhenSafe(t *testing.T) {
+	base := AnthropicRequest{
+		Model:     "gpt-5.2",
+		MaxTokens: 1024,
+		Messages:  []AnthropicMessage{{Role: "user", Content: json.RawMessage(`"search for news"`)}},
+	}
+
+	onlySearch := base
+	onlySearch.Tools = []AnthropicTool{{
+		Type: "web_search_20250305", Name: "web_search", MaxUses: 1,
+	}}
+	resp, err := AnthropicToResponses(&onlySearch)
+	require.NoError(t, err)
+	require.NotNil(t, resp.MaxToolCalls)
+	assert.Equal(t, 1, *resp.MaxToolCalls)
+
+	mixed := base
+	mixed.Tools = []AnthropicTool{
+		{Type: "web_search_20250305", Name: "web_search", MaxUses: 1},
+		{Name: "custom", InputSchema: json.RawMessage(`{"type":"object"}`)},
+	}
+	resp, err = AnthropicToResponses(&mixed)
+	require.NoError(t, err)
+	require.NotNil(t, resp.MaxToolCalls)
+	assert.Equal(t, 1, *resp.MaxToolCalls, "custom function calls do not consume OpenAI's built-in tool budget")
+
+	singularProbe := base
+	singularProbe.Messages = []AnthropicMessage{{
+		Role: "user",
+		Content: json.RawMessage(`"Use the web_search tool first, then summarize.\n\nOriginal request:\n` +
+			`Perform a web search for the query: AI news 2026-07-26"`),
+	}}
+	singularProbe.Tools = []AnthropicTool{{
+		Type: "web_search_20250305", Name: "web_search", MaxUses: 8,
+	}}
+	resp, err = AnthropicToResponses(&singularProbe)
+	require.NoError(t, err)
+	require.NotNil(t, resp.MaxToolCalls)
+	assert.Equal(t, 1, *resp.MaxToolCalls, "singular CCTest search must not fan out into multiple built-in calls")
+}
+
 func TestAnthropicToResponses_EmptyAssistantStringIsSkipped(t *testing.T) {
 	// Regression guard for "Missing required parameter: 'input[N].content[0].text'"
 	// observed ~500+ times/hour on backup prod channel 15 before fix. When a

@@ -140,13 +140,17 @@ func (e ResponsesStreamEvent) putItemID(m map[string]any) {
 // carrying text/annotations/logprobs (matching cc-switch's push_text_delta).
 func outputTextPartWire(part *ResponsesContentPart) map[string]any {
 	text := ""
+	annotations := any([]any{})
 	if part != nil {
 		text = part.Text
+		if part.Annotations != nil {
+			annotations = part.Annotations
+		}
 	}
 	return map[string]any{
 		"type":        "output_text",
 		"text":        text,
-		"annotations": []any{},
+		"annotations": annotations,
 		"logprobs":    []any{},
 	}
 }
@@ -218,6 +222,10 @@ func messageContentWire(parts []ResponsesContentPart) []map[string]any {
 		typ := p.Type
 		if typ == "" {
 			typ = "output_text"
+		}
+		if typ == "output_text" {
+			out = append(out, outputTextPartWire(&p))
+			continue
 		}
 		out = append(out, map[string]any{"type": typ, "text": p.Text})
 	}

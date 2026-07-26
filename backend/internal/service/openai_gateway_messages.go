@@ -908,11 +908,21 @@ func anthropicThinkingEnabledForResponse(req *apicompat.AnthropicRequest) bool {
 }
 
 func anthropicWebSearchRequestLimitForResponse(req *apicompat.AnthropicRequest) int {
-	if req == nil || len(req.Tools) != 1 {
+	if req == nil {
 		return 0
 	}
-	tool := req.Tools[0]
-	if !strings.HasPrefix(tool.Type, "web_search") && tool.Name != "web_search" {
+	hasWebSearch := false
+	explicitLimit := 0
+	for _, tool := range req.Tools {
+		if !strings.HasPrefix(tool.Type, "web_search") && tool.Name != "web_search" {
+			continue
+		}
+		hasWebSearch = true
+		if tool.MaxUses > 0 && (explicitLimit == 0 || tool.MaxUses < explicitLimit) {
+			explicitLimit = tool.MaxUses
+		}
+	}
+	if !hasWebSearch {
 		return 0
 	}
 	text := strings.ToLower(strings.TrimSpace(latestAnthropicUserTextForGateway(req)))
@@ -920,7 +930,7 @@ func anthropicWebSearchRequestLimitForResponse(req *apicompat.AnthropicRequest) 
 		strings.Contains(text, "perform a web search for the query:") {
 		return 1
 	}
-	return 0
+	return explicitLimit
 }
 
 func latestAnthropicUserTextForGateway(req *apicompat.AnthropicRequest) string {
