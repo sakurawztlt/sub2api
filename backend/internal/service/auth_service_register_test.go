@@ -696,9 +696,48 @@ func TestAuthService_LoginOrRegisterOAuthWithTokenPair_UsesLinuxDoAuthSourceDefa
 	require.Equal(t, 21.75, user.Balance)
 	require.Equal(t, 9, user.Concurrency)
 	require.Len(t, repo.created, 1)
+	require.Equal(t, 1, repo.guardedCreates)
 	require.Len(t, assigner.calls, 1)
 	require.Equal(t, int64(22), assigner.calls[0].GroupID)
 	require.Equal(t, 14, assigner.calls[0].ValidityDays)
+}
+
+func TestAuthService_LoginOrRegisterOAuth_AliasDuplicateRejected(t *testing.T) {
+	repo := &userRepoStub{aliasExists: true}
+	service := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled: "true",
+	}, nil)
+
+	token, user, err := service.LoginOrRegisterOAuth(context.Background(), "some.one+oauth@gmail.com", "oauth_user")
+
+	require.Empty(t, token)
+	require.Nil(t, user)
+	require.ErrorIs(t, err, ErrEmailExists)
+	require.Empty(t, repo.created)
+	require.Zero(t, repo.guardedCreates)
+}
+
+func TestAuthService_LoginOrRegisterOAuthWithTokenPair_AliasDuplicateRejected(t *testing.T) {
+	repo := &userRepoStub{aliasExists: true}
+	service := newAuthService(repo, map[string]string{
+		SettingKeyRegistrationEnabled: "true",
+	}, nil)
+	service.refreshTokenCache = &refreshTokenCacheStub{}
+
+	tokenPair, user, err := service.LoginOrRegisterOAuthWithTokenPair(
+		context.Background(),
+		"some.one+oauth@gmail.com",
+		"oauth_user",
+		"",
+		"",
+		"google",
+	)
+
+	require.Nil(t, tokenPair)
+	require.Nil(t, user)
+	require.ErrorIs(t, err, ErrEmailExists)
+	require.Empty(t, repo.created)
+	require.Zero(t, repo.guardedCreates)
 }
 
 func TestAuthService_LoginOrRegisterOAuthWithTokenPair_ExistingUserDoesNotGrantAgain(t *testing.T) {

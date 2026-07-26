@@ -105,6 +105,21 @@ func TestAdminService_CreateUser_EmailExists(t *testing.T) {
 	require.Empty(t, repo.created)
 }
 
+func TestAdminService_CreateUser_PreservesEmailAliasOverride(t *testing.T) {
+	repo := &userRepoStub{aliasExists: true, nextID: 13}
+	svc := &adminServiceImpl{userRepo: repo}
+
+	user, err := svc.CreateUser(context.Background(), &CreateUserInput{
+		Email:    "some.one+admin@gmail.com",
+		Password: "password",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	require.Len(t, repo.created, 1)
+	require.Zero(t, repo.guardedCreates)
+}
+
 func TestAdminService_CreateUser_CreateError(t *testing.T) {
 	createErr := errors.New("db down")
 	repo := &userRepoStub{createErr: createErr}

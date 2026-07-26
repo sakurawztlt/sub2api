@@ -145,6 +145,14 @@ func (s *AuthService) createEmailOAuthUser(ctx context.Context, email, username,
 	if s.settingService == nil || !s.settingService.IsRegistrationEnabled(ctx) {
 		return nil, ErrRegDisabled
 	}
+	// 该路径会发放注册赠额，与显式 OAuth 邮箱注册保持相同的收件箱去重口径。
+	existsEmail, err := s.existsByEmailOrAlias(ctx, email)
+	if err != nil {
+		return nil, ErrServiceUnavailable
+	}
+	if existsEmail {
+		return nil, ErrEmailExists
+	}
 	invitationRedeemCode, err := s.validateOAuthRegistrationInvitation(ctx, invitationCode)
 	if err != nil {
 		if errors.Is(err, ErrInvitationCodeRequired) {
@@ -177,10 +185,13 @@ func (s *AuthService) createEmailOAuthUser(ctx context.Context, email, username,
 		Status:       StatusActive,
 		SignupSource: providerType,
 	}
-	if err := s.userRepo.Create(ctx, user); err != nil {
+	if err := s.userRepo.CreateWithEmailAliasGuard(ctx, user); err != nil {
 		if errors.Is(err, ErrEmailExists) {
 			existing, loadErr := s.userRepo.GetByEmail(ctx, email)
 			if loadErr != nil {
+				if errors.Is(loadErr, ErrUserNotFound) {
+					return nil, ErrEmailExists
+				}
 				return nil, ErrServiceUnavailable
 			}
 			return existing, nil

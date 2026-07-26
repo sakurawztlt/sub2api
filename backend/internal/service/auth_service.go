@@ -495,6 +495,14 @@ func (s *AuthService) LoginOrRegisterOAuth(ctx context.Context, email, username 
 			if s.settingService == nil || !s.settingService.IsRegistrationEnabled(ctx) {
 				return "", nil, ErrRegDisabled
 			}
+			existsEmail, existsErr := s.existsByEmailOrAlias(ctx, email)
+			if existsErr != nil {
+				logger.LegacyPrintf("service.auth", "[Auth] Database error checking oauth email aliases: %v", existsErr)
+				return "", nil, ErrServiceUnavailable
+			}
+			if existsEmail {
+				return "", nil, ErrEmailExists
+			}
 
 			randomPassword, err := randomHexString(32)
 			if err != nil {
@@ -525,11 +533,14 @@ func (s *AuthService) LoginOrRegisterOAuth(ctx context.Context, email, username 
 				SignupSource: signupSource,
 			}
 
-			if err := s.userRepo.Create(ctx, newUser); err != nil {
+			if err := s.userRepo.CreateWithEmailAliasGuard(ctx, newUser); err != nil {
 				if errors.Is(err, ErrEmailExists) {
 					// 并发场景：GetByEmail 与 Create 之间用户被创建。
 					user, err = s.userRepo.GetByEmail(ctx, email)
 					if err != nil {
+						if errors.Is(err, ErrUserNotFound) {
+							return "", nil, ErrEmailExists
+						}
 						logger.LegacyPrintf("service.auth", "[Auth] Database error getting user after conflict: %v", err)
 						return "", nil, ErrServiceUnavailable
 					}
@@ -613,6 +624,14 @@ func (s *AuthService) LoginOrRegisterOAuthWithTokenPair(ctx context.Context, ema
 			if s.settingService == nil || (!s.settingService.IsRegistrationEnabled(ctx) && !s.canBypassRegistrationDisabledForOAuth(ctx, signupSource)) {
 				return nil, nil, ErrRegDisabled
 			}
+			existsEmail, existsErr := s.existsByEmailOrAlias(ctx, email)
+			if existsErr != nil {
+				logger.LegacyPrintf("service.auth", "[Auth] Database error checking oauth email aliases: %v", existsErr)
+				return nil, nil, ErrServiceUnavailable
+			}
+			if existsEmail {
+				return nil, nil, ErrEmailExists
+			}
 
 			// 检查是否需要邀请码
 			var invitationRedeemCode *RedeemCode
@@ -667,10 +686,13 @@ func (s *AuthService) LoginOrRegisterOAuthWithTokenPair(ctx context.Context, ema
 				defer func() { _ = tx.Rollback() }()
 				txCtx := dbent.NewTxContext(ctx, tx)
 
-				if err := s.userRepo.Create(txCtx, newUser); err != nil {
+				if err := s.userRepo.CreateWithEmailAliasGuard(txCtx, newUser); err != nil {
 					if errors.Is(err, ErrEmailExists) {
 						user, err = s.userRepo.GetByEmail(ctx, email)
 						if err != nil {
+							if errors.Is(err, ErrUserNotFound) {
+								return nil, nil, ErrEmailExists
+							}
 							logger.LegacyPrintf("service.auth", "[Auth] Database error getting user after conflict: %v", err)
 							return nil, nil, ErrServiceUnavailable
 						}
@@ -694,10 +716,13 @@ func (s *AuthService) LoginOrRegisterOAuthWithTokenPair(ctx context.Context, ema
 					s.bindOAuthAffiliate(ctx, user.ID, affiliateCode)
 				}
 			} else {
-				if err := s.userRepo.Create(ctx, newUser); err != nil {
+				if err := s.userRepo.CreateWithEmailAliasGuard(ctx, newUser); err != nil {
 					if errors.Is(err, ErrEmailExists) {
 						user, err = s.userRepo.GetByEmail(ctx, email)
 						if err != nil {
+							if errors.Is(err, ErrUserNotFound) {
+								return nil, nil, ErrEmailExists
+							}
 							logger.LegacyPrintf("service.auth", "[Auth] Database error getting user after conflict: %v", err)
 							return nil, nil, ErrServiceUnavailable
 						}

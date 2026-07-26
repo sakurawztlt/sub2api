@@ -85,4 +85,50 @@ func TestEmailOAuthAuto_SnapshotsPlatformQuotaDefaults(t *testing.T) {
 	require.NotNil(t, geminiRecord, "expected gemini platform record")
 	require.NotNil(t, geminiRecord.MonthlyLimitUSD)
 	require.InDelta(t, 100.0, *geminiRecord.MonthlyLimitUSD, 0.0001)
+	require.Equal(t, 1, userRepo.guardedCreates)
+}
+
+func TestEmailOAuthAuto_AliasDuplicateRejected(t *testing.T) {
+	userRepo := &userRepoStub{aliasExists: true}
+	svc := newEmailOAuthAutoAuthService(
+		userRepo,
+		map[string]string{SettingKeyRegistrationEnabled: "true"},
+		nil,
+	)
+
+	user, err := svc.createEmailOAuthUser(
+		context.Background(),
+		"some.one+oauth@gmail.com",
+		"newoauth",
+		"github",
+		"",
+		"",
+	)
+
+	require.Nil(t, user)
+	require.ErrorIs(t, err, ErrEmailExists)
+	require.Empty(t, userRepo.created)
+	require.Zero(t, userRepo.guardedCreates)
+}
+
+func TestEmailOAuthAuto_AliasConflictDuringCreateIsNotTreatedAsLogin(t *testing.T) {
+	userRepo := &userRepoStub{createErr: ErrEmailExists}
+	svc := newEmailOAuthAutoAuthService(
+		userRepo,
+		map[string]string{SettingKeyRegistrationEnabled: "true"},
+		nil,
+	)
+
+	user, err := svc.createEmailOAuthUser(
+		context.Background(),
+		"some.one+oauth@gmail.com",
+		"newoauth",
+		"github",
+		"",
+		"",
+	)
+
+	require.Nil(t, user)
+	require.ErrorIs(t, err, ErrEmailExists)
+	require.Equal(t, 1, userRepo.guardedCreates)
 }
