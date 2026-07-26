@@ -17,11 +17,21 @@ import (
 )
 
 type systemHandlerUpdateServiceStub struct {
+	version     string
+	disabled    bool
 	performErr  error
 	updateInfo  *service.UpdateInfo
 	checkErr    error
 	checkForces []bool
 	performCall int
+}
+
+func (s *systemHandlerUpdateServiceStub) CurrentVersion() string {
+	return s.version
+}
+
+func (s *systemHandlerUpdateServiceStub) UpdatesDisabled() bool {
+	return s.disabled
 }
 
 func (s *systemHandlerUpdateServiceStub) CheckUpdate(_ context.Context, force bool) (*service.UpdateInfo, error) {

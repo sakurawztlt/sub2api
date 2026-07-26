@@ -35,13 +35,20 @@ func (s *relayGitHubClientStub) FetchChecksumFile(context.Context, string) ([]by
 
 func TestUpdateServiceRelayBuildDisablesGitHubAndSelfUpdate(t *testing.T) {
 	client := &relayGitHubClientStub{}
-	svc := NewUpdateService(relayUpdateCacheStub{}, client, "0.1.115-relay", "release")
+	svc := NewUpdateService(relayUpdateCacheStub{}, client, "2.24.0-relay", "release")
+
+	if got := svc.CurrentVersion(); got != "2.24.0-relay" {
+		t.Fatalf("CurrentVersion = %q", got)
+	}
+	if !svc.UpdatesDisabled() {
+		t.Fatal("relay build must disable updater routes")
+	}
 
 	info, err := svc.CheckUpdate(context.Background(), false)
 	if err != nil {
 		t.Fatalf("CheckUpdate: %v", err)
 	}
-	if info.CurrentVersion != "0.1.115-relay" || info.LatestVersion != "0.1.115-relay" {
+	if info.CurrentVersion != "2.24.0-relay" || info.LatestVersion != "2.24.0-relay" {
 		t.Fatalf("unexpected version info: %+v", info)
 	}
 	if info.HasUpdate {

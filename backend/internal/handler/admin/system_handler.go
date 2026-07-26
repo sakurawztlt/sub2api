@@ -23,6 +23,8 @@ type SystemHandler struct {
 }
 
 type systemUpdateService interface {
+	CurrentVersion() string
+	UpdatesDisabled() bool
 	CheckUpdate(ctx context.Context, force bool) (*service.UpdateInfo, error)
 	PerformUpdate(ctx context.Context) error
 	Rollback() error
@@ -39,10 +41,15 @@ func NewSystemHandler(updateSvc systemUpdateService, lockSvc *service.SystemOper
 // GetVersion returns the current version
 // GET /api/v1/admin/system/version
 func (h *SystemHandler) GetVersion(c *gin.Context) {
-	info, _ := h.updateSvc.CheckUpdate(c.Request.Context(), false)
 	response.Success(c, gin.H{
-		"version": info.CurrentVersion,
+		"version": h.updateSvc.CurrentVersion(),
 	})
+}
+
+// UpdatesDisabled reports whether this build must omit the upstream updater
+// routes. The static version endpoint remains available.
+func (h *SystemHandler) UpdatesDisabled() bool {
+	return h.updateSvc.UpdatesDisabled()
 }
 
 // CheckUpdates checks for available updates

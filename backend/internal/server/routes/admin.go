@@ -554,9 +554,11 @@ func registerSystemRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	system := admin.Group("/system")
 	{
 		system.GET("/version", h.Admin.System.GetVersion)
-		system.GET("/check-updates", h.Admin.System.CheckUpdates)
-		system.POST("/update", h.Admin.System.PerformUpdate)
-		system.POST("/rollback", h.Admin.System.Rollback)
+		if !h.Admin.System.UpdatesDisabled() {
+			system.GET("/check-updates", h.Admin.System.CheckUpdates)
+			system.POST("/update", h.Admin.System.PerformUpdate)
+			system.POST("/rollback", h.Admin.System.Rollback)
+		}
 		system.POST("/restart", h.Admin.System.RestartService)
 	}
 }

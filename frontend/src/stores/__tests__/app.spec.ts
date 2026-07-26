@@ -2,10 +2,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useAppStore } from '@/stores/app'
 import { getPublicSettings } from '@/api/auth'
+import { getVersion } from '@/api/admin/system'
 
 // Mock API 模块
 vi.mock('@/api/admin/system', () => ({
-  checkUpdates: vi.fn(),
+  getVersion: vi.fn(),
 }))
 
 vi.mock('@/api/auth', () => ({
@@ -250,6 +251,19 @@ describe('useAppStore', () => {
   })
 
   // --- 公开设置 ---
+
+  describe('静态版本加载', () => {
+    it('只读取内部版本端点并缓存结果', async () => {
+      vi.mocked(getVersion).mockResolvedValue({ version: '2.24.0-relay' })
+      const store = useAppStore()
+
+      await expect(store.fetchVersion()).resolves.toEqual({ version: '2.24.0-relay' })
+      await expect(store.fetchVersion()).resolves.toEqual({ version: '2.24.0-relay' })
+
+      expect(store.currentVersion).toBe('2.24.0-relay')
+      expect(getVersion).toHaveBeenCalledTimes(1)
+    })
+  })
 
   describe('公开设置加载', () => {
     it('从 window.__APP_CONFIG__ 初始化', () => {

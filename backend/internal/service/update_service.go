@@ -73,6 +73,18 @@ func NewUpdateService(cache UpdateCache, githubClient GitHubReleaseClient, versi
 	}
 }
 
+// CurrentVersion returns the version embedded in this relay build without
+// consulting the upstream release service.
+func (s *UpdateService) CurrentVersion() string {
+	return s.currentVersion
+}
+
+// UpdatesDisabled reports whether update-related HTTP routes must stay
+// unavailable for this internal relay build.
+func (s *UpdateService) UpdatesDisabled() bool {
+	return s.isRelayBuild()
+}
+
 // UpdateInfo contains update information
 type UpdateInfo struct {
 	CurrentVersion string       `json:"current_version"`
