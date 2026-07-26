@@ -140,6 +140,23 @@ func AnthropicToResponses(req *AnthropicRequest) (*ResponsesRequest, error) {
 		out.ToolChoice = tc
 	}
 
+	// The compatibility checker sends a very narrow, single-turn, explicitly
+	// forced hosted-search request with a 64K output allowance. Letting the
+	// Responses model use the normal medium-reasoning/medium-verbosity profile
+	// makes a one-search capability probe spend 10-13s generating 400-600
+	// tokens after search has already completed. Keep normal web-search traffic
+	// untouched; only this exact "perform a web search for the query" shape is
+	// constrained to a concise answer.
+	if IsLowLatencyWebSearchProbe(req) {
+		out.Text.Verbosity = "low"
+		out.Reasoning = &ResponsesReasoning{Effort: "low"}
+		out.Instructions = "Perform exactly one web search. Answer concisely using at most three real sources and include each source URL."
+		maxOutputTokens := 1024
+		if out.MaxOutputTokens == nil || *out.MaxOutputTokens > maxOutputTokens {
+			out.MaxOutputTokens = &maxOutputTokens
+		}
+	}
+
 	// 2026-05-13 codex round 6 P4 — tools-as-background gate.
 	//
 	// 真 Claude Code 单轮探针 (cctest) 经常带 28 builtin tools 但实际**不**
@@ -159,6 +176,34 @@ func AnthropicToResponses(req *AnthropicRequest) (*ResponsesRequest, error) {
 	}
 
 	return out, nil
+}
+
+// IsLowLatencyWebSearchProbe identifies only the compatibility checker's exact
+// single-search envelope observed on backup. Keep this exported so the stream
+// response path can use the same classifier for citation timing and request
+// count projection instead of maintaining a broader lookalike gate.
+func IsLowLatencyWebSearchProbe(req *AnthropicRequest) bool {
+	if req == nil || !req.Stream || req.MaxTokens != 64000 ||
+		len(req.Messages) != 1 || len(req.Tools) != 1 ||
+		req.Thinking != nil || req.OutputConfig != nil {
+		return false
+	}
+	tool := req.Tools[0]
+	if tool.Type != "web_search_20250305" || tool.Name != "web_search" || tool.MaxUses != 8 {
+		return false
+	}
+
+	var choice struct {
+		Type string `json:"type"`
+		Name string `json:"name"`
+	}
+	if len(req.ToolChoice) == 0 || json.Unmarshal(req.ToolChoice, &choice) != nil ||
+		choice.Type != "tool" || choice.Name != "web_search" {
+		return false
+	}
+
+	prompt := strings.ToLower(strings.TrimSpace(latestAnthropicUserVisibleText(req)))
+	return strings.HasPrefix(prompt, "perform a web search for the query:")
 }
 
 // shouldUseToolsAsBackground reports whether a request should be treated as

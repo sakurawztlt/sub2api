@@ -437,6 +437,7 @@ func TestResponsesEventToAnthropicEvents_UnmappableTerminalAnnotationsWaitForLit
 			t.Run(terminalCase.name+"/"+annotationCase.name, func(t *testing.T) {
 				state := NewResponsesEventToAnthropicState()
 				state.MessageStartSent = true
+				state.SetIncrementalLiteralCitationsEnabled(true)
 				state.webSearchCitationSources[normalizeWebSearchCitationURL(sourceURL)] = webSearchCitationSource{
 					URL:            sourceURL,
 					Title:          "Real source",
@@ -449,36 +450,38 @@ func TestResponsesEventToAnthropicEvents_UnmappableTerminalAnnotationsWaitForLit
 					ContentIndex: 0,
 					Delta:        text,
 				}, state)
-				ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+				textDoneEvents := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
 					Type:         "response.output_text.done",
 					OutputIndex:  1,
 					ContentIndex: 0,
 					Text:         text,
 				}, state)
+				require.Len(t, textDoneEvents, 1)
+				require.NotNil(t, textDoneEvents[0].Delta)
+				assert.Equal(t, "citations_delta", textDoneEvents[0].Delta.Type)
 
 				doneEvents := terminalCase.done(state, ResponsesContentPart{
 					Type:        "output_text",
 					Text:        text,
 					Annotations: []json.RawMessage{annotationCase.annotation},
 				})
-				assert.Empty(t, doneEvents, "an unmappable annotation must not close the text block")
-				require.True(t, state.ContentBlockOpen)
-				require.NotEmpty(t, state.outputTextByPart)
+				require.Len(t, doneEvents, 1)
+				assert.Equal(t, "content_block_stop", doneEvents[0].Type)
+				require.False(t, state.ContentBlockOpen)
 
 				completedEvents := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
 					Type:     "response.completed",
 					Response: &ResponsesResponse{Status: "completed"},
 				}, state)
-				require.GreaterOrEqual(t, len(completedEvents), 4)
-				require.NotNil(t, completedEvents[0].Delta)
-				assert.Equal(t, "citations_delta", completedEvents[0].Delta.Type)
-				assert.Equal(t, "content_block_stop", completedEvents[1].Type)
+				require.Len(t, completedEvents, 2)
+				assert.Equal(t, "message_delta", completedEvents[0].Type)
+				assert.Equal(t, "message_stop", completedEvents[1].Type)
 
 				var citation struct {
 					URL       string `json:"url"`
 					CitedText string `json:"cited_text"`
 				}
-				require.NoError(t, json.Unmarshal(completedEvents[0].Delta.Citation, &citation))
+				require.NoError(t, json.Unmarshal(textDoneEvents[0].Delta.Citation, &citation))
 				assert.Equal(t, sourceURL, citation.URL)
 				assert.Equal(t, sourceURL, citation.CitedText)
 			})
@@ -486,11 +489,101 @@ func TestResponsesEventToAnthropicEvents_UnmappableTerminalAnnotationsWaitForLit
 	}
 }
 
+func TestResponsesEventToAnthropicEvents_EmitsLiteralCitationAsSoonAsURLIsComplete(t *testing.T) {
+	const sourceURL = "https://example.com/real-source"
+	state := NewResponsesEventToAnthropicState()
+	state.MessageStartSent = true
+	state.SetIncrementalLiteralCitationsEnabled(true)
+	state.webSearchCitationSources[normalizeWebSearchCitationURL(sourceURL)] = webSearchCitationSource{
+		URL:            sourceURL,
+		Title:          "Real source",
+		EncryptedIndex: "opaque",
+	}
+
+	first := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:         "response.output_text.delta",
+		OutputIndex:  1,
+		ContentIndex: 0,
+		Delta:        "Source: https://example.com/real-",
+	}, state)
+	require.Len(t, first, 2)
+	assert.Equal(t, "content_block_start", first[0].Type)
+	assert.Equal(t, "text_delta", first[1].Delta.Type)
+
+	second := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:         "response.output_text.delta",
+		OutputIndex:  1,
+		ContentIndex: 0,
+		Delta:        "source",
+	}, state)
+	require.Len(t, second, 1, "a URL at the current buffer end may still be extended")
+	assert.Equal(t, "text_delta", second[0].Delta.Type)
+
+	third := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:         "response.output_text.delta",
+		OutputIndex:  1,
+		ContentIndex: 0,
+		Delta:        ". Next item.",
+	}, state)
+	require.Len(t, third, 2)
+	assert.Equal(t, "text_delta", third[0].Delta.Type)
+	require.NotNil(t, third[1].Delta)
+	assert.Equal(t, "citations_delta", third[1].Delta.Type)
+
+	done := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:         "response.output_text.done",
+		OutputIndex:  1,
+		ContentIndex: 0,
+		Text:         "Source: " + sourceURL + ". Next item.",
+	}, state)
+	assert.Empty(t, done, "the incrementally emitted citation must not be duplicated")
+}
+
+func TestResponsesEventToAnthropicEvents_RealAnnotationDoesNotDuplicateIncrementalCitation(t *testing.T) {
+	const sourceURL = "https://example.com/real-source"
+	const prefix = "Source: "
+	state := NewResponsesEventToAnthropicState()
+	state.MessageStartSent = true
+	state.SetIncrementalLiteralCitationsEnabled(true)
+	state.webSearchCitationSources[normalizeWebSearchCitationURL(sourceURL)] = webSearchCitationSource{
+		URL:            sourceURL,
+		Title:          "Real source",
+		EncryptedIndex: "opaque",
+	}
+
+	text := prefix + sourceURL + "."
+	incremental := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:         "response.output_text.delta",
+		OutputIndex:  1,
+		ContentIndex: 0,
+		Delta:        text,
+	}, state)
+	require.Len(t, incremental, 3)
+	assert.Equal(t, "citations_delta", incremental[2].Delta.Type)
+
+	annotation, err := json.Marshal(map[string]any{
+		"type":        "url_citation",
+		"start_index": len([]rune(prefix)),
+		"end_index":   len([]rune(prefix + sourceURL)),
+		"url":         sourceURL,
+	})
+	require.NoError(t, err)
+	duplicate := ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:            "response.output_text.annotation.added",
+		OutputIndex:     1,
+		ContentIndex:    0,
+		AnnotationIndex: 0,
+		Annotation:      annotation,
+	}, state)
+	assert.Empty(t, duplicate)
+}
+
 func TestResponsesEventToAnthropicEvents_CapturedCodexTerminalWithoutAnnotationsUsesLiteralRealURLs(t *testing.T) {
 	fixture, err := os.ReadFile("testdata/websearch_codex_terminal_no_annotations.jsonl")
 	require.NoError(t, err)
 
 	state := NewResponsesEventToAnthropicState()
+	state.SetIncrementalLiteralCitationsEnabled(true)
 	var emitted []AnthropicStreamEvent
 	rawAnnotationEvents := 0
 	for lineNumber, line := range strings.Split(strings.TrimSpace(string(fixture)), "\n") {
@@ -831,6 +924,45 @@ func TestResponsesEventToAnthropicEvents_DeduplicatesAndScopesAnnotationsByTextP
 		Annotation:      annotation,
 	}, state)
 	assert.Empty(t, wrongPart)
+}
+
+func TestResponsesEventToAnthropicEvents_PreservesDistinctSpansForSameRealURL(t *testing.T) {
+	const sourceURL = "https://www.reuters.com/technology/artificial-intelligence/"
+	state := NewResponsesEventToAnthropicState()
+	state.MessageStartSent = true
+	state.webSearchCitationSources[normalizeWebSearchCitationURL(sourceURL)] = webSearchCitationSource{
+		URL: sourceURL, Title: "Reuters", EncryptedIndex: "opaque",
+	}
+	ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+		Type:         "response.output_text.delta",
+		OutputIndex:  1,
+		ContentIndex: 0,
+		Delta:        "Reuters and Reuters",
+	}, state)
+
+	makeAnnotation := func(index, start, end int) []AnthropicStreamEvent {
+		annotation, err := json.Marshal(map[string]any{
+			"type":        "url_citation",
+			"start_index": start,
+			"end_index":   end,
+			"url":         sourceURL,
+		})
+		require.NoError(t, err)
+		return ResponsesEventToAnthropicEvents(&ResponsesStreamEvent{
+			Type:            "response.output_text.annotation.added",
+			OutputIndex:     1,
+			ContentIndex:    0,
+			AnnotationIndex: index,
+			Annotation:      annotation,
+		}, state)
+	}
+
+	first := makeAnnotation(0, 0, 7)
+	second := makeAnnotation(1, 12, 19)
+	require.Len(t, first, 1)
+	require.Len(t, second, 1)
+	assert.Equal(t, "citations_delta", first[0].Delta.Type)
+	assert.Equal(t, "citations_delta", second[0].Delta.Type)
 }
 
 func TestResponsesEventToAnthropicEvents_DropsCitationAbsentFromToolResult(t *testing.T) {

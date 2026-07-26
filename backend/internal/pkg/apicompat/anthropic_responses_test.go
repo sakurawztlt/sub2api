@@ -2656,6 +2656,99 @@ func TestAnthropicToResponses_WebSearchMaxUsesIsNotForwardedAsUnsupportedMaxTool
 		"the current OpenAI upstream rejects max_tool_calls; cap only the Anthropic response projection")
 }
 
+func TestAnthropicToResponses_LowLatencyWebSearchProfile(t *testing.T) {
+	req := &AnthropicRequest{
+		Model:     "gpt-5.5",
+		MaxTokens: 64000,
+		Stream:    true,
+		Messages: []AnthropicMessage{{
+			Role:    "user",
+			Content: json.RawMessage(`[{"type":"text","text":"Perform a web search for the query: AI news 2026-07-26"}]`),
+		}},
+		Tools: []AnthropicTool{{
+			Type: "web_search_20250305", Name: "web_search", MaxUses: 8,
+		}},
+		ToolChoice: json.RawMessage(`{"type":"tool","name":"web_search"}`),
+	}
+
+	resp, err := AnthropicToResponses(req)
+	require.NoError(t, err)
+	require.NotNil(t, resp.MaxOutputTokens)
+	assert.Equal(t, 1024, *resp.MaxOutputTokens)
+	require.NotNil(t, resp.Text)
+	assert.Equal(t, "low", resp.Text.Verbosity)
+	require.NotNil(t, resp.Reasoning)
+	assert.Equal(t, "low", resp.Reasoning.Effort)
+	assert.Empty(t, resp.Reasoning.Summary)
+	assert.Contains(t, resp.Instructions, "exactly one web search")
+}
+
+func TestAnthropicToResponses_LowLatencyWebSearchProfileIsNarrow(t *testing.T) {
+	base := AnthropicRequest{
+		Model:     "gpt-5.5",
+		MaxTokens: 64000,
+		Stream:    true,
+		Messages: []AnthropicMessage{{
+			Role:    "user",
+			Content: json.RawMessage(`"Perform a web search for the query: AI news"`),
+		}},
+		Tools: []AnthropicTool{{
+			Type: "web_search_20250305", Name: "web_search", MaxUses: 8,
+		}},
+		ToolChoice: json.RawMessage(`{"type":"tool","name":"web_search"}`),
+	}
+
+	cases := map[string]func(*AnthropicRequest){
+		"non_stream": func(req *AnthropicRequest) { req.Stream = false },
+		"max_tokens_not_64000": func(req *AnthropicRequest) {
+			req.MaxTokens = 4096
+		},
+		"max_uses_not_8": func(req *AnthropicRequest) {
+			req.Tools[0].MaxUses = 1
+		},
+		"explicit_thinking": func(req *AnthropicRequest) {
+			req.Thinking = &AnthropicThinking{Type: "adaptive"}
+		},
+		"explicit_output_config": func(req *AnthropicRequest) {
+			req.OutputConfig = &AnthropicOutputConfig{Effort: "high"}
+		},
+		"multi_turn": func(req *AnthropicRequest) {
+			req.Messages = append(req.Messages, AnthropicMessage{
+				Role:    "assistant",
+				Content: json.RawMessage(`"prior answer"`),
+			})
+		},
+		"custom_prompt": func(req *AnthropicRequest) {
+			req.Messages[0].Content = json.RawMessage(`"Research this topic in depth"`)
+		},
+		"tool_choice_auto": func(req *AnthropicRequest) {
+			req.ToolChoice = json.RawMessage(`{"type":"auto"}`)
+		},
+		"mixed_tools": func(req *AnthropicRequest) {
+			req.Tools = append(req.Tools, AnthropicTool{
+				Name: "custom", InputSchema: json.RawMessage(`{"type":"object"}`),
+			})
+		},
+	}
+
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			req := base
+			req.Messages = append([]AnthropicMessage(nil), base.Messages...)
+			req.Tools = append([]AnthropicTool(nil), base.Tools...)
+			mutate(&req)
+
+			resp, err := AnthropicToResponses(&req)
+			require.NoError(t, err)
+			require.NotNil(t, resp.MaxOutputTokens)
+			assert.Equal(t, req.MaxTokens, *resp.MaxOutputTokens)
+			require.NotNil(t, resp.Text)
+			assert.Equal(t, "medium", resp.Text.Verbosity)
+			assert.Empty(t, resp.Instructions)
+		})
+	}
+}
+
 func TestAnthropicToResponses_EmptyAssistantStringIsSkipped(t *testing.T) {
 	// Regression guard for "Missing required parameter: 'input[N].content[0].text'"
 	// observed ~500+ times/hour on backup prod channel 15 before fix. When a

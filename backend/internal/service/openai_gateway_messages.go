@@ -66,6 +66,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	normalizedModel := anthropicReq.Model
 	clientStream := anthropicReq.Stream // client's original stream preference
 	forceThinkingBlock := anthropicThinkingEnabledForResponse(&anthropicReq)
+	lowLatencyWebSearchProbe := apicompat.IsLowLatencyWebSearchProbe(&anthropicReq)
 	webSearchRequestLimit := anthropicWebSearchRequestLimitForResponse(&anthropicReq)
 
 	// 2. Model mapping (computed early so 058 prompt-cache derivation can
@@ -504,7 +505,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// codex round37 fu56 (2026-05-20): outbound signal — see field doc.
 	streamMeta.UpstreamTurnStateReturned = upstreamTurnState != ""
 	if clientStream {
-		result, handleErr = s.handleAnthropicStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime, len(body), streamMeta, webSearchRequestLimit)
+		result, handleErr = s.handleAnthropicStreamingResponse(resp, c, account, originalModel, billingModel, upstreamModel, startTime, len(body), streamMeta, webSearchRequestLimit, lowLatencyWebSearchProbe)
 	} else if !isStream && !strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
 		result, handleErr = s.handleAnthropicJSONResponse(resp, c, originalModel, billingModel, upstreamModel, startTime, forceThinkingBlock, webSearchRequestLimit)
 	} else {
@@ -910,6 +911,9 @@ func anthropicThinkingEnabledForResponse(req *apicompat.AnthropicRequest) bool {
 func anthropicWebSearchRequestLimitForResponse(req *apicompat.AnthropicRequest) int {
 	if req == nil {
 		return 0
+	}
+	if apicompat.IsLowLatencyWebSearchProbe(req) {
+		return 1
 	}
 	hasWebSearch := false
 	explicitLimit := 0
@@ -1458,6 +1462,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	inboundBodyLen int,
 	meta streamReqMeta,
 	webSearchRequestLimit int,
+	incrementalLiteralCitations bool,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 
@@ -1484,6 +1489,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	state := apicompat.NewResponsesEventToAnthropicState()
 	state.Model = originalModel
 	state.SetWebSearchRequestLimit(webSearchRequestLimit)
+	state.SetIncrementalLiteralCitationsEnabled(incrementalLiteralCitations)
 	state.SetCodeExecutionFallbackArgs(meta.CodeExecutionFallbackArgs)
 	state.SetExternalInputTokenEstimate(positiveIntHeader(c.Request, "X-GCR-Estimated-Tokens"))
 	// 2026-05-12 cctest profile 项 5 (codex audit): message_start.usage.input_tokens

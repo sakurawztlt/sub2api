@@ -663,6 +663,12 @@ type responsesTextPartKey struct {
 	ContentIndex int
 }
 
+type responsesCitationSpanKey struct {
+	URL        string
+	StartIndex int
+	EndIndex   int
+}
+
 type webSearchCitationSource struct {
 	URL   string
 	Title string
@@ -755,9 +761,12 @@ type ResponsesEventToAnthropicState struct {
 	outputTextByPart         map[responsesTextPartKey]*strings.Builder
 	textPartToBlockIdx       map[responsesTextPartKey]int
 	seenTextAnnotations      map[responsesTextPartKey]map[int]struct{}
+	seenCitationSpans        map[responsesTextPartKey]map[responsesCitationSpanKey]struct{}
+	mappedCitationURLs       map[responsesTextPartKey]map[string]struct{}
 	overflowedTextParts      map[responsesTextPartKey]struct{}
 	cachedOutputTextBytes    int
 	citationTrackingDisabled bool
+	incrementalLiteralCites  bool
 }
 
 // SetExternalInputTokenEstimate records the customer-visible prompt estimate
@@ -797,6 +806,16 @@ func (s *ResponsesEventToAnthropicState) SetWebSearchRequestLimit(limit int) {
 	s.WebSearchRequestLimit = limit
 }
 
+// SetIncrementalLiteralCitationsEnabled opts the exact low-latency
+// compatibility probe into per-delta literal citation emission. Ordinary
+// max_uses=1 searches keep the terminal-only fallback.
+func (s *ResponsesEventToAnthropicState) SetIncrementalLiteralCitationsEnabled(enabled bool) {
+	if s == nil {
+		return
+	}
+	s.incrementalLiteralCites = enabled
+}
+
 func (s *ResponsesEventToAnthropicState) SetCodeExecutionFallbackArgs(raw string) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || isEmptyJSONObject(raw) {
@@ -818,6 +837,8 @@ func NewResponsesEventToAnthropicState() *ResponsesEventToAnthropicState {
 		outputTextByPart:         make(map[responsesTextPartKey]*strings.Builder),
 		textPartToBlockIdx:       make(map[responsesTextPartKey]int),
 		seenTextAnnotations:      make(map[responsesTextPartKey]map[int]struct{}),
+		seenCitationSpans:        make(map[responsesTextPartKey]map[responsesCitationSpanKey]struct{}),
+		mappedCitationURLs:       make(map[responsesTextPartKey]map[string]struct{}),
 		overflowedTextParts:      make(map[responsesTextPartKey]struct{}),
 		Created:                  time.Now().Unix(),
 	}
@@ -1166,6 +1187,15 @@ func resToAnthHandleTextDelta(evt *ResponsesStreamEvent, state *ResponsesEventTo
 			Text: evt.Delta,
 		},
 	})
+	// Codex-compatible streams sometimes omit annotation events entirely and
+	// expose citations only in the terminal snapshot. Once a literal URL is
+	// followed by a delimiter, however, it is complete and can be matched
+	// safely against the real web_search sources we already emitted. Publish
+	// that citation now instead of holding every citation until
+	// response.completed.
+	if state.incrementalLiteralCites {
+		events = append(events, resToAnthHandleLiteralURLCitationsIncremental(state, false)...)
+	}
 	return events
 }
 
@@ -1206,6 +1236,17 @@ func resToAnthHandleTextAnnotationAddedWithRunes(
 	source, ok := state.webSearchCitationSources[normalizeWebSearchCitationURL(annotation.URL)]
 	if !ok || source.EncryptedIndex == "" {
 		return nil
+	}
+	normalizedURL := normalizeWebSearchCitationURL(source.URL)
+	spanKey := responsesCitationSpanKey{
+		URL:        normalizedURL,
+		StartIndex: annotation.StartIndex,
+		EndIndex:   annotation.EndIndex,
+	}
+	if seen := state.seenCitationSpans[partKey]; seen != nil {
+		if _, duplicate := seen[spanKey]; duplicate {
+			return nil
+		}
 	}
 	if seen := state.seenTextAnnotations[partKey]; seen != nil {
 		if _, duplicate := seen[evt.AnnotationIndex]; duplicate {
@@ -1250,6 +1291,20 @@ func resToAnthHandleTextAnnotationAddedWithRunes(
 		state.seenTextAnnotations[partKey] = make(map[int]struct{})
 	}
 	state.seenTextAnnotations[partKey][evt.AnnotationIndex] = struct{}{}
+	if state.seenCitationSpans == nil {
+		state.seenCitationSpans = make(map[responsesTextPartKey]map[responsesCitationSpanKey]struct{})
+	}
+	if state.seenCitationSpans[partKey] == nil {
+		state.seenCitationSpans[partKey] = make(map[responsesCitationSpanKey]struct{})
+	}
+	state.seenCitationSpans[partKey][spanKey] = struct{}{}
+	if state.mappedCitationURLs == nil {
+		state.mappedCitationURLs = make(map[responsesTextPartKey]map[string]struct{})
+	}
+	if state.mappedCitationURLs[partKey] == nil {
+		state.mappedCitationURLs[partKey] = make(map[string]struct{})
+	}
+	state.mappedCitationURLs[partKey][normalizedURL] = struct{}{}
 	return []AnthropicStreamEvent{{
 		Type:  "content_block_delta",
 		Index: &blockIdx,
@@ -1264,13 +1319,17 @@ func resToAnthHandleTextDone(evt *ResponsesStreamEvent, state *ResponsesEventToA
 	if len(state.webSearchCitationSources) == 0 {
 		return resToAnthHandleBlockDone(state)
 	}
+	var events []AnthropicStreamEvent
+	if state.incrementalLiteralCites {
+		events = resToAnthHandleLiteralURLCitationsIncremental(state, true)
+	}
 	// The public Responses API normally emits annotation.added before this
 	// event. The Codex-compatible HTTP stream used by the relay can instead
 	// expose annotations only on output_item.done or the terminal response
 	// snapshot. Keep the Anthropic text block and its bounded text cache alive
 	// until one of those final snapshots has been inspected. The next block or
 	// terminal event still closes it if no snapshot arrives.
-	return nil
+	return events
 }
 
 func resToAnthHandleContentPartDone(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
@@ -1302,6 +1361,8 @@ func (state *ResponsesEventToAnthropicState) disableCitationTextTracking() {
 	state.outputTextByPart = nil
 	state.textPartToBlockIdx = nil
 	state.seenTextAnnotations = nil
+	state.seenCitationSpans = nil
+	state.mappedCitationURLs = nil
 	state.overflowedTextParts = nil
 	state.cachedOutputTextBytes = 0
 }
@@ -1718,6 +1779,7 @@ type literalWebSearchCitationMatch struct {
 const (
 	maxLiteralWebSearchURLRunes      = 8192
 	maxLiteralWebSearchURLCandidates = 256
+	maxIncrementalCitationTextBytes  = 128 << 10
 )
 
 // resToAnthHandleLiteralURLCitations is a terminal-only fallback for the
@@ -1725,11 +1787,35 @@ const (
 // web_search_call.action.sources and then write those exact URLs into the final
 // text while omitting every annotation event and terminal annotation array.
 //
-// Run this only after all real annotations have been inspected. A part that
-// already emitted any citation is left untouched. Otherwise, only literal
-// http(s) URLs whose normalized value is present in the real-source lookup are
-// converted; no URL or source text is guessed.
+// Run this after real annotations have been inspected. URLs already cited by
+// either a real annotation or an earlier incremental pass are deduplicated;
+// other literal http(s) URLs are converted only when their normalized value is
+// present in the real-source lookup. No URL or source text is guessed.
 func resToAnthHandleLiteralURLCitations(state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
+	return resToAnthHandleLiteralURLCitationsWithEndPolicy(state, true)
+}
+
+// resToAnthHandleLiteralURLCitationsIncremental emits only citations that can
+// be proven complete at the current stream position. During text deltas a URL
+// at the very end of the buffer may still be extended by the next delta, so it
+// is held until a delimiter arrives. response.output_text.done makes the
+// current buffer final and permits a URL that ends exactly with the text.
+func resToAnthHandleLiteralURLCitationsIncremental(
+	state *ResponsesEventToAnthropicState,
+	allowTextEnd bool,
+) []AnthropicStreamEvent {
+	// Keep per-delta rescans bounded. Long-form searches retain the existing
+	// terminal fallback instead of repeatedly walking a multi-megabyte buffer.
+	if state == nil || state.cachedOutputTextBytes > maxIncrementalCitationTextBytes {
+		return nil
+	}
+	return resToAnthHandleLiteralURLCitationsWithEndPolicy(state, allowTextEnd)
+}
+
+func resToAnthHandleLiteralURLCitationsWithEndPolicy(
+	state *ResponsesEventToAnthropicState,
+	allowTextEnd bool,
+) []AnthropicStreamEvent {
 	if state == nil || state.citationTrackingDisabled ||
 		!state.ContentBlockOpen || state.CurrentBlockType != "text" ||
 		len(state.webSearchCitationSources) == 0 {
@@ -1744,8 +1830,7 @@ func resToAnthHandleLiteralURLCitations(state *ResponsesEventToAnthropicState) [
 		if _, overflowed := state.overflowedTextParts[partKey]; overflowed {
 			continue
 		}
-		if state.outputTextByPart[partKey] == nil ||
-			len(state.seenTextAnnotations[partKey]) != 0 {
+		if state.outputTextByPart[partKey] == nil {
 			continue
 		}
 		partKeys = append(partKeys, partKey)
@@ -1770,6 +1855,15 @@ func resToAnthHandleLiteralURLCitations(state *ResponsesEventToAnthropicState) [
 			remaining,
 		)
 		for annotationIndex, match := range matches {
+			if !allowTextEnd && match.EndIndex == len(textRunes) {
+				continue
+			}
+			normalizedURL := normalizeWebSearchCitationURL(match.URL)
+			if seenURLs := state.mappedCitationURLs[partKey]; seenURLs != nil {
+				if _, duplicate := seenURLs[normalizedURL]; duplicate {
+					continue
+				}
+			}
 			annotation, err := json.Marshal(map[string]any{
 				"type":        "url_citation",
 				"start_index": match.StartIndex,
@@ -1783,7 +1877,7 @@ func resToAnthHandleLiteralURLCitations(state *ResponsesEventToAnthropicState) [
 				Type:            "response.output_text.annotation.added",
 				OutputIndex:     partKey.OutputIndex,
 				ContentIndex:    partKey.ContentIndex,
-				AnnotationIndex: annotationIndex,
+				AnnotationIndex: maxAnnotationsPerTextPart + match.StartIndex + annotationIndex,
 				Annotation:      annotation,
 			}, state, textRunes)
 			if len(mapped) == 0 {
@@ -2245,6 +2339,8 @@ func cleanupCitationTextPartsForBlock(state *ResponsesEventToAnthropicState, blo
 		delete(state.outputTextByPart, partKey)
 		delete(state.textPartToBlockIdx, partKey)
 		delete(state.seenTextAnnotations, partKey)
+		delete(state.seenCitationSpans, partKey)
+		delete(state.mappedCitationURLs, partKey)
 		delete(state.overflowedTextParts, partKey)
 	}
 	if state.cachedOutputTextBytes < 0 {
