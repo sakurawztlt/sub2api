@@ -2286,6 +2286,7 @@ export default {
         endpoint: 'Endpoint',
         targetPlatform: 'Target Platform',
         upstreamModel: 'Upstream Model',
+        upstreamModelHint: 'Leave empty to pass each original requested model through under a prefix match; set a value to route every match to that fixed model.',
         notes: 'Notes',
         enabled: 'Enabled',
         preview: 'Preview',

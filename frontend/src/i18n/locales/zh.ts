@@ -2369,6 +2369,7 @@ export default {
         endpoint: '端点',
         targetPlatform: '目标平台',
         upstreamModel: '上游模型',
+        upstreamModelHint: '前缀匹配时留空会透传每个原始请求模型；填写后所有命中请求固定转发到该模型。',
         notes: '备注',
         enabled: '启用',
         preview: '预览',
