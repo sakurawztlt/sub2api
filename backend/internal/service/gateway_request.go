@@ -1269,6 +1269,32 @@ func NormalizeClaudeOutputEffort(raw string) *string {
 	}
 }
 
+func DefaultEffortForThinkingEnabled(mappedModel string) *string {
+	if ResolveThinkingProtocol(mappedModel) != ThinkingProtocolPassbackRequired {
+		return nil
+	}
+	if strings.HasPrefix(strings.ToLower(mappedModel), "deepseek-") {
+		return nil
+	}
+	effort := "high"
+	return &effort
+}
+
+func OpenAIBodyHasThinkingEnabled(body []byte) bool {
+	thinkingType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(body, "thinking.type").String()))
+	return thinkingType == "enabled" || thinkingType == "adaptive"
+}
+
+func ApplyThinkingEnabledFallback(effort *string, body []byte, mappedModel string) *string {
+	if effort != nil {
+		return effort
+	}
+	if !OpenAIBodyHasThinkingEnabled(body) {
+		return nil
+	}
+	return DefaultEffortForThinkingEnabled(mappedModel)
+}
+
 // =========================
 // Thinking Budget Rectifier
 // =========================

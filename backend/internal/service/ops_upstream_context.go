@@ -403,7 +403,10 @@ type OpsUpstreamErrorEvent struct {
 	UpstreamResponseBody string `json:"upstream_response_body,omitempty"`
 
 	// Kind: http_error | request_error | retry_exhausted | failover
-	Kind string `json:"kind,omitempty"`
+	Kind   string `json:"kind,omitempty"`
+	Stage  string `json:"stage,omitempty"`
+	Scope  string `json:"scope,omitempty"`
+	Reason string `json:"reason,omitempty"`
 
 	Message string `json:"message,omitempty"`
 	Detail  string `json:"detail,omitempty"`

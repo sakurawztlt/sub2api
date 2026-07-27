@@ -563,6 +563,36 @@ type ForwardResult struct {
 	ImageSizeBreakdown map[string]int // 多张图片按计费尺寸聚合
 }
 
+// GatewayFailureStage identifies which request stage failed. The zero value is
+// intentionally treated as inference for backwards compatibility.
+type GatewayFailureStage string
+
+const (
+	GatewayFailureStageInference   GatewayFailureStage = "inference"
+	GatewayFailureStageAccountAuth GatewayFailureStage = "account_auth"
+)
+
+type GatewayFailureScope string
+
+const (
+	GatewayFailureScopeAccount  GatewayFailureScope = "account"
+	GatewayFailureScopeProvider GatewayFailureScope = "provider"
+	GatewayFailureScopeRequest  GatewayFailureScope = "request"
+)
+
+type NextAccountAction uint8
+
+const (
+	NextAccountLegacyRetry NextAccountAction = iota
+	NextAccountRetry
+	NextAccountStop
+)
+
+// Alias keeps existing string-based failure reasons source compatible.
+type GatewayFailureReason = string
+
+const GrokCredentialUnavailableClientMessage = "No healthy Grok OAuth account is currently available"
+
 // UpstreamFailoverError indicates an upstream error that should trigger account failover.
 type UpstreamFailoverError struct {
 	StatusCode             int
@@ -581,11 +611,34 @@ type UpstreamFailoverError struct {
 	// token, 全量按 maxAccountSwitches=10 retry 会让一个请求拖 20 分钟 +
 	// 烧 10 个账号. handler 看到这 reason 限制单独 cap=1.
 	// 空字符串 = 共享 maxAccountSwitches 默认 cap.
-	Reason string
+	Reason            string
+	Stage             GatewayFailureStage
+	Scope             GatewayFailureScope
+	NextAccountAction NextAccountAction
+	ClientStatusCode  int
+	ClientMessage     string
 }
 
 func (e *UpstreamFailoverError) Error() string {
+	if e != nil && e.Stage == GatewayFailureStageAccountAuth {
+		return fmt.Sprintf("credential failure: %s (failover)", e.Reason)
+	}
 	return fmt.Sprintf("upstream error: %d (failover)", e.StatusCode)
+}
+
+func (e *UpstreamFailoverError) ShouldRetryNextAccount() bool {
+	return e != nil && e.NextAccountAction != NextAccountStop
+}
+
+func (e *UpstreamFailoverError) IsCredentialFailure() bool {
+	return e != nil && e.Stage == GatewayFailureStageAccountAuth
+}
+
+func (e *UpstreamFailoverError) ShouldReportAccountScheduleFailure() bool {
+	if e == nil {
+		return false
+	}
+	return !e.IsCredentialFailure() || e.Scope == GatewayFailureScopeAccount
 }
 
 // TempUnscheduleRetryableError 对 RetryableOnSameAccount 类型的 failover 错误触发临时封禁。

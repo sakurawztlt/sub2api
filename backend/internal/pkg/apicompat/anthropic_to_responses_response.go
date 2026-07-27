@@ -229,6 +229,44 @@ func FinalizeAnthropicResponsesStream(state *AnthropicEventToResponsesState) []R
 	return events
 }
 
+// FailedAnthropicResponsesStreamEvent builds the protocol terminal event used
+// when an Anthropic-backed Responses stream fails after response bytes have
+// already been committed. Responses clients require response.failed rather
+// than the generic SSE error event used by the Anthropic protocol.
+func FailedAnthropicResponsesStreamEvent(
+	state *AnthropicEventToResponsesState,
+	code string,
+	message string,
+) ResponsesStreamEvent {
+	if state == nil {
+		state = NewAnthropicEventToResponsesState()
+	}
+	if state.ResponseID == "" {
+		state.ResponseID = generateResponsesID()
+	}
+	if code == "" {
+		code = "server_error"
+	}
+	seq := state.SequenceNumber
+	state.SequenceNumber++
+	state.CompletedSent = true
+	return ResponsesStreamEvent{
+		Type:           "response.failed",
+		SequenceNumber: seq,
+		Response: &ResponsesResponse{
+			ID:     state.ResponseID,
+			Object: "response",
+			Model:  state.Model,
+			Status: "failed",
+			Output: []ResponsesOutput{},
+			Error: &ResponsesError{
+				Code:    code,
+				Message: message,
+			},
+		},
+	}
+}
+
 // ResponsesEventToSSE formats a ResponsesStreamEvent as an SSE data line.
 func ResponsesEventToSSE(evt ResponsesStreamEvent) (string, error) {
 	data, err := json.Marshal(evt)

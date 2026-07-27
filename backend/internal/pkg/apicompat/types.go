@@ -66,7 +66,8 @@ type AnthropicContentBlock struct {
 	Text string `json:"text,omitempty"`
 
 	// type=thinking
-	Thinking string `json:"thinking,omitempty"`
+	Thinking  string `json:"thinking,omitempty"`
+	Signature string `json:"signature,omitempty"`
 
 	// type=image | type=document
 	// For image: source.type=base64 + media_type image/*.
@@ -105,11 +106,13 @@ func (b AnthropicContentBlock) MarshalJSON() ([]byte, error) {
 		})
 	case "thinking":
 		return json.Marshal(struct {
-			Type     string `json:"type"`
-			Thinking string `json:"thinking"`
+			Type      string `json:"type"`
+			Thinking  string `json:"thinking"`
+			Signature string `json:"signature,omitempty"`
 		}{
-			Type:     b.Type,
-			Thinking: b.Thinking,
+			Type:      b.Type,
+			Thinking:  b.Thinking,
+			Signature: b.Signature,
 		})
 	default:
 		return json.Marshal(alias(b))

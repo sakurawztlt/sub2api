@@ -41,6 +41,17 @@ func (s *geminiCompatHTTPUpstreamStub) DoWithTLS(req *http.Request, proxyURL str
 	return s.Do(req, proxyURL, accountID, accountConcurrency)
 }
 
+func TestIsClaudeWebSearchToolMapKeepsNamedClientFunctions(t *testing.T) {
+	require.False(t, isClaudeWebSearchToolMap(map[string]any{
+		"type": "function",
+		"name": "web_search",
+	}), "a client-side function named web_search must stay a function")
+	require.True(t, isClaudeWebSearchToolMap(map[string]any{
+		"type": "web_search_20250305",
+		"name": "web_search",
+	}), "an explicitly typed server search tool must still be promoted")
+}
+
 // TestConvertClaudeToolsToGeminiTools_CustomType 测试custom类型工具转换
 func TestConvertClaudeToolsToGeminiTools_CustomType(t *testing.T) {
 	tests := []struct {
