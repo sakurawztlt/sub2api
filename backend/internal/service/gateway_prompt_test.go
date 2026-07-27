@@ -84,6 +84,38 @@ func TestIsClaudeCodeClient(t *testing.T) {
 	}
 }
 
+func TestSystemHasBillingAttributionBlock(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{
+			name: "proxied Claude Code billing block",
+			body: `{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.119.abc; cc_entrypoint=cli; cch=00000;"}]}`,
+			want: true,
+		},
+		{
+			name: "wrong entrypoint",
+			body: `{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.119.abc; cc_entrypoint=sdk; cch=00000;"}]}`,
+		},
+		{
+			name: "prefix only",
+			body: `{"system":[{"type":"text","text":"x-anthropic-billing-header supplied by user"}]}`,
+		},
+		{
+			name: "system string is not a CLI block array",
+			body: `{"system":"x-anthropic-billing-header: cc_entrypoint=cli"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, systemHasBillingAttributionBlock([]byte(tt.body)))
+		})
+	}
+}
+
 func TestSystemIncludesClaudeCodePrompt(t *testing.T) {
 	tests := []struct {
 		name   string

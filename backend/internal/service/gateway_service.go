@@ -4059,6 +4059,28 @@ func isClaudeCodeClient(userAgent string, metadataUserID string) bool {
 	return ParseMetadataUserID(metadataUserID) != nil
 }
 
+// systemHasBillingAttributionBlock detects the stable billing block emitted by
+// a real Claude Code CLI. Gateways such as NewAPI may replace the User-Agent
+// while preserving this body fingerprint; treating that traffic as a generic
+// client would rewrite system cache breakpoints and destroy prefix-cache hits.
+func systemHasBillingAttributionBlock(body []byte) bool {
+	system := gjson.GetBytes(body, "system")
+	if !system.IsArray() {
+		return false
+	}
+	found := false
+	system.ForEach(func(_, item gjson.Result) bool {
+		text := item.Get("text").String()
+		if strings.HasPrefix(text, claudeCodeBillingHeaderPrefix) &&
+			strings.Contains(text, claudeCodeCLIEntrypointMarker) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
 // shouldInjectClaudeCodeSessionHeader decides whether we should actively
 // populate X-Claude-Code-Session-Id from the outbound body rather than
 // rely on the client already supplying it.
@@ -4790,6 +4812,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	//
 	// 对于非 Claude Code 的第三方客户端（opencode 等），仍然走完整 mimicry。
 	isClaudeCode := IsClaudeCodeClient(ctx) || isClaudeCodeClient(c.GetHeader("User-Agent"), parsed.MetadataUserID)
+	if !isClaudeCode && parsed.MetadataUserID != "" {
+		isClaudeCode = systemHasBillingAttributionBlock(body)
+	}
 	shouldMimicClaudeCode := account.IsOAuth() && !isClaudeCode
 
 	if shouldMimicClaudeCode {
@@ -9965,6 +9990,9 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	}
 
 	isClaudeCodeCT := IsClaudeCodeClient(ctx) || isClaudeCodeClient(c.GetHeader("User-Agent"), parsed.MetadataUserID)
+	if !isClaudeCodeCT && parsed.MetadataUserID != "" {
+		isClaudeCodeCT = systemHasBillingAttributionBlock(body)
+	}
 	shouldMimicClaudeCode := account.IsOAuth() && !isClaudeCodeCT
 
 	if shouldMimicClaudeCode {
