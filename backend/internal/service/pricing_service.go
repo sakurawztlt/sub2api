@@ -627,16 +627,22 @@ func (s *PricingService) GetModelPricing(modelName string) *LiteLLMModelPricing 
 }
 
 func (s *PricingService) buildModelLookupCandidates(modelLower string) []string {
-	// Prefer canonical model name first (this also improves billing compatibility with "models/xxx").
-	candidates := []string{
-		normalizeModelNameForPricing(modelLower),
+	rawCandidates := []string{
 		modelLower,
-	}
-	candidates = append(candidates,
 		strings.TrimPrefix(modelLower, "models/"),
 		lastSegment(modelLower),
 		lastSegment(strings.TrimPrefix(modelLower, "models/")),
-	)
+	}
+	normalized := normalizeModelNameForPricing(modelLower)
+
+	// Prefer a future tier-specific Gemini price when present; today all 3.6
+	// Flash thinking tiers fall back to the base model's published rate.
+	candidates := rawCandidates
+	if normalizeGeminiThinkingTierAlias(lastSegment(modelLower)) != lastSegment(modelLower) {
+		candidates = append(candidates, normalized)
+	} else {
+		candidates = append([]string{normalized}, candidates...)
+	}
 
 	seen := make(map[string]struct{}, len(candidates))
 	out := make([]string, 0, len(candidates))
@@ -679,6 +685,16 @@ func normalizeModelNameForPricing(model string) string {
 	}
 
 	model = strings.TrimLeft(model, "/")
+	return normalizeGeminiThinkingTierAlias(model)
+}
+
+func normalizeGeminiThinkingTierAlias(model string) string {
+	const baseModel = "gemini-3.6-flash"
+	for _, tier := range []string{"-high", "-low", "-medium", "-tiered"} {
+		if model == baseModel+tier {
+			return baseModel
+		}
+	}
 	return model
 }
 
