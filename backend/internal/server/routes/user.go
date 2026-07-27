@@ -14,10 +14,13 @@ func RegisterUserRoutes(
 	h *handler.Handlers,
 	jwtAuth middleware.JWTAuthMiddleware,
 	settingService *service.SettingService,
+	panelRateLimiter *middleware.PanelRateLimiter,
 ) {
 	authenticated := v1.Group("")
 	authenticated.Use(gin.HandlerFunc(jwtAuth))
 	authenticated.Use(middleware.BackendModeUserGuard(settingService))
+	// 面板全局按用户限流：防止单个账号高频刷接口打爆数据库
+	authenticated.Use(panelRateLimiter.Global())
 	{
 		// 用户接口
 		user := authenticated.Group("/user")
@@ -32,7 +35,7 @@ func RegisterUserRoutes(
 			user.DELETE("/account-bindings/:provider", h.User.UnbindIdentity)
 			user.POST("/auth-identities/bind/start", h.User.StartIdentityBinding)
 			user.GET("/platform-quotas", h.User.GetMyPlatformQuotas)
-			user.GET("/api-keys/:id/usage/daily", h.Usage.GetMyAPIKeyDailyUsage)
+			user.GET("/api-keys/:id/usage/daily", panelRateLimiter.Heavy(), h.Usage.GetMyAPIKeyDailyUsage)
 
 			// 通知邮箱管理
 			notifyEmail := user.Group("/notify-email")
@@ -78,8 +81,9 @@ func RegisterUserRoutes(
 			channels.GET("/available", h.AvailableChannel.List)
 		}
 
-		// 使用记录
+		// 使用记录（聚合统计属重查询，叠加更严格的按用户限流）
 		usage := authenticated.Group("/usage")
+		usage.Use(panelRateLimiter.Heavy())
 		{
 			usage.GET("", h.Usage.List)
 			usage.GET("/errors", h.Usage.ListErrors)
