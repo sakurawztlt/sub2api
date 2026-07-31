@@ -489,13 +489,14 @@ type OpenAIGatewayService struct {
 	// codex 5/9 PR#2290 audit #2: 防并发清同一 rate-limited 账号撞 429.
 	// 多个请求同时到 recover 路径时 singleflight 让第一个真正 ClearRateLimit,
 	// 后续 caller 拿到第一个 result, 避免账号刚清完又被一波并发撞回限流.
-	rateLimitRecoveryFlight   singleflight.Group
-	openaiWSPool              *openAIWSConnPool
-	openaiWSStateStore        OpenAIWSStateStore
-	openaiScheduler           OpenAIAccountScheduler
-	openaiWSPassthroughDialer openAIWSClientDialer
-	openaiAccountStats        *openAIAccountRuntimeStats
-	openaiProxyStreamCircuit  *openAIProxyStreamCircuit
+	rateLimitRecoveryFlight        singleflight.Group
+	openaiWSPool                   *openAIWSConnPool
+	openaiWSStateStore             OpenAIWSStateStore
+	openaiScheduler                OpenAIAccountScheduler
+	openaiWSPassthroughDialer      openAIWSClientDialer
+	openaiAccountStats             *openAIAccountRuntimeStats
+	openaiProxyStreamCircuit       *openAIProxyStreamCircuit
+	openaiProxyStreamFailOpenLogAt atomic.Int64
 
 	openaiWSFallbackUntil             sync.Map // key: int64(accountID), value: time.Time
 	openaiAccountRuntimeBlockUntil    sync.Map // key: int64(accountID), value: time.Time
@@ -2916,7 +2917,7 @@ func (s *OpenAIGatewayService) resolveFreshSchedulableOpenAICompatibleAccount(ct
 	if s.isOpenAIAccountRuntimeBlocked(fresh) {
 		return nil
 	}
-	if s.isOpenAIProxyStreamQuarantined(fresh) {
+	if s.isOpenAIProxyStreamQuarantined(ctx, fresh) {
 		return nil
 	}
 	return fresh
@@ -2934,7 +2935,7 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAICompatibleAccountFromDB(ctx 
 		if !isOpenAICompatibleAccountEligibleForRequest(ctx, account, platform, requestedModel, requireCompact, requiredCapability) {
 			return nil
 		}
-		if s.isOpenAIProxyStreamQuarantined(account) {
+		if s.isOpenAIProxyStreamQuarantined(ctx, account) {
 			return nil
 		}
 		return account
@@ -2950,7 +2951,7 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAICompatibleAccountFromDB(ctx 
 	if s.isOpenAIAccountRuntimeBlocked(latest) {
 		return nil
 	}
-	if s.isOpenAIProxyStreamQuarantined(latest) {
+	if s.isOpenAIProxyStreamQuarantined(ctx, latest) {
 		return nil
 	}
 	return latest
