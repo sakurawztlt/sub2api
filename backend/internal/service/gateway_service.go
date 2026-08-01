@@ -5493,6 +5493,12 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					StatusCode: 403,
 				}
 			}
+			// Preserve already-observed usage when a stream fails after the
+			// upstream has started metering. Failover errors remain result=nil
+			// to prevent double billing after a successful retry.
+			if partial := partialStreamUsageResult(resp, streamResult, originalModel, mappedModel, startTime, err); partial != nil {
+				return partial, err
+			}
 			return nil, err
 		}
 		usage = streamResult.usage
@@ -5763,6 +5769,9 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 	if input.RequestStream {
 		streamResult, err := s.handleStreamingResponseAnthropicAPIKeyPassthrough(ctx, resp, c, account, input.StartTime, input.RequestModel)
 		if err != nil {
+			if partial := partialStreamUsageResult(resp, streamResult, input.OriginalModel, input.RequestModel, input.StartTime, err); partial != nil {
+				return partial, err
+			}
 			return nil, err
 		}
 		usage = streamResult.usage
@@ -8062,6 +8071,45 @@ type streamingResult struct {
 	usage            *ClaudeUsage
 	firstTokenMs     *int
 	clientDisconnect bool // 客户端是否在流式传输过程中断开
+}
+
+// hasObservedTokens reports whether the upstream exposed any metered usage.
+func (u *ClaudeUsage) hasObservedTokens() bool {
+	if u == nil {
+		return false
+	}
+	return u.InputTokens > 0 || u.OutputTokens > 0 ||
+		u.CacheCreationInputTokens > 0 || u.CacheReadInputTokens > 0 ||
+		u.CacheCreation5mTokens > 0 || u.CacheCreation1hTokens > 0 ||
+		u.ImageOutputTokens > 0
+}
+
+// partialStreamUsageResult packages usage observed before a non-failover
+// stream error so the handler can still record it. A failover attempt must
+// always return result=nil, otherwise a later successful attempt would be
+// billed twice.
+func partialStreamUsageResult(resp *http.Response, streamResult *streamingResult, model, upstreamModel string, startTime time.Time, err error) *ForwardResult {
+	if streamResult == nil || !streamResult.usage.hasObservedTokens() {
+		return nil
+	}
+	var failoverErr *UpstreamFailoverError
+	if errors.As(err, &failoverErr) {
+		return nil
+	}
+	requestID := ""
+	if resp != nil {
+		requestID = resp.Header.Get("x-request-id")
+	}
+	return &ForwardResult{
+		RequestID:        requestID,
+		Usage:            *streamResult.usage,
+		Model:            model,
+		UpstreamModel:    upstreamModel,
+		Stream:           true,
+		Duration:         time.Since(startTime),
+		FirstTokenMs:     streamResult.firstTokenMs,
+		ClientDisconnect: streamResult.clientDisconnect,
+	}
 }
 
 func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, startTime time.Time, originalModel, mappedModel string, mimicClaudeCode bool) (*streamingResult, error) {
