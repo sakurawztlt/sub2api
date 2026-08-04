@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestForwardAsAnthropicOAuthRestoresPairedCodexIdentity(t *testing.T) {
+func TestForwardAsAnthropicOAuthRestoresCanonicalCodexIdentity(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	const tuiUA = "codex-tui/9.9.9 (Mac OS X 14.0; arm64) iTerm (codex-tui; 9.9.9)"
@@ -44,8 +44,8 @@ func TestForwardAsAnthropicOAuthRestoresPairedCodexIdentity(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotNil(t, upstream.lastReq)
-	require.Equal(t, tuiUA, upstream.lastReq.Header.Get("User-Agent"))
-	require.Equal(t, "codex-tui", upstream.lastReq.Header.Get("originator"))
+	require.Equal(t, codexCLIUserAgent, upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, "codex_cli_rs", upstream.lastReq.Header.Get("originator"))
 	require.Equal(t, codexCLIVersion, upstream.lastReq.Header.Get("version"))
 	require.Equal(t, "responses=experimental", upstream.lastReq.Header.Get("OpenAI-Beta"))
 }

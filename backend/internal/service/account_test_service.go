@@ -656,7 +656,8 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		if chatgptAccountID != "" {
 			req.Header.Set("chatgpt-account-id", chatgptAccountID)
 		}
-		enforceCodexIdentityHeaders(req.Header)
+		// 与真实转发一致：账号级自定义 UA 只贡献指纹，身份和版本由规范源重建。
+		enforceCodexIdentityHeadersWithUA(req.Header, account.GetOpenAIUserAgent())
 	}
 
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
@@ -1801,7 +1802,8 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	if chatgptAccountID := strings.TrimSpace(account.GetChatGPTAccountID()); chatgptAccountID != "" {
 		req.Header.Set("chatgpt-account-id", chatgptAccountID)
 	}
-	enforceCodexIdentityHeaders(req.Header)
+	// 与真实转发一致：账号级自定义 UA 只贡献指纹，身份和版本由规范源重建。
+	enforceCodexIdentityHeadersWithUA(req.Header, account.GetOpenAIUserAgent())
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {

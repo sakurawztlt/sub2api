@@ -123,6 +123,11 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchRequest(ctx context.Context
 	} else if account.Type == AccountTypeOAuth {
 		req.Header.Set("Version", codexCLIVersion)
 	}
+	// alpha/search 也必须在所有入站字段改写之后回到 OAuth 规范身份；API Key
+	// 路径不带 originator，保持平台 API 的原始语义。
+	if account.Type == AccountTypeOAuth {
+		enforceCodexIdentityHeadersWithUA(req.Header, s.codexIdentityOverrideUA(account))
+	}
 	return req, nil
 }
 

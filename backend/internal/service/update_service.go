@@ -119,6 +119,8 @@ type GitHubRelease struct {
 	Body        string        `json:"body"`
 	PublishedAt string        `json:"published_at"`
 	HTMLURL     string        `json:"html_url"`
+	Draft       bool          `json:"draft"`
+	Prerelease  bool          `json:"prerelease"`
 	Assets      []GitHubAsset `json:"assets"`
 }
 

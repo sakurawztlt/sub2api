@@ -110,7 +110,7 @@ const (
 	apiQueryMaxJitter       = 800 * time.Millisecond // 用量查询最大随机延迟
 	windowStatsCacheTTL     = 1 * time.Minute
 	openAIProbeCacheTTL     = 10 * time.Minute
-	openAICodexProbeVersion = "0.125.0"
+	openAICodexProbeVersion = codexCLIVersion // 与网关出站身份同源，避免两处硬编码版本各自漂移
 )
 
 // UsageCache 封装账户使用量相关的缓存
@@ -686,7 +686,8 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 			req.Header.Set("User-Agent", strings.TrimSpace(fp.UserAgent))
 		}
 	}
-	enforceCodexIdentityHeaders(req.Header)
+	// 与真实转发一致：账号级自定义 UA 只贡献指纹，身份和版本由规范源重建。
+	enforceCodexIdentityHeadersWithUA(req.Header, account.GetOpenAIUserAgent())
 	if chatgptAccountID := account.GetChatGPTAccountID(); chatgptAccountID != "" {
 		req.Header.Set("chatgpt-account-id", chatgptAccountID)
 	}

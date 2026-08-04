@@ -273,6 +273,9 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		EnableClientDatelineNormalization:                      settings.EnableClientDatelineNormalization,
 		AntigravityUserAgentVersion:                            settings.AntigravityUserAgentVersion,
 		OpenAICodexUserAgent:                                   settings.OpenAICodexUserAgent,
+		OpenAICodexClientVersion:                               settings.OpenAICodexClientVersion,
+		OpenAICodexClientVersionSynced:                         settings.OpenAICodexClientVersionSynced,
+		OpenAICodexVersionAutoSyncEnabled:                      settings.OpenAICodexVersionAutoSyncEnabled,
 		MinCodexVersion:                                        settings.MinCodexVersion,
 		MaxCodexVersion:                                        settings.MaxCodexVersion,
 		CodexCLIOnlyBlacklist:                                  settings.CodexCLIOnlyBlacklist,
@@ -645,6 +648,8 @@ type UpdateSettingsRequest struct {
 	EnableClientDatelineNormalization      *bool   `json:"enable_client_dateline_normalization"`
 	AntigravityUserAgentVersion            *string `json:"antigravity_user_agent_version"`
 	OpenAICodexUserAgent                   *string `json:"openai_codex_user_agent"`
+	OpenAICodexClientVersion               *string `json:"openai_codex_client_version"`
+	OpenAICodexVersionAutoSyncEnabled      *bool   `json:"openai_codex_version_auto_sync_enabled"`
 
 	// codex_cli_only 加固（global-only）
 	MinCodexVersion                      string `json:"min_codex_version"`
@@ -1590,6 +1595,14 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			return
 		}
 	}
+	if req.OpenAICodexClientVersion != nil {
+		normalized := strings.TrimSpace(*req.OpenAICodexClientVersion)
+		if normalized != "" && service.NormalizeCodexClientVersion(normalized) == "" {
+			response.Error(c, http.StatusBadRequest, "openai_codex_client_version must be empty or a valid version (e.g. 0.146.0)")
+			return
+		}
+		req.OpenAICodexClientVersion = &normalized
+	}
 
 	// codex_cli_only 加固：最低/最高 Codex 版本（空=禁用，或合法 semver；max>=min）
 	if req.MinCodexVersion != "" && !semverPattern.MatchString(req.MinCodexVersion) {
@@ -1885,6 +1898,19 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 				return *req.OpenAICodexUserAgent
 			}
 			return previousSettings.OpenAICodexUserAgent
+		}(),
+		OpenAICodexClientVersion: func() string {
+			if req.OpenAICodexClientVersion != nil {
+				return *req.OpenAICodexClientVersion
+			}
+			return previousSettings.OpenAICodexClientVersion
+		}(),
+		OpenAICodexClientVersionSynced: previousSettings.OpenAICodexClientVersionSynced,
+		OpenAICodexVersionAutoSyncEnabled: func() bool {
+			if req.OpenAICodexVersionAutoSyncEnabled != nil {
+				return *req.OpenAICodexVersionAutoSyncEnabled
+			}
+			return previousSettings.OpenAICodexVersionAutoSyncEnabled
 		}(),
 		MinCodexVersion:       strings.TrimSpace(req.MinCodexVersion),
 		MaxCodexVersion:       strings.TrimSpace(req.MaxCodexVersion),
@@ -2336,6 +2362,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		EnableClientDatelineNormalization:                      updatedSettings.EnableClientDatelineNormalization,
 		AntigravityUserAgentVersion:                            updatedSettings.AntigravityUserAgentVersion,
 		OpenAICodexUserAgent:                                   updatedSettings.OpenAICodexUserAgent,
+		OpenAICodexClientVersion:                               updatedSettings.OpenAICodexClientVersion,
+		OpenAICodexClientVersionSynced:                         updatedSettings.OpenAICodexClientVersionSynced,
+		OpenAICodexVersionAutoSyncEnabled:                      updatedSettings.OpenAICodexVersionAutoSyncEnabled,
 		MinCodexVersion:                                        updatedSettings.MinCodexVersion,
 		MaxCodexVersion:                                        updatedSettings.MaxCodexVersion,
 		CodexCLIOnlyBlacklist:                                  updatedSettings.CodexCLIOnlyBlacklist,
@@ -2887,6 +2916,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.OpenAICodexUserAgent != after.OpenAICodexUserAgent {
 		changed = append(changed, "openai_codex_user_agent")
+	}
+	if before.OpenAICodexClientVersion != after.OpenAICodexClientVersion {
+		changed = append(changed, "openai_codex_client_version")
+	}
+	if before.OpenAICodexVersionAutoSyncEnabled != after.OpenAICodexVersionAutoSyncEnabled {
+		changed = append(changed, "openai_codex_version_auto_sync_enabled")
 	}
 	if before.PaymentVisibleMethodAlipaySource != after.PaymentVisibleMethodAlipaySource {
 		changed = append(changed, "payment_visible_method_alipay_source")

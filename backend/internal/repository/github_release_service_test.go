@@ -245,6 +245,28 @@ func (s *GitHubReleaseServiceSuite) TestFetchLatestRelease_Success() {
 	require.Equal(s.T(), "app-linux-amd64.tar.gz", release.Assets[0].Name)
 }
 
+func (s *GitHubReleaseServiceSuite) TestFetchRecentReleases_Success() {
+	s.srv = newLocalTestServer(s.T(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(s.T(), "/repos/test/repo/releases", r.URL.Path)
+		require.Equal(s.T(), "application/vnd.github.v3+json", r.Header.Get("Accept"))
+		_, _ = w.Write([]byte(`[
+			{"tag_name":"rust-v0.146.0","draft":false,"prerelease":false},
+			{"tag_name":"rust-v0.147.0-alpha.1","draft":false,"prerelease":true}
+		]`))
+	}))
+	s.client = &githubReleaseClient{
+		httpClient:         &http.Client{Transport: &testTransport{testServerURL: s.srv.URL}},
+		downloadHTTPClient: &http.Client{},
+	}
+
+	releases, err := s.client.FetchRecentReleases(context.Background(), "test/repo", 30)
+	require.NoError(s.T(), err)
+	require.Len(s.T(), releases, 2)
+	require.Equal(s.T(), "rust-v0.146.0", releases[0].TagName)
+	require.False(s.T(), releases[0].Prerelease)
+	require.True(s.T(), releases[1].Prerelease)
+}
+
 func (s *GitHubReleaseServiceSuite) TestFetchLatestRelease_Non200() {
 	s.srv = newLocalTestServer(s.T(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

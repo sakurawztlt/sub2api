@@ -46,7 +46,15 @@ const (
 	openaiPlatformAPIURL            = "https://api.openai.com/v1/responses"
 	openaiPlatformAPIInputTokensURL = "https://api.openai.com/v1/responses/input_tokens"
 	openaiStickySessionTTL          = time.Hour // 粘性会话TTL
-	codexCLIUserAgent               = "codex_cli_rs/0.144.1 (Ubuntu 22.4.0; x86_64) xterm-256color"
+	// 与真实 Codex CLI 的 User-Agent 结构对齐：
+	// {originator}/{version} ({OS} {OS_version}; {arch}) {terminal}
+	// 缺少 OS/架构/终端后缀的形态易被上游指纹识别为非官方客户端。
+	// 该后缀是 UA 形态的唯一定义处，buildCodexCLIUserAgent 按运行时版本号复用它。
+	codexCLIUserAgentSuffix = " (Ubuntu 22.4.0; x86_64) xterm-256color"
+	// codexCLIUserAgent 是编译期兜底 UA；运行时优先使用由后台版本号拼出的规范 UA。
+	// 版本段必须来自 codexCLIVersion：UA 与 version 头是同一个版本声明的两个出口，
+	// 各自硬编码会漂移成互相矛盾的身份。
+	codexCLIUserAgent = "codex_cli_rs/" + codexCLIVersion + codexCLIUserAgentSuffix
 	// codex_cli_only 拒绝时单个请求头日志长度上限（字符）
 	codexCLIOnlyHeaderValueMaxBytes = 256
 
@@ -61,7 +69,12 @@ const (
 	openAIWSRetryJitterRatioDefault    = 0.2
 	openAICompactSessionSeedKey        = "openai_compact_session_seed"
 	openAIUpstreamEndpointContextKey   = "openai_actual_upstream_endpoint"
-	codexCLIVersion                    = "0.144.1"
+	// codexCLIVersion 是网关对上游声明的 Codex 客户端版本，同时供 codexCLIUserAgent
+	// 与 version 头使用。上游 /backend-api/codex 在容量紧张时按客户端身份分优先级降载，
+	// 陈旧版本会被优先丢弃（HTTP 200 + 流内 server_is_overloaded）；非官方客户端配不出
+	// 官方身份时整体回退到本常量，因此它必须跟随官方 CLI 的当前发布版本，
+	// 落后多个版本会让这些请求稳定落在被优先丢弃的一侧。
+	codexCLIVersion = "0.146.0"
 	// Codex 限额快照仅用于后台展示/诊断，不需要每个成功请求都立即落库。
 	openAICodexSnapshotPersistMinInterval = 30 * time.Second
 	openAICodexRecoverySnapshotMaxSkew    = 2 * time.Minute
@@ -575,6 +588,11 @@ func NewOpenAIGatewayService(
 	settingService *SettingService,
 	userPlatformQuotaRepo UserPlatformQuotaRepository,
 ) *OpenAIGatewayService {
+	// enforceCodexIdentityHeaders 是 HTTP / 透传 / WS / 探针 等出站路径共用的纯函数收口点，
+	// 拿不到配置，故在此发布进程级开关快照。配置取反义，零值即「强制统一出口开启」。
+	if cfg != nil {
+		SetCodexIdentityEnforcementEnabled(!cfg.Gateway.DisableCodexIdentityEnforcement)
+	}
 	svc := &OpenAIGatewayService{
 		accountRepo:         accountRepo,
 		usageLogRepo:        usageLogRepo,
@@ -4547,10 +4565,10 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	if s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
 		req.Header.Set("user-agent", codexCLIUserAgent)
 	}
-	// OAuth 安全透传：对非 Codex UA 统一兜底，降低被上游风控拦截概率。
-	applyOpenAIOAuthCodexUserAgentFallback(req.Header, account)
+	// OAuth 终态收口：User-Agent / originator / version 从同一规范版本源重建。
+	// 客户端识别与会话字段仍按上面的本地逻辑保留；API Key 不补 originator。
 	if account.Type == AccountTypeOAuth {
-		enforceCodexIdentityHeaders(req.Header)
+		enforceCodexIdentityHeadersWithUA(req.Header, s.codexIdentityOverrideUA(account))
 	}
 
 	if req.Header.Get("content-type") == "" {
@@ -4941,15 +4959,32 @@ func openAIStreamDataStartsClientOutput(data, eventType string) bool {
 	return !openAIStreamEventIsPreamble(eventType)
 }
 
+// openAIStreamFailedEventErrorCode 提取流内 failed 事件的错误码（小写），
+// 兼容 response.failed 的嵌套形态与裸 error 形态。
+func openAIStreamFailedEventErrorCode(payload []byte) string {
+	code := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "response.error.code").String()))
+	if code == "" {
+		code = strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "error.code").String()))
+	}
+	return code
+}
+
+// isOpenAIUpstreamCapacityShedEvent 判断流内 failed 事件是否为请求级容量降载信号。
+func isOpenAIUpstreamCapacityShedEvent(payload []byte) bool {
+	switch openAIStreamFailedEventErrorCode(payload) {
+	case "server_is_overloaded", "slow_down":
+		return true
+	default:
+		return false
+	}
+}
+
 func openAIStreamFailedEventSemanticStatus(payload []byte, message string) int {
 	if isOpenAIContextWindowError(message, payload) {
 		return http.StatusBadRequest
 	}
 
-	code := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "response.error.code").String()))
-	if code == "" {
-		code = strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "error.code").String()))
-	}
+	code := openAIStreamFailedEventErrorCode(payload)
 	errType := strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "response.error.type").String()))
 	if errType == "" {
 		errType = strings.ToLower(strings.TrimSpace(gjson.GetBytes(payload, "error.type").String()))
@@ -5030,7 +5065,15 @@ func openAIStreamFailedEventShouldFailover(payload []byte, message string) bool 
 }
 
 func openAIStreamFailedEventRetryableOnSameAccount(account *Account, payload []byte, message string) bool {
-	if account == nil || !account.IsPoolMode() {
+	if account == nil {
+		return false
+	}
+	// 容量降载是请求级信号，与账号健康无关；先在同一账号有界重试，
+	// 并由 RequestScopedTransient 阻止后续临时摘号。
+	if isOpenAIUpstreamCapacityShedEvent(payload) {
+		return true
+	}
+	if !account.IsPoolMode() {
 		return false
 	}
 	semanticStatus := openAIStreamFailedEventSemanticStatus(payload, message)
@@ -5125,6 +5168,7 @@ func (s *OpenAIGatewayService) newOpenAIStreamFailoverError(
 		ResponseBody:           body,
 		ResponseHeaders:        headers,
 		RetryableOnSameAccount: openAIStreamFailedEventRetryableOnSameAccount(account, payload, message),
+		RequestScopedTransient: isOpenAIUpstreamCapacityShedEvent(payload),
 	}
 }
 
@@ -5666,10 +5710,10 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	if s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
 		req.Header.Set("user-agent", codexCLIUserAgent)
 	}
-	// OAuth 安全兜底：浏览器/未知 UA 容易触发上游风控，统一改成 Codex CLI UA。
-	applyOpenAIOAuthCodexUserAgentFallback(req.Header, account)
+	// OAuth 终态收口：User-Agent / originator / version 从同一规范版本源重建。
+	// compat bridge 会显式不带 originator，收口函数因此不会误补身份。
 	if account.Type == AccountTypeOAuth {
-		enforceCodexIdentityHeaders(req.Header)
+		enforceCodexIdentityHeadersWithUA(req.Header, s.codexIdentityOverrideUA(account))
 	}
 
 	// Ensure required headers exist
@@ -5681,6 +5725,18 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	account.ApplyHeaderOverrides(req.Header)
 
 	return req, nil
+}
+
+// codexIdentityOverrideUA 返回账号级显式配置的出站 User-Agent，供强制统一身份时
+// 贡献 OS / 架构 / 终端指纹。ForceCodexCLI 的语义是使用网关规范身份，优先级保持不变。
+func (s *OpenAIGatewayService) codexIdentityOverrideUA(account *Account) string {
+	if account == nil {
+		return ""
+	}
+	if s != nil && s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
+		return ""
+	}
+	return account.GetOpenAIUserAgent()
 }
 
 func (s *OpenAIGatewayService) handleErrorResponse(

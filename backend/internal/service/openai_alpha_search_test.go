@@ -62,7 +62,9 @@ func TestForwardAlphaSearchOAuthPreservesWire(t *testing.T) {
 	require.Equal(t, "Bearer oauth-token", upstream.lastReq.Header.Get("Authorization"))
 	require.Equal(t, "chatgpt-account", upstream.lastReq.Header.Get("chatgpt-account-id"))
 	require.Equal(t, "application/json", upstream.lastReq.Header.Get("Accept"))
-	require.Equal(t, "0.144.1", upstream.lastReq.Header.Get("Version"))
+	require.Equal(t, codexCLIVersion, upstream.lastReq.Header.Get("Version"))
+	require.Equal(t, codexCLIUserAgent, upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, "codex_cli_rs", upstream.lastReq.Header.Get("Originator"))
 	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))
 	require.JSONEq(t, string(body), string(upstream.lastBody))
 }
@@ -102,6 +104,7 @@ func TestForwardAlphaSearchAPIKeyMapsModelAndPassesThroughError(t *testing.T) {
 	require.JSONEq(t, upstreamBody, recorder.Body.String())
 	require.Equal(t, "https://compat.example/v4/alpha/search", upstream.lastReq.URL.String())
 	require.Equal(t, "Bearer sk-test", upstream.lastReq.Header.Get("Authorization"))
+	require.Empty(t, upstream.lastReq.Header.Get("Originator"), "API-key alpha/search must not inherit OAuth identity")
 	require.Equal(t, "upstream-5.6", gjson.GetBytes(upstream.lastBody, "model").String())
 	require.True(t, gjson.GetBytes(upstream.lastBody, "commands.search_query").IsArray())
 }

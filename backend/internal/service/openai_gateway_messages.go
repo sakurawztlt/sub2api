@@ -403,7 +403,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		// ChatGPT's Codex endpoint returns 404 when originator and User-Agent do
 		// not identify the same official client.
 		ensureCodexIdentityHeaders(upstreamReq.Header)
-		enforceCodexIdentityHeaders(upstreamReq.Header)
+		enforceCodexIdentityHeadersWithUA(upstreamReq.Header, s.codexIdentityOverrideUA(account))
 		logger.L().Debug("openai messages: upstream identity restored",
 			zap.Int64("account_id", account.ID),
 			zap.String("upstream_model", upstreamModel),

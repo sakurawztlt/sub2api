@@ -135,12 +135,18 @@ const antigravityUserAgentVersionCacheTTL = 60 * time.Second
 const antigravityUserAgentVersionErrorTTL = 5 * time.Second
 const antigravityUserAgentVersionDBTimeout = 5 * time.Second
 
-// DefaultOpenAICodexUserAgent OpenAI Codex 默认 User-Agent（用于规避 Cloudflare 对浏览器 UA 的质询）
-const DefaultOpenAICodexUserAgent = "codex-tui/0.125.0 (Ubuntu 22.4.0; x86_64) xterm-256color (codex-tui; 0.125.0)"
+// DefaultOpenAICodexUserAgent 与网关编译期规范身份同源；运行时版本可由设置/同步覆盖。
+const DefaultOpenAICodexUserAgent = codexCLIUserAgent
 
 // cachedOpenAICodexUserAgent 缓存 OpenAI Codex UA（进程内缓存，60s TTL）
 type cachedOpenAICodexUserAgent struct {
 	value     string
+	expiresAt int64 // unix nano
+}
+
+// cachedOpenAICodexClientVersion 缓存出站 Codex 客户端版本号（进程内缓存，60s TTL）
+type cachedOpenAICodexClientVersion struct {
+	version   string
 	expiresAt int64 // unix nano
 }
 
@@ -152,6 +158,10 @@ type cachedOpenAIQuotaAutoPauseSettings struct {
 const openAICodexUserAgentCacheTTL = 60 * time.Second
 const openAICodexUserAgentErrorTTL = 5 * time.Second
 const openAICodexUserAgentDBTimeout = 5 * time.Second
+const openAICodexClientVersionCacheTTL = 60 * time.Second
+const openAICodexClientVersionErrorTTL = 5 * time.Second
+const openAICodexClientVersionDBTimeout = 5 * time.Second
+const openAICodexClientVersionSFKey = "openai_codex_client_version"
 
 const codexRestrictionPolicyCacheTTL = 60 * time.Second
 const codexRestrictionPolicyDBTimeout = 5 * time.Second
@@ -201,6 +211,8 @@ type SettingService struct {
 	antigravityUAVersionSF      singleflight.Group
 	openAICodexUACache          atomic.Value // *cachedOpenAICodexUserAgent
 	openAICodexUASF             singleflight.Group
+	openAICodexVersionCache     atomic.Value // *cachedOpenAICodexClientVersion
+	openAICodexVersionSF        singleflight.Group
 	codexRestrictionPolicyCache atomic.Value // *cachedCodexRestrictionPolicy
 	codexRestrictionPolicySF    singleflight.Group
 
@@ -1170,6 +1182,81 @@ func (s *SettingService) GetOpenAICodexUserAgent(ctx context.Context) string {
 		return ua
 	}
 	return fallback
+}
+
+// GetOpenAICodexClientVersion 返回出站声明的 Codex 客户端版本号。
+// 优先级：管理员覆写 → 自动同步值 → 编译期常量。
+func (s *SettingService) GetOpenAICodexClientVersion(ctx context.Context) string {
+	fallback := codexCLIVersion
+	if s == nil || s.settingRepo == nil {
+		return fallback
+	}
+	if cached, ok := s.openAICodexVersionCache.Load().(*cachedOpenAICodexClientVersion); ok && cached != nil && time.Now().UnixNano() < cached.expiresAt {
+		return cached.version
+	}
+
+	result, _, _ := s.openAICodexVersionSF.Do(openAICodexClientVersionSFKey, func() (any, error) {
+		if cached, ok := s.openAICodexVersionCache.Load().(*cachedOpenAICodexClientVersion); ok && cached != nil && time.Now().UnixNano() < cached.expiresAt {
+			return cached.version, nil
+		}
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), openAICodexClientVersionDBTimeout)
+		defer cancel()
+		values, err := s.settingRepo.GetMultiple(dbCtx, []string{
+			SettingKeyOpenAICodexClientVersion,
+			SettingKeyOpenAICodexClientVersionSynced,
+		})
+		if err != nil {
+			slog.Warn("failed to get openai codex client version setting", "error", err)
+			s.openAICodexVersionCache.Store(&cachedOpenAICodexClientVersion{
+				version: fallback, expiresAt: time.Now().Add(openAICodexClientVersionErrorTTL).UnixNano(),
+			})
+			return fallback, nil
+		}
+		version := NormalizeCodexClientVersion(values[SettingKeyOpenAICodexClientVersion])
+		if version == "" {
+			version = NormalizeCodexClientVersion(values[SettingKeyOpenAICodexClientVersionSynced])
+		}
+		if version == "" {
+			version = fallback
+		}
+		s.openAICodexVersionCache.Store(&cachedOpenAICodexClientVersion{
+			version: version, expiresAt: time.Now().Add(openAICodexClientVersionCacheTTL).UnixNano(),
+		})
+		return version, nil
+	})
+	if version, ok := result.(string); ok && version != "" {
+		return version
+	}
+	return fallback
+}
+
+// InvalidateOpenAICodexClientVersionCache 让下次读取重新解析管理员/同步版本。
+func (s *SettingService) InvalidateOpenAICodexClientVersionCache() {
+	if s == nil {
+		return
+	}
+	s.openAICodexVersionSF.Forget(openAICodexClientVersionSFKey)
+	s.openAICodexVersionCache.Store((*cachedOpenAICodexClientVersion)(nil))
+}
+
+// GetOpenAICodexCanonicalUserAgent 返回 OAuth 出站规范 UA。自定义 UA 只贡献客户端名与
+// OS/架构/终端指纹，版本段始终从当前生效版本重建，避免后台 UA 把版本永久钉死。
+func (s *SettingService) GetOpenAICodexCanonicalUserAgent(ctx context.Context) string {
+	if s == nil {
+		return codexCLIUserAgent
+	}
+	version := s.GetOpenAICodexClientVersion(ctx)
+	ua := strings.TrimSpace(s.GetOpenAICodexUserAgent(ctx))
+	if ua == "" {
+		return buildCodexCLIUserAgent(version)
+	}
+	if rebuilt := openai.SetCodexUserAgentVersion(ua, version); rebuilt != "" {
+		return rebuilt
+	}
+	return ua
 }
 
 var legacyClaudeCodeCodexWhitelistEntry = openai.AllowedClientEntry{
@@ -2314,6 +2401,9 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyEnableClientDatelineNormalization] = strconv.FormatBool(settings.EnableClientDatelineNormalization)
 	updates[SettingKeyAntigravityUserAgentVersion] = antigravity.NormalizeUserAgentVersion(settings.AntigravityUserAgentVersion)
 	updates[SettingKeyOpenAICodexUserAgent] = strings.TrimSpace(settings.OpenAICodexUserAgent)
+	updates[SettingKeyOpenAICodexClientVersion] = NormalizeCodexClientVersion(settings.OpenAICodexClientVersion)
+	updates[SettingKeyOpenAICodexVersionAutoSyncEnabled] = strconv.FormatBool(settings.OpenAICodexVersionAutoSyncEnabled)
+	// synced 由后台同步任务独占写入，普通面板保存不得覆盖。
 	// codex_cli_only 加固
 	updates[SettingKeyMinCodexVersion] = strings.TrimSpace(settings.MinCodexVersion)
 	updates[SettingKeyMaxCodexVersion] = strings.TrimSpace(settings.MaxCodexVersion)
@@ -2483,6 +2573,7 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 		value:     codexUA,
 		expiresAt: time.Now().Add(openAICodexUserAgentCacheTTL).UnixNano(),
 	})
+	s.InvalidateOpenAICodexClientVersionCache()
 	openAIAdvancedSchedulerSettingSF.Forget(openAIAdvancedSchedulerSettingKey)
 	openAIAdvancedSchedulerSettingCache.Store(&cachedOpenAIAdvancedSchedulerSetting{
 		enabled:                     settings.OpenAIAdvancedSchedulerEnabled,
@@ -3370,6 +3461,9 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyEnableClientDatelineNormalization:                  "true",
 		SettingKeyAntigravityUserAgentVersion:                        "",
 		SettingKeyOpenAICodexUserAgent:                               "",
+		SettingKeyOpenAICodexClientVersion:                           "",
+		SettingKeyOpenAICodexClientVersionSynced:                     "",
+		SettingKeyOpenAICodexVersionAutoSyncEnabled:                  "true",
 		SettingPaymentVisibleMethodAlipaySource:                      "",
 		SettingPaymentVisibleMethodWxpaySource:                       "",
 		SettingPaymentVisibleMethodAlipayEnabled:                     "false",
@@ -3951,6 +4045,13 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	}
 	result.AntigravityUserAgentVersion = antigravity.NormalizeUserAgentVersion(settings[SettingKeyAntigravityUserAgentVersion])
 	result.OpenAICodexUserAgent = strings.TrimSpace(settings[SettingKeyOpenAICodexUserAgent])
+	result.OpenAICodexClientVersion = NormalizeCodexClientVersion(settings[SettingKeyOpenAICodexClientVersion])
+	result.OpenAICodexClientVersionSynced = NormalizeCodexClientVersion(settings[SettingKeyOpenAICodexClientVersionSynced])
+	if v, ok := settings[SettingKeyOpenAICodexVersionAutoSyncEnabled]; ok && v != "" {
+		result.OpenAICodexVersionAutoSyncEnabled = v == "true"
+	} else {
+		result.OpenAICodexVersionAutoSyncEnabled = true
+	}
 	// codex_cli_only 加固
 	result.MinCodexVersion = settings[SettingKeyMinCodexVersion]
 	result.MaxCodexVersion = settings[SettingKeyMaxCodexVersion]

@@ -595,11 +595,13 @@ const GrokCredentialUnavailableClientMessage = "No healthy Grok OAuth account is
 
 // UpstreamFailoverError indicates an upstream error that should trigger account failover.
 type UpstreamFailoverError struct {
-	StatusCode             int
-	ResponseBody           []byte      // 上游响应体，用于错误透传规则匹配
-	ResponseHeaders        http.Header // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
-	ForceCacheBilling      bool        // Antigravity 粘性会话切换时设为 true
-	RetryableOnSameAccount bool        // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
+	StatusCode               int
+	ResponseBody             []byte      // 上游响应体，用于错误透传规则匹配
+	ResponseHeaders          http.Header // 上游响应头，用于透传 cf-ray/cf-mitigated/content-type 等诊断信息
+	ForceCacheBilling        bool        // Antigravity 粘性会话切换时设为 true
+	RetryableOnSameAccount   bool        // 临时性错误（如 Google 间歇性 400、空响应），应在同一账号上重试 N 次再切换
+	RequestScopedTransient   bool        // 故障因素与账号无关（如上游按客户端身份/模型容量降载）：可同账号重试，但不得据此对账号做临时封禁
+	SafeToFailoverAfterWrite bool        // 仅写出 SSE 注释等非语义字节时，仍可在同一客户端流中切换账号
 	// BreakSticky 5/9 codex audit: 网络层错误 (connection refused / DNS /
 	// TLS handshake timeout / SOCKS proxy unreachable) 应该让 handler
 	// DeleteStickySession 解绑当前 sessionHash → account, 否则同 sessionHash
@@ -645,6 +647,11 @@ func (e *UpstreamFailoverError) ShouldReportAccountScheduleFailure() bool {
 // 由 handler 层在同账号重试全部用尽、切换账号时调用。
 func (s *GatewayService) TempUnscheduleRetryableError(ctx context.Context, accountID int64, failoverErr *UpstreamFailoverError) {
 	if failoverErr == nil || !failoverErr.RetryableOnSameAccount {
+		return
+	}
+	// 请求级瞬时故障与账号健康无关：封禁只会把与故障无关的账号一并摘掉，
+	// 而故障因素（客户端身份、模型容量）在下一个账号上完全相同。
+	if failoverErr.RequestScopedTransient {
 		return
 	}
 	// 根据状态码选择封禁策略

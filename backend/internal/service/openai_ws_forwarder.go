@@ -1219,7 +1219,8 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 		headers.Set("user-agent", codexCLIUserAgent)
 	}
 	if account != nil && account.Type == AccountTypeOAuth {
-		enforceCodexIdentityHeaders(headers)
+		// WS 握手与 HTTP / passthrough / Messages 共用规范身份源。
+		enforceCodexIdentityHeadersWithUA(headers, s.codexIdentityOverrideUA(account))
 	}
 
 	// 账号级请求头覆写仅对 OpenAI API key 账号生效，OAuth 路径为 no-op。
