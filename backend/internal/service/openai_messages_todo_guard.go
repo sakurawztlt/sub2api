@@ -97,87 +97,19 @@ func appendOpenAICompatClaudeCodeTodoGuardToRequestBody(reqBody map[string]any) 
 }
 
 func appendOpenAICompatDeferredToolGuard(req *apicompat.ResponsesRequest) bool {
-	if req == nil || len(req.Input) == 0 || !responsesToolsSupportDirectImplementation(req.Tools) {
-		return false
-	}
-
-	var items []apicompat.ResponsesInputItem
-	if err := json.Unmarshal(req.Input, &items); err != nil {
-		return false
-	}
-	if len(items) == 0 ||
-		responsesInputItemsContainText(items, openAICompatDeferredToolGuardMarker) ||
-		!responsesInputItemsContainDeferredToolNotice(items) {
-		return false
-	}
-
-	content, err := json.Marshal([]apicompat.ResponsesContentPart{{
-		Type: "input_text",
-		Text: openAICompatDeferredToolGuardText,
-	}})
-	if err != nil {
-		return false
-	}
-
-	guard := apicompat.ResponsesInputItem{
-		Type:    "message",
-		Role:    "developer",
-		Content: content,
-	}
-	insertAt := 0
-	for insertAt < len(items) && items[insertAt].Type == "message" && items[insertAt].Role == "developer" {
-		insertAt++
-	}
-
-	items = append(items, apicompat.ResponsesInputItem{})
-	copy(items[insertAt+1:], items[insertAt:])
-	items[insertAt] = guard
-
-	input, err := json.Marshal(items)
-	if err != nil {
-		return false
-	}
-	req.Input = input
-	return true
+	// Claude Code owns the deferred-tool protocol carried in its system
+	// reminders. Adding a second developer message changes that protocol and
+	// can make otherwise valid ToolSearch/direct-tool requests contradictory.
+	// Keep this compatibility hook as a no-op so existing call sites remain
+	// stable while the client request is forwarded byte-for-byte.
+	return false
 }
 
 func appendOpenAICompatDeferredToolGuardToRequestBody(reqBody map[string]any) bool {
-	if reqBody == nil || !requestBodyToolsSupportDirectImplementation(reqBody["tools"]) {
-		return false
-	}
-
-	input, ok := reqBody["input"].([]any)
-	if !ok || len(input) == 0 ||
-		inputContainsText(input, openAICompatDeferredToolGuardMarker) ||
-		!inputContainsDeferredToolNotice(input) {
-		return false
-	}
-
-	guard := map[string]any{
-		"type": "message",
-		"role": "developer",
-		"content": []any{
-			map[string]any{
-				"type": "input_text",
-				"text": openAICompatDeferredToolGuardText,
-			},
-		},
-	}
-
-	insertAt := 0
-	for insertAt < len(input) {
-		item, ok := input[insertAt].(map[string]any)
-		if !ok || strings.TrimSpace(firstNonEmptyString(item["type"])) != "message" || strings.TrimSpace(firstNonEmptyString(item["role"])) != "developer" {
-			break
-		}
-		insertAt++
-	}
-
-	input = append(input, nil)
-	copy(input[insertAt+1:], input[insertAt:])
-	input[insertAt] = guard
-	reqBody["input"] = input
-	return true
+	// See appendOpenAICompatDeferredToolGuard. The map-shaped OAuth bridge
+	// must preserve the same client-authored protocol without injecting a
+	// sub2api-specific developer message.
+	return false
 }
 
 func responsesToolsSupportDirectImplementation(tools []apicompat.ResponsesTool) bool {

@@ -2,7 +2,6 @@ package service
 
 import (
 	"encoding/json"
-	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
@@ -12,7 +11,7 @@ import (
 
 const deferredToolNoticeFixture = `<system-reminder>The following deferred tools are now available via ToolSearch. Their schemas are NOT loaded.</system-reminder>`
 
-func TestAppendOpenAICompatDeferredToolGuard_MatchingRequest(t *testing.T) {
+func TestAppendOpenAICompatDeferredToolGuard_PreservesClientProtocol(t *testing.T) {
 	input, err := json.Marshal([]apicompat.ResponsesInputItem{
 		{
 			Type: "message",
@@ -41,17 +40,10 @@ func TestAppendOpenAICompatDeferredToolGuard_MatchingRequest(t *testing.T) {
 		},
 	}
 
-	require.True(t, appendOpenAICompatDeferredToolGuard(req))
-	assert.False(t, appendOpenAICompatDeferredToolGuard(req), "guard insertion must be idempotent")
-
-	var items []apicompat.ResponsesInputItem
-	require.NoError(t, json.Unmarshal(req.Input, &items))
-	require.Len(t, items, 3)
-	assert.Equal(t, "developer", items[0].Role)
-	assert.Equal(t, "developer", items[1].Role)
-	assert.True(t, containsPlainOrJSONEscapedText(string(items[1].Content), openAICompatDeferredToolGuardMarker))
-	assert.Equal(t, "user", items[2].Role)
-	assert.Equal(t, 2, strings.Count(string(req.Input), "sub2api-deferred-tool-guard"))
+	before := append([]byte(nil), req.Input...)
+	assert.False(t, appendOpenAICompatDeferredToolGuard(req))
+	assert.JSONEq(t, string(before), string(req.Input))
+	assert.NotContains(t, string(req.Input), "sub2api-deferred-tool-guard")
 }
 
 func TestAppendOpenAICompatDeferredToolGuard_RequiresNoticeAndLoadedDirectTool(t *testing.T) {
@@ -105,7 +97,7 @@ func TestAppendOpenAICompatDeferredToolGuard_RequiresNoticeAndLoadedDirectTool(t
 	}
 }
 
-func TestAppendOpenAICompatDeferredToolGuardToRequestBody_MatchingRequest(t *testing.T) {
+func TestAppendOpenAICompatDeferredToolGuardToRequestBody_PreservesClientProtocol(t *testing.T) {
 	reqBody := map[string]any{
 		"input": []any{
 			map[string]any{
@@ -123,18 +115,14 @@ func TestAppendOpenAICompatDeferredToolGuardToRequestBody_MatchingRequest(t *tes
 		},
 	}
 
-	require.True(t, appendOpenAICompatDeferredToolGuardToRequestBody(reqBody))
-	assert.False(t, appendOpenAICompatDeferredToolGuardToRequestBody(reqBody), "guard insertion must be idempotent")
-
-	body, err := json.Marshal(reqBody)
+	before, err := json.Marshal(reqBody)
 	require.NoError(t, err)
-	assert.Equal(t, 2, strings.Count(string(body), "sub2api-deferred-tool-guard"))
+	assert.False(t, appendOpenAICompatDeferredToolGuardToRequestBody(reqBody))
 
-	input := reqBody["input"].([]any)
-	require.Len(t, input, 2)
-	guard, ok := input[0].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "developer", guard["role"])
+	after, err := json.Marshal(reqBody)
+	require.NoError(t, err)
+	assert.JSONEq(t, string(before), string(after))
+	assert.NotContains(t, string(after), "sub2api-deferred-tool-guard")
 }
 
 func TestAppendOpenAICompatDeferredToolGuard_OAuthMessagesBridgeShape(t *testing.T) {
@@ -169,11 +157,11 @@ func TestAppendOpenAICompatDeferredToolGuard_OAuthMessagesBridgeShape(t *testing
 		SkipDefaultInstructions: true,
 		PreserveToolCallIDs:     true,
 	})
-	require.True(t, appendOpenAICompatDeferredToolGuardToRequestBody(reqBody))
+	require.False(t, appendOpenAICompatDeferredToolGuardToRequestBody(reqBody))
 
 	transformed, err := json.Marshal(reqBody)
 	require.NoError(t, err)
-	assert.Contains(t, string(transformed), "sub2api-deferred-tool-guard")
+	assert.NotContains(t, string(transformed), "sub2api-deferred-tool-guard")
 	assert.Contains(t, string(transformed), `"name":"ToolSearch"`)
 	assert.Contains(t, string(transformed), `"name":"Bash"`)
 	assert.Contains(t, string(transformed), `"name":"Write"`)
