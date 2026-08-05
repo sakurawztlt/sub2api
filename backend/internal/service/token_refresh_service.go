@@ -200,6 +200,14 @@ func (s *TokenRefreshService) processRefresh() {
 
 	for i := range accounts {
 		account := &accounts[i]
+		// Permanently disabled accounts must not be kept alive by the background
+		// OAuth refresher. The local repository still uses the legacy candidate
+		// interface, so enforce this at the service boundary as a fail-safe for
+		// both narrow candidate queries and the ListActive compatibility fallback.
+		if !account.Schedulable {
+			skipped++
+			continue
+		}
 
 		// 遍历所有刷新器，找到能处理此账号的
 		for idx, refresher := range s.refreshers {
