@@ -83,6 +83,16 @@ func buildGrokChatCompletionsURL(account *Account, cfg *config.Config) (string, 
 	return xai.BuildChatCompletionsURLWithValidator(account.GetGrokBaseURL(), validator)
 }
 
+// buildGrokBillingURL resolves billing probes through the same account-level
+// forwarding base URL as normal Grok traffic.
+func buildGrokBillingURL(account *Account, cfg *config.Config, weekly bool) (string, error) {
+	validator, err := grokBaseURLValidator(account, cfg)
+	if err != nil {
+		return "", err
+	}
+	return xai.BuildBillingURLWithValidator(account.GetGrokBaseURL(), weekly, validator)
+}
+
 func buildGrokMediaURL(account *Account, cfg *config.Config, endpoint GrokMediaEndpoint, requestID string) (string, error) {
 	validator, err := grokBaseURLValidator(account, cfg)
 	if err != nil {

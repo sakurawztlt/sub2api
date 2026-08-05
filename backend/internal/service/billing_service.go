@@ -409,6 +409,31 @@ func (s *BillingService) initFallbackPricing() {
 		SupportsCacheBreakdown:         false,
 	}
 
+	// xAI Grok 4.5 (official fallback: $2 input / $0.50 cached input / $6 output per MTok).
+	s.fallbackPrices["grok-4.5"] = &ModelPricing{
+		InputPricePerToken:     2e-6,
+		OutputPricePerToken:    6e-6,
+		CacheReadPricePerToken: 0.5e-6,
+		SupportsCacheBreakdown: false,
+	}
+
+	// xAI Grok 4.3 (official fallback: $1.25 input / $2.50 output per MTok).
+	s.fallbackPrices["grok-4.3"] = &ModelPricing{
+		InputPricePerToken:         1.25e-6,
+		OutputPricePerToken:        2.5e-6,
+		CacheReadPricePerToken:     0,
+		SupportsCacheBreakdown:     false,
+		LongContextInputThreshold:  1000000,
+		LongContextInputMultiplier: 1,
+	}
+
+	// xAI Grok Build 0.1 (official fallback: $1 input / $2 output per MTok).
+	s.fallbackPrices["grok-build-0.1"] = &ModelPricing{
+		InputPricePerToken:     1e-6,
+		OutputPricePerToken:    2e-6,
+		SupportsCacheBreakdown: false,
+	}
+
 	// Kimi K3 public API price. Kimi Code's bare k3 aliases have no separate
 	// token price, so they use the same fallback rate.
 	s.fallbackPrices["kimi-k3"] = &ModelPricing{
@@ -461,6 +486,16 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	// Claude 未知型号统一回退到 Sonnet，避免计费中断。
 	if strings.Contains(modelLower, "claude") {
 		return s.fallbackPrices["claude-sonnet-4"]
+	}
+	if modelLower == "grok" || modelLower == "grok-latest" || modelLower == "grok-4.5" ||
+		modelLower == "grok-4.5-latest" || modelLower == "grok-build-latest" {
+		return s.fallbackPrices["grok-4.5"]
+	}
+	if modelLower == "grok-4.3" {
+		return s.fallbackPrices["grok-4.3"]
+	}
+	if modelLower == "grok-build" || modelLower == "grok-build-0.1" {
+		return s.fallbackPrices["grok-build-0.1"]
 	}
 	if strings.Contains(modelLower, "gemini-3.1-pro") || strings.Contains(modelLower, "gemini-3-1-pro") {
 		return s.fallbackPrices["gemini-3.1-pro"]

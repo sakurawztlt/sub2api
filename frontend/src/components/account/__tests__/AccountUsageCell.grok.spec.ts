@@ -86,7 +86,7 @@ describe('AccountUsageCell Grok OAuth', () => {
 
     await flushPromises()
 
-    expect(getUsage).toHaveBeenCalledWith(99, undefined)
+    expect(getUsage).toHaveBeenCalledWith(99)
     expect(wrapper.text()).toContain('admin.accounts.usageWindow.grokRequests|73')
     expect(wrapper.text()).toContain('admin.accounts.usageWindow.grokTokens|80')
     expect(wrapper.text()).toContain('|true')

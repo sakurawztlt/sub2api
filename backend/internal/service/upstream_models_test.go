@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,7 +26,7 @@ func grokOAuthModelSyncTestAccount(baseURL string) *Account {
 	credentials := map[string]any{
 		"access_token":  "oauth-access-token",
 		"refresh_token": "oauth-refresh-token",
-		"expires_at":    time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+		"expires_at":    time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339),
 		"sub":           "grok-user-id",
 		"email":         "grok-user@example.com",
 	}
@@ -36,6 +37,8 @@ func grokOAuthModelSyncTestAccount(baseURL string) *Account {
 		ID:          10,
 		Platform:    PlatformGrok,
 		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
 		Credentials: credentials,
 	}
 }
@@ -254,6 +257,36 @@ func TestBuildUpstreamModelsRequestSupportsGrokOAuth(t *testing.T) {
 	require.NotContains(t, req.Header.Get("Authorization"), "oauth-refresh-token")
 }
 
+func TestBuildUpstreamModelsRequestGrokOAuthCanonicalizesLegacyOfficialBase(t *testing.T) {
+	t.Parallel()
+
+	svc := &AccountTestService{
+		cfg:               upstreamModelSyncTestConfig(),
+		grokTokenProvider: NewGrokTokenProvider(nil, nil),
+	}
+	req, err := svc.buildUpstreamModelsRequest(context.Background(), grokOAuthModelSyncTestAccount(xai.DefaultBaseURL))
+	require.NoError(t, err)
+	require.Equal(t, xai.DefaultCLIBaseURL+"/models", req.URL.String())
+	require.Equal(t, "xai-grok-cli", req.Header.Get("X-XAI-Token-Auth"))
+	require.Equal(t, grokCLIVersion, req.Header.Get("X-Grok-Client-Version"))
+}
+
+func TestBuildUpstreamModelsRequestGrokOAuthBypassesSchedulingGate(t *testing.T) {
+	t.Parallel()
+
+	account := grokOAuthModelSyncTestAccount("")
+	account.Schedulable = false
+	svc := &AccountTestService{
+		cfg:               upstreamModelSyncTestConfig(),
+		grokTokenProvider: NewGrokTokenProvider(nil, nil),
+	}
+
+	req, err := svc.buildUpstreamModelsRequest(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, xai.DefaultCLIBaseURL+"/models", req.URL.String())
+	require.Equal(t, "Bearer oauth-access-token", req.Header.Get("Authorization"))
+}
+
 func TestBuildUpstreamModelsRequestGrokOAuthRequiresTokenProvider(t *testing.T) {
 	t.Parallel()
 
@@ -395,6 +428,9 @@ func TestBuildUpstreamModelsRequestGrokOAuthDoesNotSendIdentityToCustomBase(t *t
 	require.Equal(t, "https://relay.example/v1/models", req.URL.String())
 	require.Empty(t, req.Header.Get("X-UserID"))
 	require.Empty(t, req.Header.Get("X-Email"))
+	require.Empty(t, req.Header.Get("X-XAI-Token-Auth"))
+	require.Empty(t, req.Header.Get("X-Grok-Client-Version"))
+	require.Empty(t, req.Header.Get("User-Agent"))
 }
 
 func TestFetchUpstreamSupportedModelsDoesNotExposeUpstreamBody(t *testing.T) {

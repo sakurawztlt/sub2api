@@ -181,7 +181,9 @@ func (s *AccountTestService) buildGrokUpstreamModelsRequest(ctx context.Context,
 		if s.grokTokenProvider == nil {
 			return nil, newUpstreamModelSyncConfigError("Grok token provider is not configured", nil)
 		}
-		accessToken, err := s.grokTokenProvider.GetAccessToken(ctx, account)
+		// Model sync is an admin-initiated probe, so it must remain usable for
+		// accounts deliberately excluded from production scheduling.
+		accessToken, err := s.grokTokenProvider.GetAccessTokenForManualTest(ctx, account)
 		if err != nil {
 			return nil, newUpstreamModelSyncUpstreamError("Failed to get Grok access token", err)
 		}
@@ -190,10 +192,10 @@ func (s *AccountTestService) buildGrokUpstreamModelsRequest(ctx context.Context,
 			return nil, newUpstreamModelSyncConfigError("No Grok access token is available", nil)
 		}
 
-		baseURL := strings.TrimSpace(account.GetCredential("base_url"))
-		if baseURL == "" {
-			baseURL = "https://cli-chat-proxy.grok.com/v1"
-		}
+		// Keep model discovery on the same canonical inference route as normal
+		// forwarding. Stored legacy api.x.ai defaults migrate to the CLI proxy,
+		// while explicit custom hosts remain operator-owned.
+		baseURL := account.GetGrokBaseURL()
 		validatedBaseURL, err := s.validateUpstreamBaseURL(baseURL)
 		if err != nil {
 			return nil, newUpstreamModelSyncConfigError("Invalid Grok base URL", err)
@@ -211,18 +213,16 @@ func (s *AccountTestService) buildGrokUpstreamModelsRequest(ctx context.Context,
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+authToken)
-	if isOAuth {
+	if isOAuth && isGrokCLIProxyTarget(req.URL.String()) {
 		// The shared HTTP transport adds the official CLI marker/version for the
 		// exact proxy host. Keep the request builder aligned with the other Grok
 		// probes and only forward account identity headers to that trusted host.
 		applyGrokCLIHeaders(req.Header)
-		if isGrokCLIProxyTarget(req.URL.String()) {
-			if userID := strings.TrimSpace(account.GetCredential("sub")); userID != "" {
-				req.Header.Set("X-UserID", userID)
-			}
-			if email := strings.TrimSpace(account.GetCredential("email")); email != "" {
-				req.Header.Set("X-Email", email)
-			}
+		if userID := strings.TrimSpace(account.GetCredential("sub")); userID != "" {
+			req.Header.Set("X-UserID", userID)
+		}
+		if email := strings.TrimSpace(account.GetCredential("email")); email != "" {
+			req.Header.Set("X-Email", email)
 		}
 	}
 	return req, nil

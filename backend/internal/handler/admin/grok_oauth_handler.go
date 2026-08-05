@@ -15,6 +15,7 @@ type GrokOAuthHandler struct {
 	grokOAuthService *service.GrokOAuthService
 	adminService     service.AdminService
 	quotaService     *service.GrokQuotaService
+	importProber     grokUsageProber
 }
 
 func NewGrokOAuthHandler(
@@ -26,6 +27,7 @@ func NewGrokOAuthHandler(
 		grokOAuthService: grokOAuthService,
 		adminService:     adminService,
 		quotaService:     quotaService,
+		importProber:     quotaService,
 	}
 }
 
@@ -202,6 +204,7 @@ func (h *GrokOAuthHandler) CreateAccountFromOAuth(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	h.scheduleGrokImportProbe(account)
 	response.Success(c, dto.AccountFromService(account))
 }
 
@@ -215,7 +218,7 @@ func (h *GrokOAuthHandler) QueryQuota(c *gin.Context) {
 		response.BadRequest(c, "grok quota service is not enabled")
 		return
 	}
-	result, err := h.quotaService.ProbeUsage(c.Request.Context(), accountID)
+	result, err := h.quotaService.QueryQuota(c.Request.Context(), accountID)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

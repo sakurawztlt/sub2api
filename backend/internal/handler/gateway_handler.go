@@ -1226,6 +1226,10 @@ func (h *GatewayHandler) compositeAvailableModels(ctx context.Context, groupID *
 }
 
 func writeModelsList(c *gin.Context, platform string, modelIDs []string) {
+	if platform == service.PlatformGrok {
+		writeGrokModelsList(c, modelIDs)
+		return
+	}
 	models := make([]claude.Model, 0, len(modelIDs))
 	for _, modelID := range modelIDs {
 		models = append(models, claude.Model{
@@ -1247,6 +1251,65 @@ func writeCustomModelsList(c *gin.Context, platform string, modelIDs []string) {
 		return
 	}
 	writeModelsList(c, platform, modelIDs)
+}
+
+type grokReasoningEffortOption struct {
+	Value   string `json:"value"`
+	Label   string `json:"label"`
+	Default bool   `json:"default,omitempty"`
+}
+
+type grokModelListItem struct {
+	xai.Model
+	SupportsReasoningEffort bool                        `json:"supportsReasoningEffort,omitempty"`
+	ReasoningEffort         string                      `json:"reasoningEffort,omitempty"`
+	ReasoningEfforts        []grokReasoningEffortOption `json:"reasoningEfforts,omitempty"`
+}
+
+func writeGrokModelsList(c *gin.Context, modelIDs []string) {
+	defaults := xai.DefaultModels()
+	defaultsByID := make(map[string]xai.Model, len(defaults))
+	for _, model := range defaults {
+		defaultsByID[model.ID] = model
+	}
+
+	models := make([]grokModelListItem, 0, len(modelIDs))
+	for _, modelID := range modelIDs {
+		model, ok := defaultsByID[modelID]
+		if !ok {
+			model = xai.Model{
+				ID:          modelID,
+				Object:      "model",
+				OwnedBy:     "xai",
+				DisplayName: modelID,
+			}
+		}
+		item := grokModelListItem{Model: model}
+		if grokModelSupportsConfigurableReasoning(modelID) {
+			item.SupportsReasoningEffort = true
+			item.ReasoningEffort = "high"
+			item.ReasoningEfforts = []grokReasoningEffortOption{
+				{Value: "low", Label: "Low"},
+				{Value: "medium", Label: "Medium"},
+				{Value: "high", Label: "High", Default: true},
+			}
+		}
+		models = append(models, item)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"object": "list",
+		"data":   models,
+	})
+}
+
+func grokModelSupportsConfigurableReasoning(modelID string) bool {
+	switch strings.ToLower(strings.TrimSpace(modelID)) {
+	case "grok-4.5", "grok-4.5-latest", "grok", "grok-latest", "grok-build", "grok-build-latest", "grok-build-0.1":
+		return true
+	default:
+		return false
+	}
 }
 
 func writeOpenAIModelsList(c *gin.Context, modelIDs []string) {

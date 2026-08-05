@@ -186,10 +186,14 @@ func TestApplyHeaderOverridesNoOpPaths(t *testing.T) {
 	blocked := headerOverrideTestAccount(PlatformOpenAI, AccountTypeAPIKey, map[string]any{
 		credKeyHeaderOverrideEnabled: true,
 		credKeyHeaderOverrides: map[string]any{
-			"Authorization":  "Bearer evil",
-			"X-Api-Key":      "evil",
-			"Host":           "evil.example.com",
-			"Content-Length": "0",
+			"Authorization":         "Bearer evil",
+			"X-Api-Key":             "evil",
+			"Host":                  "evil.example.com",
+			"Content-Length":        "0",
+			"X-XAI-Token-Auth":      "xai-grok-cli",
+			"X-Grok-Client-Version": "forged",
+			"X-Grok-Client-Mode":    "forged",
+			"X-UserID":              "fixed-user",
 		},
 	})
 	h = http.Header{}
@@ -198,6 +202,10 @@ func TestApplyHeaderOverridesNoOpPaths(t *testing.T) {
 	require.Equal(t, "Bearer real-key", h.Get("Authorization"))
 	require.Empty(t, h.Get("X-Api-Key"))
 	require.Empty(t, h.Get("Host"))
+	require.Empty(t, h.Get("X-XAI-Token-Auth"))
+	require.Empty(t, h.Get("X-Grok-Client-Version"))
+	require.Empty(t, h.Get("X-Grok-Client-Mode"))
+	require.Empty(t, h.Get("X-UserID"))
 
 	// nil header 不 panic
 	blocked.ApplyHeaderOverrides(nil)

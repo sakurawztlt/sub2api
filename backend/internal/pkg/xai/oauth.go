@@ -208,7 +208,7 @@ func RuntimeSanity() RuntimeSanityReport {
 		UnsafeURLOverrides:    AllowUnsafeURLOverrides(),
 		UnsafeHighConcurrency: AllowUnsafeHighConcurrency(),
 		PublicGatewayScope:    "responses_only",
-		ProxyPolicy:           "account_proxy_optional; upstream URL allowlists enforced unless unsafe overrides are enabled",
+		ProxyPolicy:           "account_proxy_optional; OAuth URLs use trusted-host allowlists; API-key base URLs require public HTTPS unless unsafe overrides are enabled",
 	}
 }
 
@@ -273,9 +273,7 @@ func ValidateBaseURL(raw string) (string, error) {
 		return urlvalidator.ValidateURLFormat(raw, true)
 	}
 	normalized, err := urlvalidator.ValidateHTTPSURL(raw, urlvalidator.ValidationOptions{
-		AllowedHosts:     baseURLAllowedHosts,
-		RequireAllowlist: true,
-		AllowPrivate:     false,
+		AllowPrivate: false,
 	})
 	if err != nil {
 		return "", err

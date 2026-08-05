@@ -368,7 +368,8 @@ func (u *grokCredentialHandlerUpstream) Do(req *http.Request, _ string, accountI
 			StatusCode: http.StatusOK,
 			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 			Body: io.NopCloser(bytes.NewBufferString(
-				"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_healthy\",\"model\":\"grok-4.5\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n",
+				"data: {\"type\":\"response.output_text.delta\",\"response_id\":\"resp_healthy\",\"item_id\":\"msg_healthy\",\"output_index\":0,\"content_index\":0,\"delta\":\"ok\"}\n\n" +
+					"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_healthy\",\"object\":\"response\",\"model\":\"grok-4.5\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"msg_healthy\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n",
 			)),
 		}, nil
 	}
@@ -385,7 +386,7 @@ func (u *grokCredentialHandlerUpstream) Do(req *http.Request, _ string, accountI
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body: io.NopCloser(bytes.NewBufferString(
-			`{"id":"resp_healthy","object":"response","model":"grok-4.5","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`,
+			`{"id":"resp_healthy","object":"response","model":"grok-4.5","status":"completed","output":[{"type":"message","id":"msg_healthy","role":"assistant","status":"completed","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":1,"output_tokens":1}}`,
 		)),
 	}, nil
 }
@@ -434,7 +435,7 @@ func TestResponsesCredentialFailoverLoop(t *testing.T) {
 		router.ServeHTTP(recorder, req)
 
 		require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
-		require.Contains(t, recorder.Body.String(), service.GrokCredentialUnavailableClientMessage)
+		require.Contains(t, recorder.Body.String(), anthropicTemporaryUnavailableMessage)
 		require.Empty(t, repo.errorIDs())
 		require.Empty(t, upstream.accountHits())
 		require.Equal(t, 1, repo.selectorCalls())
@@ -534,7 +535,7 @@ func TestResponsesCredentialFailoverLoop(t *testing.T) {
 				router.ServeHTTP(recorder, req)
 
 				require.Equal(t, http.StatusServiceUnavailable, recorder.Code, recorder.Body.String())
-				require.Contains(t, recorder.Body.String(), service.GrokCredentialUnavailableClientMessage)
+				require.Contains(t, recorder.Body.String(), anthropicTemporaryUnavailableMessage)
 				require.Empty(t, upstream.accountHits())
 				require.Equal(t, 1, repo.selectorCalls())
 			})
@@ -551,7 +552,7 @@ func TestResponsesCredentialFailoverLoop(t *testing.T) {
 		router.ServeHTTP(recorder, req)
 
 		require.Equal(t, http.StatusServiceUnavailable, recorder.Code, recorder.Body.String())
-		require.Contains(t, recorder.Body.String(), service.GrokCredentialUnavailableClientMessage)
+		require.Contains(t, recorder.Body.String(), anthropicTemporaryUnavailableMessage)
 		require.Equal(t, 1, repo.selectorCalls())
 		require.Empty(t, upstream.accountHits())
 		require.Empty(t, repo.errorIDs())
@@ -706,7 +707,7 @@ func TestGrokOAuthCredentialFailoverAcrossHTTPHandlers(t *testing.T) {
 			router.ServeHTTP(recorder, req)
 
 			require.Equal(t, http.StatusServiceUnavailable, recorder.Code, recorder.Body.String())
-			require.Contains(t, recorder.Body.String(), service.GrokCredentialUnavailableClientMessage)
+			require.Contains(t, recorder.Body.String(), anthropicTemporaryUnavailableMessage)
 			require.NotContains(t, recorder.Body.String(), "revoked-refresh")
 			require.NotContains(t, recorder.Body.String(), "healthy-refresh")
 			require.Equal(t, []int64{801, 802}, repo.errorIDs())
@@ -781,7 +782,7 @@ func TestResponsesWebSocketCredentialFailoverLoop(t *testing.T) {
 		cancel()
 		var closeErr coderws.CloseError
 		require.ErrorAs(t, err, &closeErr)
-		require.Contains(t, closeErr.Reason, service.GrokCredentialUnavailableClientMessage)
+		require.Contains(t, closeErr.Reason, anthropicTemporaryUnavailableMessage)
 		require.Equal(t, 1, repo.selectorCalls())
 		require.Empty(t, upstream.accountHits())
 	})

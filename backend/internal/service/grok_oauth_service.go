@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -235,7 +236,7 @@ func (s *GrokOAuthService) BuildAccountCredentials(tokenInfo *GrokTokenInfo) map
 	if tokenInfo.EntitlementStatus != "" {
 		creds["entitlement_status"] = tokenInfo.EntitlementStatus
 	}
-	creds["base_url"] = xai.DefaultBaseURL
+	creds["base_url"] = xai.DefaultCLIBaseURL
 	return creds
 }
 
@@ -285,10 +286,13 @@ func (s *GrokOAuthService) proxyURL(ctx context.Context, proxyID *int64) (string
 	}
 	proxy, err := s.proxyRepo.GetByID(ctx, *proxyID)
 	if err != nil {
-		return "", infraerrors.Newf(http.StatusBadRequest, "GROK_OAUTH_PROXY_NOT_FOUND", "proxy not found: %v", err)
+		if errors.Is(err, ErrProxyNotFound) {
+			return "", infraerrors.New(http.StatusBadRequest, "GROK_OAUTH_PROXY_NOT_FOUND", "configured proxy was not found")
+		}
+		return "", infraerrors.New(http.StatusServiceUnavailable, "GROK_OAUTH_PROXY_LOOKUP_FAILED", "proxy lookup is temporarily unavailable")
 	}
 	if proxy == nil {
-		return "", nil
+		return "", infraerrors.New(http.StatusBadRequest, "GROK_OAUTH_PROXY_NOT_FOUND", "configured proxy was not found")
 	}
 	return proxy.URL(), nil
 }

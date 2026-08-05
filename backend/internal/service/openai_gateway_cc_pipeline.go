@@ -65,6 +65,7 @@ func (s *OpenAIGatewayService) failoverOpenAIUpstreamHTTPError(
 	return &UpstreamFailoverError{
 		StatusCode:             failoverStatus,
 		ResponseBody:           failoverBody,
+		ResponseHeaders:        resp.Header.Clone(),
 		RetryableOnSameAccount: account.IsPoolMode() && (account.IsPoolModeRetryableStatus(resp.StatusCode) || isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
 	}
 }

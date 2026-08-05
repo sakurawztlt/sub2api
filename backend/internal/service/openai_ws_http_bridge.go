@@ -236,7 +236,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	if account.Platform == PlatformGrok {
 		upstreamModel := resolveOpenAIWSTurnUpstreamModel(account, body, originalModel)
 		if upstreamModel == "" {
-			upstreamModel = "grok-4.3"
+			upstreamModel = grokDefaultResponsesModel
 		}
 		grokIntentSourceBody := body
 		body, err = patchGrokResponsesBody(grokIntentSourceBody, upstreamModel)

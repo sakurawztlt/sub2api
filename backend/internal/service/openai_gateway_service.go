@@ -546,13 +546,17 @@ type OpenAIGatewayService struct {
 	openaiProxyStreamCircuit       *openAIProxyStreamCircuit
 	openaiProxyStreamFailOpenLogAt atomic.Int64
 
-	openaiWSFallbackUntil             sync.Map // key: int64(accountID), value: time.Time
-	openaiAccountRuntimeBlockUntil    sync.Map // key: int64(accountID), value: time.Time
-	openaiOAuth429WindowStartUnixNano atomic.Int64
-	openaiOAuth429WindowCount         atomic.Int64
-	openaiWSRetryMetrics              openAIWSRetryMetrics
-	responseHeaderFilter              *responseheaders.CompiledHeaderFilter
-	codexSnapshotThrottle             *accountWriteThrottle
+	openaiWSFallbackUntil               sync.Map // key: int64(accountID), value: time.Time
+	openaiAccountRuntimeBlockUntil      sync.Map // key: int64(accountID), value: time.Time
+	openaiAccountRuntimeBlockLocks      sync.Map // key: int64(accountID), value: *sync.Mutex
+	openaiAccountRuntimeBlockGeneration sync.Map // key: int64(accountID), value: uint64
+	openaiAccountRuntimeBlockSequence   atomic.Uint64
+	grokCredentialMutationLocks         sync.Map // key: int64(accountID), value: *sync.Mutex
+	openaiOAuth429WindowStartUnixNano   atomic.Int64
+	openaiOAuth429WindowCount           atomic.Int64
+	openaiWSRetryMetrics                openAIWSRetryMetrics
+	responseHeaderFilter                *responseheaders.CompiledHeaderFilter
+	codexSnapshotThrottle               *accountWriteThrottle
 
 	// 2026-05-06 partial port of upstream 0584305e (Claude Code compat).
 	// openai_messages_continuation/digest_session/replay_guard/todo_guard

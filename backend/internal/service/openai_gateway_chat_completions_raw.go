@@ -115,7 +115,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	tokenKind := "api_key"
 	if account.Platform == PlatformGrok {
 		var tokenErr error
-		token, tokenKind, tokenErr = s.GetAccessToken(ctx, account)
+		token, tokenKind, tokenErr = s.getRequestCredential(ctx, c, account)
 		if tokenErr != nil {
 			return nil, tokenErr
 		}
@@ -191,11 +191,12 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 		}
 	}
 	customUA := account.GetOpenAIUserAgent()
-	if customUA != "" {
+	grokCLITarget := account.Platform == PlatformGrok && isGrokCLIProxyTarget(targetURL)
+	if grokCLITarget {
+		applyGrokCLIHeaders(upstreamReq.Header)
+	} else if customUA != "" {
 		upstreamReq.Header.Set("user-agent", customUA)
-	} else if account.Platform == PlatformGrok {
-		upstreamReq.Header.Set("user-agent", "sub2api-grok/1.0")
-	} else {
+	} else if account.Platform != PlatformGrok {
 		applyOpenAIOAuthCodexUserAgentFallback(upstreamReq.Header, account)
 	}
 
@@ -203,8 +204,10 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 	account.ApplyHeaderOverrides(upstreamReq.Header)
 	if account.Platform == PlatformGrok {
 		// The official CLI identity and the server-derived conversation routing
-		// key are locked after user overrides.
-		applyGrokCLIHeaders(upstreamReq.Header)
+		// key are locked after user overrides, but only on the exact CLI host.
+		if grokCLITarget {
+			applyGrokCLIHeaders(upstreamReq.Header)
+		}
 		applyGrokCacheHeaders(upstreamReq.Header, grokCacheIdentity)
 	}
 
@@ -245,6 +248,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 				return nil, &UpstreamFailoverError{
 					StatusCode:             resp.StatusCode,
 					ResponseBody:           respBody,
+					ResponseHeaders:        resp.Header.Clone(),
 					RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 				}
 			}
@@ -275,6 +279,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 			return nil, &UpstreamFailoverError{
 				StatusCode:             failoverStatus,
 				ResponseBody:           failoverBody,
+				ResponseHeaders:        resp.Header.Clone(),
 				RetryableOnSameAccount: account.IsPoolMode() && (account.IsPoolModeRetryableStatus(resp.StatusCode) || isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
 			}
 		}

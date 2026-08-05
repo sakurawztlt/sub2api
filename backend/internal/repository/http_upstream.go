@@ -1,10 +1,12 @@
 package repository
 
 import (
+	"bytes"
 	"compress/flate"
 	"compress/gzip"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -25,8 +28,10 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyutil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
+	"golang.org/x/mod/semver"
 )
 
 // 默认配置常量
@@ -64,6 +69,15 @@ const (
 	// 内无响应即判定死连接并关闭，从源头避免请求挂在死连接上。
 	openAIHTTP2ReadIdleTimeout = 15 * time.Second
 	openAIHTTP2PingTimeout     = 15 * time.Second
+
+	// The Grok CLI proxy rejects requests that do not identify a supported
+	// client version. Keep a known-good stable version in the binary while
+	// allowing operators to bump it without waiting for a Sub2API release.
+	grokCLIProxyHost       = "cli-chat-proxy.grok.com"
+	grokOfficialAPIHost    = "api.x.ai"
+	grokCLIStableVersion   = xai.CLIClientVersion
+	grokCLIVersionOverride = "XAI_GROK_CLI_VERSION"
+	grokFallbackBodyLimit  = 64 << 10
 )
 
 const (
@@ -168,6 +182,7 @@ func NewHTTPUpstream(cfg *config.Config) service.HTTPUpstream {
 //   - 调用方必须关闭 resp.Body，否则会导致 inFlight 计数泄漏
 //   - inFlight > 0 的客户端不会被淘汰，确保活跃请求不被中断
 func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
+	applyGrokCLIProxyHeaders(req)
 	if err := s.validateRequestHost(req); err != nil {
 		return nil, err
 	}
@@ -183,7 +198,9 @@ func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID i
 	}
 
 	// 执行请求
-	resp, err := httpClientForUpstreamRequest(entry.client, req).Do(req)
+	client := httpClientForUpstreamRequest(entry.client, req)
+	client = httpClientWithGrokAccessDeniedFallback(client)
+	resp, err := client.Do(req)
 	if err != nil {
 		s.recordOpenAIHTTP2Failure(profile, entry.protocolMode, entry.proxyKey, err)
 		// 请求失败，立即减少计数
@@ -220,6 +237,7 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 	if req != nil && req.URL != nil && strings.EqualFold(req.URL.Scheme, "http") {
 		return s.Do(req, proxyURL, accountID, accountConcurrency)
 	}
+	applyGrokCLIProxyHeaders(req)
 	upstreamProfile := service.HTTPUpstreamProfileDefault
 	if req != nil {
 		upstreamProfile = service.HTTPUpstreamProfileFromContext(req.Context())
@@ -245,7 +263,9 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 		return nil, err
 	}
 
-	resp, err := httpClientForUpstreamRequest(entry.client, req).Do(req)
+	client := httpClientForUpstreamRequest(entry.client, req)
+	client = httpClientWithGrokAccessDeniedFallback(client)
+	resp, err := client.Do(req)
 	if err != nil {
 		atomic.AddInt64(&entry.inFlight, -1)
 		atomic.StoreInt64(&entry.lastUsed, time.Now().UnixNano())
@@ -272,6 +292,225 @@ func httpClientForUpstreamRequest(client *http.Client, req *http.Request) *http.
 		return http.ErrUseLastResponse
 	}
 	return &clone
+}
+
+// grokAccessDeniedFallbackTransport preserves the subscription CLI proxy as
+// the primary OAuth route, but retries a replayable request against api.x.ai
+// when the proxy returns its compatibility-specific 403 "Access denied".
+// Trial subscriptions can hit this boundary while the same OAuth credential
+// remains valid on the official API. Other entitlement failures stay on the
+// original response so account scheduling semantics do not change.
+type grokAccessDeniedFallbackTransport struct {
+	base http.RoundTripper
+}
+
+func httpClientWithGrokAccessDeniedFallback(client *http.Client) *http.Client {
+	if client == nil {
+		return nil
+	}
+	clone := *client
+	base := clone.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	clone.Transport = &grokAccessDeniedFallbackTransport{base: base}
+	return &clone
+}
+
+func (t *grokAccessDeniedFallbackTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err != nil || !isGrokCLIAccessDeniedFallbackCandidate(req, resp) {
+		return resp, err
+	}
+
+	body, ok := bufferSmallResponseBody(resp, grokFallbackBodyLimit)
+	if !ok || !isGrokCLICompatibilityAccessDenied(body) {
+		return resp, nil
+	}
+
+	fallbackReq, err := newGrokOfficialAPIFallbackRequest(req)
+	if err != nil {
+		return resp, nil
+	}
+	fallbackResp, fallbackErr := t.base.RoundTrip(fallbackReq)
+	if fallbackErr != nil {
+		slog.Debug("grok_cli_access_denied_api_fallback_failed", "path", req.URL.EscapedPath(), "error", fallbackErr)
+		return resp, nil
+	}
+	if fallbackResp.StatusCode < http.StatusOK || fallbackResp.StatusCode >= http.StatusMultipleChoices {
+		if fallbackResp.Body != nil {
+			_ = fallbackResp.Body.Close()
+		}
+		return resp, nil
+	}
+
+	if resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	slog.Warn("grok_cli_access_denied_api_fallback_succeeded", "method", req.Method, "path", req.URL.EscapedPath())
+	return fallbackResp, nil
+}
+
+func isGrokCLIAccessDeniedFallbackCandidate(req *http.Request, resp *http.Response) bool {
+	return req != nil && req.URL != nil && req.GetBody != nil && resp != nil &&
+		req.Method == http.MethodPost && isGrokCLITextEndpoint(req.URL.Path) &&
+		resp.StatusCode == http.StatusForbidden &&
+		strings.EqualFold(strings.TrimSpace(req.URL.Hostname()), grokCLIProxyHost) &&
+		strings.EqualFold(strings.TrimSpace(req.Header.Get("X-XAI-Token-Auth")), "xai-grok-cli") &&
+		strings.HasPrefix(strings.ToLower(strings.TrimSpace(req.Header.Get("Authorization"))), "bearer ")
+}
+
+func isGrokCLICompatibilityAccessDenied(body []byte) bool {
+	lower := bytes.ToLower(body)
+	if bytes.Contains(lower, []byte("access denied")) {
+		return true
+	}
+	var payload struct {
+		Code  string `json:"code"`
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil || !strings.EqualFold(strings.TrimSpace(payload.Code), "permission_denied") {
+		return false
+	}
+	const chatEndpointDeniedPrefix = "access to the chat endpoint is denied. please ensure you're using the correct credentials. if you believe this is a mistake, please"
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(payload.Error)), chatEndpointDeniedPrefix)
+}
+
+func isGrokCLITextEndpoint(path string) bool {
+	switch strings.TrimRight(strings.TrimSpace(path), "/") {
+	case "/v1/responses", "/v1/chat/completions":
+		return true
+	default:
+		return false
+	}
+}
+
+func newGrokOfficialAPIFallbackRequest(req *http.Request) (*http.Request, error) {
+	body, err := req.GetBody()
+	if err != nil {
+		return nil, err
+	}
+	fallbackReq := req.Clone(req.Context())
+	fallbackReq.Body = body
+	fallbackReq.URL = cloneURL(req.URL)
+	fallbackReq.URL.Scheme = "https"
+	fallbackReq.URL.Host = grokOfficialAPIHost
+	fallbackReq.Host = ""
+	fallbackReq.RequestURI = ""
+	fallbackReq.Header = req.Header.Clone()
+	for _, header := range []string{
+		"X-XAI-Token-Auth",
+		"X-Grok-Client-Version",
+		"X-Grok-Client-Mode",
+		"X-Grok-Client-Surface",
+		"X-UserID",
+		"X-Email",
+		"User-Agent",
+	} {
+		fallbackReq.Header.Del(header)
+	}
+	return fallbackReq, nil
+}
+
+func cloneURL(value *url.URL) *url.URL {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+func bufferSmallResponseBody(resp *http.Response, limit int64) ([]byte, bool) {
+	if resp == nil || resp.Body == nil || limit <= 0 {
+		return nil, false
+	}
+	original := resp.Body
+	body, err := io.ReadAll(io.LimitReader(original, limit+1))
+	if err != nil || int64(len(body)) > limit {
+		resp.Body = &prefixedReadCloser{
+			Reader: io.MultiReader(bytes.NewReader(body), original),
+			Closer: original,
+		}
+		return nil, false
+	}
+	_ = original.Close()
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	resp.ContentLength = int64(len(body))
+	return body, true
+}
+
+type prefixedReadCloser struct {
+	io.Reader
+	io.Closer
+}
+
+// applyGrokCLIProxyHeaders applies the official Grok Build client identity at
+// the final shared transport boundary. Keying this behavior to the exact CLI
+// proxy host keeps direct api.x.ai traffic unchanged and automatically covers
+// Responses, Chat Completions, media, quota probes, and account tests.
+func applyGrokCLIProxyHeaders(req *http.Request) {
+	if req == nil || req.URL == nil {
+		return
+	}
+	if req.Header == nil {
+		req.Header = make(http.Header)
+	}
+	if !strings.EqualFold(strings.TrimSpace(req.URL.Hostname()), grokCLIProxyHost) {
+		stripGrokCLIIdentityHeaders(req.Header)
+		return
+	}
+	if req.Method == http.MethodGet && strings.TrimRight(req.URL.Path, "/") == "/v1/billing" {
+		req.Header.Set(xai.CLITokenAuthHeader, xai.CLITokenAuthValue)
+		req.Header.Set(xai.CLIClientVersionHeader, xai.CLIClientVersion)
+		req.Header.Set("User-Agent", xai.CLIUserAgent)
+		return
+	}
+	version := strings.TrimSpace(os.Getenv(grokCLIVersionOverride))
+	if !isSupportedGrokCLIVersion(version) {
+		version = grokCLIStableVersion
+	}
+	req.Header.Set("X-XAI-Token-Auth", "xai-grok-cli")
+	req.Header.Set("x-grok-client-version", version)
+	req.Header.Set("X-Grok-Client-Mode", "interactive")
+	req.Header.Set("User-Agent", "xai-grok-workspace/"+version)
+}
+
+func stripGrokCLIIdentityHeaders(headers http.Header) {
+	if headers == nil {
+		return
+	}
+	userAgent := strings.ToLower(strings.TrimSpace(headers.Get("User-Agent")))
+	generatedUserAgent := strings.HasPrefix(userAgent, "sub2api-grok/") ||
+		strings.HasPrefix(userAgent, "xai-grok-workspace/") ||
+		strings.HasPrefix(userAgent, "grok-pager/")
+	hasGrokCLIIdentity := generatedUserAgent ||
+		strings.TrimSpace(headers.Get("X-XAI-Token-Auth")) != "" ||
+		strings.TrimSpace(headers.Get("X-Grok-Client-Version")) != "" ||
+		strings.TrimSpace(headers.Get("X-Grok-Client-Mode")) != "" ||
+		strings.TrimSpace(headers.Get("X-Grok-Client-Surface")) != ""
+	for _, header := range []string{
+		"X-XAI-Token-Auth",
+		"X-Grok-Client-Version",
+		"X-Grok-Client-Mode",
+		"X-Grok-Client-Surface",
+	} {
+		headers.Del(header)
+	}
+	if hasGrokCLIIdentity {
+		headers.Del("X-UserID")
+		headers.Del("X-Email")
+	}
+	if generatedUserAgent {
+		headers.Del("User-Agent")
+	}
+}
+
+func isSupportedGrokCLIVersion(version string) bool {
+	canonical := "v" + version
+	minimum := "v" + grokCLIStableVersion
+	return semver.IsValid(canonical) &&
+		semver.Canonical(canonical) == canonical &&
+		semver.Compare(canonical, minimum) >= 0
 }
 
 // acquireClientWithTLS 获取或创建带 TLS 指纹的客户端
