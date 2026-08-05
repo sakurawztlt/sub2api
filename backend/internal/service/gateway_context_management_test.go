@@ -222,24 +222,20 @@ func TestComputeFinalCountTokensAnthropicBeta_OAuthMimic_AlwaysIncludesContextMa
 		"count_tokens 路径必须含 token-counting beta")
 }
 
-// 重构等价性回归：
-// 原 main buildCountTokensRequest 在 count_tokens mimic 分支上不跳过白名单透传
-// （与 messages mimic 不同），incomingBeta 取自客户端透传。重构后必须从 clientHeaders
-// 拿同一个值并 merge，否则会丢失客户端 beta。
-func TestComputeFinalCountTokensAnthropicBeta_OAuthMimic_PreservesClientBeta(t *testing.T) {
+func TestComputeFinalCountTokensAnthropicBeta_OAuthMimic_IgnoresClientBeta(t *testing.T) {
 	s := newTestGatewayServiceForBeta(false)
 	hdr := http.Header{}
-	hdr.Set("anthropic-beta", "custom-experimental-beta,context-1m-2025-08-07")
+	hdr.Set("anthropic-beta", "custom-experimental-beta,"+claude.BetaFineGrainedToolStreaming)
 	final, ok := s.computeFinalCountTokensAnthropicBeta("oauth", true, "claude-haiku-4-5", hdr, []byte(`{}`), nil)
 	require.True(t, ok)
-	require.True(t, anthropicBetaTokensContains(final, "custom-experimental-beta"),
-		"count_tokens mimic 不同于 messages mimic：原代码会保留客户端透传的 beta")
-	require.True(t, anthropicBetaTokensContains(final, "context-1m-2025-08-07"),
-		"客户端透传的其他 beta token 同样需要保留")
+	require.False(t, anthropicBetaTokensContains(final, "custom-experimental-beta"),
+		"count_tokens mimic 不得继承客户端 beta")
+	require.False(t, anthropicBetaTokensContains(final, claude.BetaFineGrainedToolStreaming),
+		"旧客户端 beta 不得泄到锁定的 Claude Code profile")
 	require.True(t, anthropicBetaTokensContains(final, claude.BetaContextManagement),
-		"同时 FullClaudeCodeMimicryBetas 不打折扣")
+		"FullClaudeCodeMimicryBetas 不打折扣")
 	require.True(t, anthropicBetaTokensContains(final, claude.BetaTokenCounting),
-		"同时补齐 token-counting beta")
+		"补齐 token-counting beta")
 }
 
 // messages mimic 路径反向验证：原代码会跳过白名单透传，

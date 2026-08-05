@@ -121,6 +121,53 @@ func (s *IdentityService) GetOrCreateFingerprint(ctx context.Context, accountID 
 	return fp, nil
 }
 
+// GetOrCreateClaudeCodeFingerprint returns the account-scoped client ID while
+// pinning every wire-visible field to the relay's captured Claude Code profile.
+//
+// Gateway/front-door proxies may replace the incoming User-Agent before the
+// request reaches sub2api. Feeding those headers into GetOrCreateFingerprint
+// would persist the proxy identity and could leak it on a later request. Use
+// only the locked profile as fingerprint input, repair any previously polluted
+// cache entry, and keep the generated ClientID stable.
+func (s *IdentityService) GetOrCreateClaudeCodeFingerprint(ctx context.Context, accountID int64) (*Fingerprint, error) {
+	lockedHeaders := http.Header{}
+	lockedHeaders.Set("User-Agent", defaultFingerprint.UserAgent)
+	lockedHeaders.Set("X-Stainless-Lang", defaultFingerprint.StainlessLang)
+	lockedHeaders.Set("X-Stainless-Package-Version", defaultFingerprint.StainlessPackageVersion)
+	lockedHeaders.Set("X-Stainless-OS", defaultFingerprint.StainlessOS)
+	lockedHeaders.Set("X-Stainless-Arch", defaultFingerprint.StainlessArch)
+	lockedHeaders.Set("X-Stainless-Runtime", defaultFingerprint.StainlessRuntime)
+	lockedHeaders.Set("X-Stainless-Runtime-Version", defaultFingerprint.StainlessRuntimeVersion)
+
+	fp, err := s.GetOrCreateFingerprint(ctx, accountID, lockedHeaders)
+	if err != nil || fp == nil {
+		return fp, err
+	}
+
+	locked := fingerprintForClaudeCodeMimicry(fp)
+	if fingerprintWireFieldsEqual(fp, locked) {
+		return locked, nil
+	}
+	locked.UpdatedAt = time.Now().Unix()
+	if err := s.cache.SetFingerprint(ctx, accountID, locked); err != nil {
+		logger.LegacyPrintf("service.identity", "Warning: failed to repair Claude Code fingerprint for account %d: %v", accountID, err)
+	}
+	return locked, nil
+}
+
+func fingerprintWireFieldsEqual(a, b *Fingerprint) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.UserAgent == b.UserAgent &&
+		a.StainlessLang == b.StainlessLang &&
+		a.StainlessPackageVersion == b.StainlessPackageVersion &&
+		a.StainlessOS == b.StainlessOS &&
+		a.StainlessArch == b.StainlessArch &&
+		a.StainlessRuntime == b.StainlessRuntime &&
+		a.StainlessRuntimeVersion == b.StainlessRuntimeVersion
+}
+
 // createFingerprintFromHeaders 从请求头创建指纹
 func (s *IdentityService) createFingerprintFromHeaders(headers http.Header) *Fingerprint {
 	fp := &Fingerprint{}
@@ -207,6 +254,24 @@ func (s *IdentityService) ApplyFingerprint(req *http.Request, fp *Fingerprint) {
 	if fp.StainlessRuntimeVersion != "" {
 		setHeaderRaw(req.Header, "X-Stainless-Runtime-Version", fp.StainlessRuntimeVersion)
 	}
+}
+
+// fingerprintForClaudeCodeMimicry keeps the account-scoped client ID while
+// pinning every wire-visible fingerprint field to this relay's captured Claude
+// Code profile.
+func fingerprintForClaudeCodeMimicry(fp *Fingerprint) *Fingerprint {
+	if fp == nil {
+		return nil
+	}
+	locked := *fp
+	locked.UserAgent = defaultFingerprint.UserAgent
+	locked.StainlessLang = defaultFingerprint.StainlessLang
+	locked.StainlessPackageVersion = defaultFingerprint.StainlessPackageVersion
+	locked.StainlessOS = defaultFingerprint.StainlessOS
+	locked.StainlessArch = defaultFingerprint.StainlessArch
+	locked.StainlessRuntime = defaultFingerprint.StainlessRuntime
+	locked.StainlessRuntimeVersion = defaultFingerprint.StainlessRuntimeVersion
+	return &locked
 }
 
 // RewriteUserID 重写body中的metadata.user_id

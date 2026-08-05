@@ -894,6 +894,242 @@ func TestGatewayService_AnthropicOAuth_ForwardPreservesBillingHeaderSystemBlock(
 	}
 }
 
+func TestGatewayService_AnthropicOAuth_ProxiedClaudeCodeBodyKeepsCacheAndLocksWireProfile(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	sessionID := "123e4567-e89b-42d3-a456-426614174000"
+	metadataUserID := FormatMetadataUserID(
+		"a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+		"550e8400-e29b-41d4-a716-446655440000",
+		sessionID,
+		"2.1.119",
+	)
+	body, err := json.Marshal(map[string]any{
+		"model":  "claude-sonnet-4-6",
+		"stream": false,
+		"metadata": map[string]any{
+			"user_id": metadataUserID,
+		},
+		"system": []any{
+			map[string]any{
+				"type": "text",
+				"text": "x-anthropic-billing-header: cc_version=9.9.9.proxy; cc_entrypoint=cli; cch=00000;",
+			},
+			map[string]any{
+				"type":          "text",
+				"text":          "ORIGINAL CLAUDE CODE SYSTEM",
+				"cache_control": map[string]any{"type": "ephemeral"},
+			},
+		},
+		"messages": []any{
+			map[string]any{"role": "user", "content": "hello"},
+		},
+	})
+	require.NoError(t, err)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Request.Header.Set("User-Agent", "NewAPI/relay-replaced")
+	c.Request.Header.Set("X-Stainless-Package-Version", "9.9.9")
+	c.Request.Header.Set("Anthropic-Beta", claude.BetaFineGrainedToolStreaming)
+
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+	require.NoError(t, err)
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Content-Type": []string{"application/json"},
+			"x-request-id": []string{"rid-proxied-cli"},
+		},
+		Body: io.NopCloser(strings.NewReader(`{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":12,"output_tokens":7}}`)),
+	}}
+	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}
+	identityCache := &identityCacheStub{fingerprint: &Fingerprint{
+		ClientID: "cached-client-id", UserAgent: "NewAPI/9.9.9",
+		StainlessLang: "go", StainlessPackageVersion: "9.9.9",
+		StainlessOS: "Other", StainlessArch: "other",
+		StainlessRuntime: "other", StainlessRuntimeVersion: "v9.9.9",
+	}}
+	svc := &GatewayService{
+		cfg:                  cfg,
+		responseHeaderFilter: compileResponseHeaderFilter(cfg),
+		httpUpstream:         upstream,
+		rateLimitService:     &RateLimitService{},
+		deferredService:      &DeferredService{},
+		identityService:      NewIdentityService(identityCache),
+	}
+	account := &Account{
+		ID: 302, Name: "anthropic-oauth-proxied-cli", Platform: PlatformAnthropic,
+		Type: AccountTypeOAuth, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token"},
+		Status:      StatusActive, Schedulable: true,
+	}
+
+	result, err := svc.Forward(context.Background(), c, account, parsed)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, upstream.lastReq)
+
+	// Body-level detection preserves the real CLI cache layout.
+	system := gjson.GetBytes(upstream.lastBody, "system").Array()
+	require.Len(t, system, 2)
+	require.Equal(t, "ORIGINAL CLAUDE CODE SYSTEM", system[1].Get("text").String())
+	require.Equal(t, "ephemeral", system[1].Get("cache_control.type").String())
+	require.Contains(t, system[0].Get("text").String(), "cc_version=2.1.119")
+	require.NotContains(t, string(upstream.lastBody), "[System Instructions]")
+
+	// Header-level disguise is independent of body preservation: the inbound
+	// gateway identity and beta list must not leak to Anthropic.
+	require.Equal(t, claude.DefaultHeaders["User-Agent"], getHeaderRaw(upstream.lastReq.Header, "User-Agent"))
+	require.Equal(t, claude.DefaultHeaders["X-Stainless-Package-Version"], getHeaderRaw(upstream.lastReq.Header, "X-Stainless-Package-Version"))
+	require.Equal(t, claude.DefaultHeaders["X-Stainless-Runtime-Version"], getHeaderRaw(upstream.lastReq.Header, "X-Stainless-Runtime-Version"))
+	require.Equal(t, sessionID, getHeaderRaw(upstream.lastReq.Header, "X-Claude-Code-Session-Id"))
+	beta := getHeaderRaw(upstream.lastReq.Header, "Anthropic-Beta")
+	require.Contains(t, beta, claude.BetaAdvisorTool)
+	require.Contains(t, beta, claude.BetaEffort)
+	require.NotContains(t, beta, claude.BetaFineGrainedToolStreaming)
+
+	// A proxied first request must repair, rather than poison, the account cache.
+	require.NotNil(t, identityCache.fingerprint)
+	require.Equal(t, "cached-client-id", identityCache.fingerprint.ClientID)
+	require.Equal(t, claude.DefaultHeaders["User-Agent"], identityCache.fingerprint.UserAgent)
+	require.Equal(t, claude.DefaultHeaders["X-Stainless-Package-Version"], identityCache.fingerprint.StainlessPackageVersion)
+
+	// Reuse the same cache/account with a directly detected CLI request. Even a
+	// newer inbound CLI fingerprint must not revive the previously cached proxy
+	// identity or drift from the coordinated relay profile.
+	directSessionID := "987e6543-e21b-42d3-a456-426614174999"
+	directUserID := FormatMetadataUserID(
+		"f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2",
+		"550e8400-e29b-41d4-a716-446655440000",
+		directSessionID,
+		"9.9.9",
+	)
+	directBody, err := json.Marshal(map[string]any{
+		"model": "claude-sonnet-4-6",
+		"metadata": map[string]any{
+			"user_id": directUserID,
+		},
+		"system": []any{
+			map[string]any{
+				"type": "text",
+				"text": "x-anthropic-billing-header: cc_version=9.9.9.direct; cc_entrypoint=cli; cch=00000;",
+			},
+			map[string]any{
+				"type":          "text",
+				"text":          "DIRECT CLAUDE CODE SYSTEM",
+				"cache_control": map[string]any{"type": "ephemeral"},
+			},
+		},
+		"messages": []any{map[string]any{"role": "user", "content": "hello again"}},
+	})
+	require.NoError(t, err)
+	directParsed, err := ParseGatewayRequest(NewRequestBodyRef(directBody), PlatformAnthropic)
+	require.NoError(t, err)
+	directRec := httptest.NewRecorder()
+	directCtx, _ := gin.CreateTestContext(directRec)
+	directCtx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	directCtx.Request.Header.Set("User-Agent", "claude-cli/9.9.9 (external, sdk-cli)")
+	directCtx.Request.Header.Set("X-Stainless-Package-Version", "9.9.9")
+	upstream.resp = &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"id":"msg_2","type":"message","role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":8,"output_tokens":4}}`)),
+	}
+
+	result, err = svc.Forward(context.Background(), directCtx, account, directParsed)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, claude.DefaultHeaders["User-Agent"], getHeaderRaw(upstream.lastReq.Header, "User-Agent"))
+	require.Equal(t, claude.DefaultHeaders["X-Stainless-Package-Version"], getHeaderRaw(upstream.lastReq.Header, "X-Stainless-Package-Version"))
+	require.Equal(t, directSessionID, getHeaderRaw(upstream.lastReq.Header, "X-Claude-Code-Session-Id"))
+	require.Contains(t, gjson.GetBytes(upstream.lastBody, "system.0.text").String(), "cc_version=2.1.119")
+	require.Equal(t, "cached-client-id", identityCache.fingerprint.ClientID)
+	require.Equal(t, claude.DefaultHeaders["User-Agent"], identityCache.fingerprint.UserAgent)
+}
+
+func TestGatewayService_AnthropicOAuth_ProxiedClaudeCodeCountTokensLocksWireProfileAndDropsClientBeta(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	sessionID := "123e4567-e89b-42d3-a456-426614174111"
+	metadataUserID := FormatMetadataUserID(
+		"a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+		"550e8400-e29b-41d4-a716-446655440000",
+		sessionID,
+		"2.1.119",
+	)
+	body, err := json.Marshal(map[string]any{
+		"model": "claude-sonnet-4-6",
+		"metadata": map[string]any{
+			"user_id": metadataUserID,
+		},
+		"system": []any{
+			map[string]any{
+				"type": "text",
+				"text": "x-anthropic-billing-header: cc_version=9.9.9.proxy; cc_entrypoint=cli; cch=00000;",
+			},
+			map[string]any{
+				"type":          "text",
+				"text":          "ORIGINAL COUNT TOKENS SYSTEM",
+				"cache_control": map[string]any{"type": "ephemeral"},
+			},
+		},
+		"messages": []any{map[string]any{"role": "user", "content": "count me"}},
+	})
+	require.NoError(t, err)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+	require.NoError(t, err)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", nil)
+	c.Request.Header.Set("User-Agent", "NewAPI/relay-replaced")
+	c.Request.Header.Set("X-Stainless-Package-Version", "9.9.9")
+	c.Request.Header.Set("Anthropic-Beta", claude.BetaFineGrainedToolStreaming+",prompt-caching-2024-07-31")
+
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"input_tokens":42}`)),
+	}}
+	identityCache := &identityCacheStub{}
+	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}
+	svc := &GatewayService{
+		cfg:                  cfg,
+		responseHeaderFilter: compileResponseHeaderFilter(cfg),
+		httpUpstream:         upstream,
+		rateLimitService:     &RateLimitService{},
+		identityService:      NewIdentityService(identityCache),
+	}
+	account := &Account{
+		ID: 303, Name: "anthropic-oauth-proxied-count", Platform: PlatformAnthropic,
+		Type: AccountTypeOAuth, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token"},
+		Status:      StatusActive, Schedulable: true,
+	}
+
+	err = svc.ForwardCountTokens(context.Background(), c, account, parsed)
+	require.NoError(t, err)
+	require.NotNil(t, upstream.lastReq)
+
+	system := gjson.GetBytes(upstream.lastBody, "system").Array()
+	require.Len(t, system, 2)
+	require.Equal(t, "ORIGINAL COUNT TOKENS SYSTEM", system[1].Get("text").String())
+	require.Equal(t, "ephemeral", system[1].Get("cache_control.type").String())
+	require.Contains(t, system[0].Get("text").String(), "cc_version=2.1.119")
+	require.Equal(t, claude.DefaultHeaders["User-Agent"], getHeaderRaw(upstream.lastReq.Header, "User-Agent"))
+	require.Equal(t, claude.DefaultHeaders["X-Stainless-Package-Version"], getHeaderRaw(upstream.lastReq.Header, "X-Stainless-Package-Version"))
+	require.Equal(t, claude.DefaultHeaders["X-Stainless-Runtime-Version"], getHeaderRaw(upstream.lastReq.Header, "X-Stainless-Runtime-Version"))
+	require.Equal(t, sessionID, getHeaderRaw(upstream.lastReq.Header, "X-Claude-Code-Session-Id"))
+	beta := getHeaderRaw(upstream.lastReq.Header, "Anthropic-Beta")
+	require.Contains(t, beta, claude.BetaAdvisorTool)
+	require.Contains(t, beta, claude.BetaEffort)
+	require.Contains(t, beta, claude.BetaTokenCounting)
+	require.NotContains(t, beta, claude.BetaFineGrainedToolStreaming)
+	require.NotContains(t, beta, "prompt-caching-2024-07-31")
+}
+
 func TestGatewayService_AnthropicAPIKeyPassthrough_StreamingStillCollectsUsageAfterClientDisconnect(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
