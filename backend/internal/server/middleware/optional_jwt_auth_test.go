@@ -3,7 +3,6 @@
 package middleware
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -26,7 +25,7 @@ func newOptionalJWTTestEnv(users map[int64]*service.User) (*gin.Engine, *service
 	userRepo := &stubJWTUserRepo{users: users}
 	authSvc := service.NewAuthService(nil, userRepo, nil, nil, cfg, nil, nil, nil, nil, nil, nil, nil, nil)
 	userSvc := service.NewUserService(userRepo, nil, nil, nil)
-	mw := NewOptionalJWTAuthMiddleware(authSvc, userSvc, nil, nil)
+	mw := NewOptionalJWTAuthMiddleware(authSvc, userSvc)
 
 	r := gin.New()
 	r.Use(gin.HandlerFunc(mw))
@@ -59,7 +58,7 @@ func TestOptionalJWTAuth_ValidTokenSetsSubject(t *testing.T) {
 	}
 	router, authSvc := newOptionalJWTTestEnv(map[int64]*service.User{7: user})
 
-	token, err := authSvc.GenerateToken(context.Background(), user)
+	token, err := authSvc.GenerateToken(user)
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
