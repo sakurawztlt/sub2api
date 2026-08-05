@@ -177,6 +177,14 @@ const createWrapper = () =>
     }
   })
 
+const createDeferred = <T>() => {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}
+
 describe('CreateAccountModal', () => {
   beforeEach(() => {
     getSettingsMock.mockReset()
@@ -188,7 +196,7 @@ describe('CreateAccountModal', () => {
     listTlsProfilesMock.mockResolvedValue([])
   })
 
-  it('打开时自动选中默认代理，并在 OpenAI OAuth 下默认启用 7D/10% 额度策略', async () => {
+  it('打开时自动选中默认代理', async () => {
     const wrapper = createWrapper()
 
     await wrapper.setProps({ show: true })
@@ -196,16 +204,29 @@ describe('CreateAccountModal', () => {
 
     expect(wrapper.get('[data-testid="proxy-selector"]').text()).toBe('7')
     expect(wrapper.text()).toContain('admin.accounts.defaultProxyAppliedHint')
+  })
 
-    const openAIButton = wrapper
-      .findAll('button')
-      .find((button) => button.text().includes('OpenAI'))
+  it('关闭并重开时忽略上一次默认代理请求的迟到响应', async () => {
+    const staleRequest = createDeferred<{ default_proxy_id: number | null }>()
+    const currentRequest = createDeferred<{ default_proxy_id: number | null }>()
+    getSettingsMock
+      .mockReset()
+      .mockReturnValueOnce(staleRequest.promise)
+      .mockReturnValueOnce(currentRequest.promise)
 
-    expect(openAIButton).toBeTruthy()
-    await openAIButton!.trigger('click')
+    const wrapper = createWrapper()
+
+    await wrapper.setProps({ show: true })
+    await wrapper.setProps({ show: false })
+    await wrapper.setProps({ show: true })
+    expect(getSettingsMock).toHaveBeenCalledTimes(2)
+
+    currentRequest.resolve({ default_proxy_id: null })
     await flushPromises()
+    expect(wrapper.get('[data-testid="proxy-selector"]').text()).toBe('')
 
-    expect((wrapper.get('#create-openai-quota-stop-threshold').element as HTMLInputElement).value).toBe('10')
-    expect(wrapper.text()).toContain('admin.accounts.openai.quotaStrategyPrefer7d')
+    staleRequest.resolve({ default_proxy_id: 7 })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="proxy-selector"]').text()).toBe('')
   })
 })

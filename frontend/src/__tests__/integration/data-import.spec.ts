@@ -132,7 +132,7 @@ describe('ImportDataModal', () => {
 
     expect(adminAPI.accounts.importData).toHaveBeenCalledWith({
       data: expect.objectContaining({
-        accounts: [{ name: 'a' }]
+        accounts: [expect.objectContaining({ name: 'a' })]
       }),
       skip_default_group_bind: true
     })

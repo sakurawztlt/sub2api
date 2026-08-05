@@ -2777,6 +2777,12 @@
           <ProxyAdBanner />
         </div>
         <ProxySelector v-model="form.proxy_id" :proxies="proxies" />
+        <p
+          v-if="defaultProxyId != null && form.proxy_id === defaultProxyId"
+          class="input-hint"
+        >
+          {{ t('admin.accounts.defaultProxyAppliedHint') }}
+        </p>
       </div>
 
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -3863,6 +3869,7 @@ const anthropicPassthroughEnabled = ref(false)
 const anthropicAPIKeyAuthScheme = ref<AnthropicAPIKeyAuthScheme>('x_api_key')
 const webSearchEmulationMode = ref('default')
 const webSearchGlobalEnabled = ref(false)
+const defaultProxyId = ref<number | null>(null)
 const {
   globalEnabled: quotaNotifyGlobalEnabled,
   state: quotaNotifyState,
@@ -4178,11 +4185,53 @@ const canExchangeCode = computed(() => {
   return authCode.trim() && oauth.sessionId.value && !oauth.loading.value
 })
 
+const resolveDefaultProxyId = () => {
+  if (defaultProxyId.value == null) {
+    return null
+  }
+  const matched = props.proxies.find(
+    (proxy) => proxy.id === defaultProxyId.value && proxy.status === 'active'
+  )
+  return matched ? matched.id : null
+}
+
+const applyDefaultProxySelection = () => {
+  if (form.proxy_id != null) {
+    return
+  }
+  const resolved = resolveDefaultProxyId()
+  if (resolved != null) {
+    form.proxy_id = resolved
+  }
+}
+
+let createDefaultsRequestId = 0
+
+const loadCreateDefaults = async () => {
+  const requestId = ++createDefaultsRequestId
+  try {
+    const settings = await adminAPI.settings.getSettings()
+    if (!props.show || requestId !== createDefaultsRequestId) {
+      return
+    }
+    defaultProxyId.value =
+      typeof settings.default_proxy_id === 'number' && settings.default_proxy_id > 0
+        ? settings.default_proxy_id
+        : null
+    applyDefaultProxySelection()
+  } catch {
+    if (props.show && requestId === createDefaultsRequestId) {
+      defaultProxyId.value = null
+    }
+  }
+}
+
 // Watchers
 watch(
   () => props.show,
   (newVal) => {
     if (newVal) {
+      void loadCreateDefaults()
       // Load TLS fingerprint profiles
       adminAPI.tlsFingerprintProfiles.list()
         .then(profiles => { tlsFingerprintProfiles.value = profiles.map(p => ({ id: p.id, name: p.name })) })
@@ -4202,7 +4251,18 @@ watch(
         antigravityModelRestrictionMode.value = 'mapping'
       }
     } else {
+      createDefaultsRequestId++
+      defaultProxyId.value = null
       resetForm()
+    }
+  }
+)
+
+watch(
+  () => props.proxies,
+  () => {
+    if (props.show) {
+      applyDefaultProxySelection()
     }
   }
 )

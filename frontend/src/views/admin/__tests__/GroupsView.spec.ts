@@ -1,10 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
-const { listMock, getUsageSummaryMock, getCapacitySummaryMock } = vi.hoisted(() => ({
+const {
+  listMock,
+  getUsageSummaryMock,
+  getCapacitySummaryMock,
+  getModelsListCandidatesMock
+} = vi.hoisted(() => ({
   listMock: vi.fn(),
   getUsageSummaryMock: vi.fn(),
-  getCapacitySummaryMock: vi.fn()
+  getCapacitySummaryMock: vi.fn(),
+  getModelsListCandidatesMock: vi.fn()
 }))
 
 vi.mock('@/api/admin', () => ({
@@ -12,7 +18,8 @@ vi.mock('@/api/admin', () => ({
     groups: {
       list: listMock,
       getUsageSummary: getUsageSummaryMock,
-      getCapacitySummary: getCapacitySummaryMock
+      getCapacitySummary: getCapacitySummaryMock,
+      getModelsListCandidates: getModelsListCandidatesMock
     }
   }
 }))
@@ -99,6 +106,7 @@ describe('GroupsView quota summary entry', () => {
     listMock.mockReset()
     getUsageSummaryMock.mockReset()
     getCapacitySummaryMock.mockReset()
+    getModelsListCandidatesMock.mockReset()
 
     listMock.mockResolvedValue({
       items: groups,
@@ -109,6 +117,7 @@ describe('GroupsView quota summary entry', () => {
     })
     getUsageSummaryMock.mockResolvedValue([])
     getCapacitySummaryMock.mockResolvedValue([])
+    getModelsListCandidatesMock.mockResolvedValue([])
   })
 
   it('分组操作栏显示查询额度按钮并传递选中的分组', async () => {
@@ -119,7 +128,7 @@ describe('GroupsView quota summary entry', () => {
           TablePageLayout: { template: '<div><slot name="filters" /><slot name="table" /><slot name="pagination" /></div>' },
           DataTable: {
             props: ['data'],
-            template: '<div><slot name="cell-actions" :row="data[0]" /></div>'
+            template: '<div><slot v-for="row in data" :key="row.id" name="cell-actions" :row="row" /></div>'
           },
           Pagination: true,
           BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' },

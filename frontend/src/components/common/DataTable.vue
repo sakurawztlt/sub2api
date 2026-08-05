@@ -214,7 +214,9 @@ const { t } = useI18n()
 
 const desktopViewportQuery = '(min-width: 768px)'
 const isDesktopViewport = ref(
-  typeof window === 'undefined' ? true : window.matchMedia(desktopViewportQuery).matches
+  typeof window === 'undefined' || typeof window.matchMedia !== 'function'
+    ? true
+    : window.matchMedia(desktopViewportQuery).matches
 )
 
 const emit = defineEmits<{
@@ -336,7 +338,7 @@ const attachDesktopTableTracking = () => {
 }
 
 onMounted(() => {
-  if (typeof window !== 'undefined') {
+  if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
     desktopViewportMediaQuery = window.matchMedia(desktopViewportQuery)
     isDesktopViewport.value = desktopViewportMediaQuery.matches
     desktopViewportListener = (event: MediaQueryListEvent) => {

@@ -6,10 +6,12 @@ import ProxiesView from '../ProxiesView.vue'
 
 const {
   listProxiesMock,
+  getAllWithCountMock,
   getSettingsMock,
   updateSettingsMock
 } = vi.hoisted(() => ({
   listProxiesMock: vi.fn(),
+  getAllWithCountMock: vi.fn(),
   getSettingsMock: vi.fn(),
   updateSettingsMock: vi.fn()
 }))
@@ -22,6 +24,7 @@ vi.mock('@/api/admin', () => ({
   adminAPI: {
     proxies: {
       list: listProxiesMock,
+      getAllWithCount: getAllWithCountMock,
       create: vi.fn(),
       update: vi.fn(),
       delete: vi.fn(),
@@ -165,6 +168,7 @@ const createWrapper = () =>
 describe('ProxiesView', () => {
   beforeEach(() => {
     listProxiesMock.mockReset()
+    getAllWithCountMock.mockReset()
     getSettingsMock.mockReset()
     updateSettingsMock.mockReset()
     showError.mockReset()
@@ -178,6 +182,7 @@ describe('ProxiesView', () => {
       page_size: 20,
       pages: 1
     })
+    getAllWithCountMock.mockResolvedValue(proxyRows)
     getSettingsMock.mockResolvedValue(baseSettings)
     updateSettingsMock.mockResolvedValue({ ...baseSettings, default_proxy_id: 2 })
   })
