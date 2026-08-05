@@ -110,10 +110,12 @@ export async function list(
 /**
  * Get user by ID
  * @param id - User ID
+ * @param includeDeleted - Include soft-deleted users
  * @returns User details
  */
-export async function getById(id: number): Promise<AdminUser> {
-  const { data } = await apiClient.get<AdminUser>(`/admin/users/${id}`)
+export async function getById(id: number, includeDeleted = false): Promise<AdminUser> {
+  const url = includeDeleted ? `/admin/users/${id}?include_deleted=true` : `/admin/users/${id}`
+  const { data } = await apiClient.get<AdminUser>(url)
   return data
 }
 

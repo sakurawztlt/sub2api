@@ -64,7 +64,7 @@
           <TokenUsageTrend :trend-data="trendData" :loading="chartsLoading" />
         </div>
       </div>
-      <UsageFilters v-model="filters" :mode="activeTab === 'errors' ? 'errors' : 'usage'" :start-date="startDate" :end-date="endDate" :exporting="exporting" :model-options="modelNameOptions" @change="applyFilters" @refresh="refreshData" @reset="resetFilters" @cleanup="openCleanupDialog" @export="exportToExcel">
+      <UsageFilters ref="usageFiltersRef" v-model="filters" :mode="activeTab === 'errors' ? 'errors' : 'usage'" :start-date="startDate" :end-date="endDate" :exporting="exporting" :model-options="modelNameOptions" @change="applyFilters" @refresh="refreshData" @reset="resetFilters" @cleanup="openCleanupDialog" @export="exportToExcel">
         <template #after-reset>
           <div class="relative" ref="columnDropdownRef">
             <button
@@ -227,7 +227,7 @@ const modelNameOptions = computed(() =>
 
 const handleUserClick = async (userId: number) => {
   try {
-    const user = await adminAPI.users.getById(userId)
+    const user = await adminAPI.users.getById(userId, true)
     balanceHistoryUser.value = user
     showBalanceHistoryModal.value = true
   } catch {
@@ -297,6 +297,26 @@ const applyRouteQueryFilters = () => {
     end_date: endDate.value
   }
   granularity.value = getGranularityForRange(startDate.value, endDate.value)
+}
+
+const loadRouteUserFilterLabel = async () => {
+  const requestedUserId = filters.value.user_id
+  if (!requestedUserId) return
+  const userSearchRevision = usageFiltersRef.value?.getUserSearchRevision?.()
+
+  const routeUserFilterIsCurrent = () => (
+    filters.value.user_id === requestedUserId
+    && usageFiltersRef.value?.getUserSearchRevision?.() === userSearchRevision
+  )
+
+  try {
+    const user = await adminAPI.users.getById(requestedUserId, true)
+    if (!routeUserFilterIsCurrent()) return
+    usageFiltersRef.value?.setUserKeyword?.(user.email || String(requestedUserId))
+  } catch {
+    if (!routeUserFilterIsCurrent()) return
+    usageFiltersRef.value?.setUserKeyword?.(String(requestedUserId))
+  }
 }
 
 const onDateRangeChange = (range: { startDate: string; endDate: string; preset: string | null }) => {
@@ -759,6 +779,7 @@ const switchToErrorsTab = () => { activeTab.value = 'errors'; if (errRows.value.
 
 const showColumnDropdown = ref(false)
 const columnDropdownRef = ref<HTMLElement | null>(null)
+const usageFiltersRef = ref<InstanceType<typeof UsageFilters> | null>(null)
 
 const handleColumnClickOutside = (event: MouseEvent) => {
   if (columnDropdownRef.value && !columnDropdownRef.value.contains(event.target as HTMLElement)) {
@@ -768,6 +789,7 @@ const handleColumnClickOutside = (event: MouseEvent) => {
 
 onMounted(() => {
   applyRouteQueryFilters()
+  void loadRouteUserFilterLabel()
   loadLogs()
   loadStats()
   loadModelStats(modelDistributionSource.value, true)
