@@ -142,6 +142,7 @@ func newOAuthEmailFlowAuthService(
 		nil,
 		nil,
 		nil,
+		nil,
 	)
 }
 
@@ -233,7 +234,7 @@ func TestRegisterOAuthEmailAccountSetsNormalizedSignupSourceOnCreatedUser(t *tes
 	require.Equal(t, "oidc", userRepo.created[0].SignupSource)
 }
 
-func TestRegisterOAuthEmailAccountFallsBackUnknownSignupSourceToEmail(t *testing.T) {
+func TestRegisterOAuthEmailAccountPreservesSupportedGitHubSignupSource(t *testing.T) {
 	userRepo := &userRepoStub{nextID: 43}
 	emailCache := &emailCacheStub{
 		data: &VerificationCodeData{
@@ -267,7 +268,7 @@ func TestRegisterOAuthEmailAccountFallsBackUnknownSignupSourceToEmail(t *testing
 	require.NotNil(t, tokenPair)
 	require.NotNil(t, user)
 	require.Len(t, userRepo.created, 1)
-	require.Equal(t, "email", userRepo.created[0].SignupSource)
+	require.Equal(t, "github", userRepo.created[0].SignupSource)
 }
 
 func TestRollbackOAuthEmailAccountCreationRestoresInvitationUsage(t *testing.T) {

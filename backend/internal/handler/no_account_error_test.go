@@ -40,11 +40,9 @@ func (f *fakeDiagnoser) DiagnoseModelAvailabilityForPlatform(
 
 func ptrInt64(v int64) *int64 { return &v }
 
-// newTestGinContextWithRequest wraps the bare newTestGinContext helper
-// (defined in openai_gateway_cyber_test.go) by additionally attaching a stub
-// *http.Request so the classifier can extract c.Request.Context().
 func newTestGinContextWithRequest() *gin.Context {
-	c := newTestGinContext()
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/test", nil)
 	return c
 }

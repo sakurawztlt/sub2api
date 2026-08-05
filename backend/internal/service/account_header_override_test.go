@@ -293,10 +293,10 @@ func TestNormalizeHeaderOverrideCredentials(t *testing.T) {
 
 	t.Run("allows tab inside value", func(t *testing.T) {
 		creds := map[string]any{
-			credKeyHeaderOverrides: map[string]any{"x-app": "a\tb"},
+			credKeyHeaderOverrides: map[string]any{"x-test-header": "a\tb"},
 		}
 		require.NoError(t, NormalizeHeaderOverrideCredentials(creds))
-		require.Equal(t, map[string]any{"x-app": "a\tb"}, creds[credKeyHeaderOverrides])
+		require.Equal(t, map[string]any{"x-test-header": "a\tb"}, creds[credKeyHeaderOverrides])
 	})
 
 	t.Run("rejects invalid value", func(t *testing.T) {

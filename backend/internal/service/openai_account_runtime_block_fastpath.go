@@ -30,7 +30,7 @@ func isOpenAIOAuthAccount(account *Account) bool {
 }
 
 func isOpenAIAccount(account *Account) bool {
-	return account != nil && account.Platform == PlatformOpenAI
+	return account != nil && (account.Platform == PlatformOpenAI || account.Platform == PlatformGrok)
 }
 
 func isOpenAIOAuthSensitiveBackendError(account *Account, statusCode int, upstreamMsg string, responseBody []byte) bool {

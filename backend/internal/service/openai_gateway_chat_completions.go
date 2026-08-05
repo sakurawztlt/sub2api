@@ -76,6 +76,10 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		return nil, errors.New("codex_cli_only restriction: only codex official clients are allowed")
 	}
 
+	if account.Platform == PlatformGrok {
+		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+	}
+
 	// API key accounts that are forced/probed/known to be Chat Completions
 	// upstreams should use the raw Chat Completions path directly.
 	if account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPIForBaseURL(account.Extra, account.GetOpenAIBaseURL()) {

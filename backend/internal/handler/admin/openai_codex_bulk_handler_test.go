@@ -75,7 +75,7 @@ func TestOpenAIOAuthHandler_CodexBulkImportCreatesAccounts(t *testing.T) {
 			AccountCount:  0,
 			LatencyStatus: "success",
 			QualityStatus: "healthy",
-			QualityScore:  intPtr(95),
+			QualityScore:  codexIntPtr(95),
 		},
 	}
 
@@ -173,7 +173,7 @@ func TestOpenAIOAuthHandler_CodexBulkImportPreservesExplicitZeroPriority(t *test
 			AccountCount:  0,
 			LatencyStatus: "success",
 			QualityStatus: "healthy",
-			QualityScore:  intPtr(90),
+			QualityScore:  codexIntPtr(90),
 		},
 	}
 
@@ -233,6 +233,6 @@ func performJSONRequest(t *testing.T, router http.Handler, method, path string, 
 	return rec
 }
 
-func intPtr(v int) *int {
+func codexIntPtr(v int) *int {
 	return &v
 }

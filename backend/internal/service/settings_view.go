@@ -145,6 +145,7 @@ type SystemSettings struct {
 	TablePageSizeOptions        []int
 	CustomMenuItems             string // JSON array of custom menu items
 	CustomEndpoints             string // JSON array of custom endpoints
+	DefaultProxyID              *int64
 
 	DefaultConcurrency           int
 	DefaultBalance               float64
@@ -515,11 +516,11 @@ func DefaultOverloadCooldownSettings() *OverloadCooldownSettings {
 	}
 }
 
-// DefaultRateLimit429CooldownSettings 返回默认的429回避配置（启用，5秒）
+// DefaultRateLimit429CooldownSettings 返回默认的429回避配置（启用，5分钟）
 func DefaultRateLimit429CooldownSettings() *RateLimit429CooldownSettings {
 	return &RateLimit429CooldownSettings{
 		Enabled:         true,
-		CooldownSeconds: 5,
+		CooldownSeconds: 300,
 	}
 }
 

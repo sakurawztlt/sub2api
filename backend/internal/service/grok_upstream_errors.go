@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // isGrokContentPolicyRejection identifies request-scoped safety refusals from
@@ -201,17 +202,44 @@ func (s *OpenAIGatewayService) shouldFailoverGrokUpstreamError(statusCode int, r
 // unschedulable rules to a non-content 403. It reports true only when a rule
 // matched; unmatched responses retain the legacy entitlement cooldown.
 func (s *OpenAIGatewayService) applyGrokForbiddenPolicy(ctx context.Context, account *Account, responseBody []byte) bool {
-	if account == nil || !account.IsTempUnschedulableEnabled() ||
-		s == nil || s.rateLimitService == nil || s.rateLimitService.accountRepo == nil {
+	if account == nil || !account.IsTempUnschedulableEnabled() {
 		return false
 	}
 
-	stateCtx, cancel := openAIAccountStateContext(ctx)
-	defer cancel()
-	return s.rateLimitService.tryTempUnschedulable(
-		stateCtx,
-		account,
-		http.StatusForbidden,
-		responseBody,
-	)
+	bodyLower := strings.ToLower(string(responseBody))
+	var matchedRule *TempUnschedulableRule
+	for _, rule := range account.GetTempUnschedulableRules() {
+		if rule.ErrorCode != http.StatusForbidden || len(rule.Keywords) == 0 {
+			continue
+		}
+		if matchTempUnschedKeyword(bodyLower, rule.Keywords) != "" {
+			ruleCopy := rule
+			matchedRule = &ruleCopy
+			break
+		}
+	}
+	if matchedRule == nil {
+		return false
+	}
+
+	if s != nil && s.rateLimitService != nil && s.rateLimitService.accountRepo != nil {
+		stateCtx, cancel := openAIAccountStateContext(ctx)
+		handled := s.rateLimitService.tryTempUnschedulable(
+			stateCtx,
+			account,
+			http.StatusForbidden,
+			responseBody,
+		)
+		cancel()
+		if handled {
+			return true
+		}
+	}
+
+	// Partially constructed gateways still honor the configured duration.
+	cooldown := time.Duration(matchedRule.DurationMinutes) * time.Minute
+	if cooldown > 0 && s != nil {
+		s.tempUnscheduleGrok(ctx, account, cooldown, "grok configured forbidden rule")
+	}
+	return true
 }

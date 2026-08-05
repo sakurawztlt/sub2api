@@ -317,6 +317,7 @@ func TestAPIContracts(t *testing.T) {
 						Description:         "desc",
 						Platform:            service.PlatformAnthropic,
 						RateMultiplier:      1.5,
+						PeakRateMultiplier:  1.0,
 						IsExclusive:         false,
 						Status:              service.StatusActive,
 						SubscriptionType:    service.SubscriptionTypeStandard,
@@ -344,6 +345,10 @@ func TestAPIContracts(t *testing.T) {
 						"description": "desc",
 						"platform": "anthropic",
 						"rate_multiplier": 1.5,
+						"peak_rate_enabled": false,
+						"peak_start": "",
+						"peak_end": "",
+						"peak_rate_multiplier": 1,
 						"is_exclusive": false,
 						"status": "active",
 						"subscription_type": "standard",
@@ -768,6 +773,14 @@ func TestAPIContracts(t *testing.T) {
 						"site_subtitle": "Subtitle",
 						"api_base_url": "https://api.example.com",
 						"api_key_acl_trust_forwarded_ip": false,
+						"api_request_ip_blocklist": [],
+						"api_request_ip_block_action": "block",
+						"api_request_ip_block_trust_forwarded_ip": false,
+						"claude_oauth_system_prompt": "",
+						"claude_oauth_system_prompt_blocks": "",
+						"cyber_session_block_enabled": false,
+						"cyber_session_block_ttl_seconds": 3600,
+						"enable_claude_oauth_system_prompt_injection": true,
 					"contact_info": "support",
 					"doc_url": "https://docs.example.com",
 					"auth_source_default_email_balance": 0,
@@ -884,10 +897,13 @@ func TestAPIContracts(t *testing.T) {
 					"openai_advanced_scheduler_effective_weight_session_sticky": "3",
 					"openai_codex_user_agent":           "",
 					"openai_fast_policy_settings": {
-						"rules": []
+						"rules": [
+							{"action": "filter", "scope": "all", "service_tier": "all"}
+						]
 					},
 					"custom_menu_items": [],
 					"custom_endpoints": [],
+					"default_proxy_id": null,
 					"payment_enabled": false,
 					"payment_min_amount": 0,
 					"payment_max_amount": 0,
@@ -1071,6 +1087,14 @@ func TestAPIContracts(t *testing.T) {
 					"site_subtitle": "Subscription to API Conversion Platform",
 					"api_base_url": "",
 					"api_key_acl_trust_forwarded_ip": false,
+					"api_request_ip_blocklist": [],
+					"api_request_ip_block_action": "block",
+					"api_request_ip_block_trust_forwarded_ip": false,
+					"claude_oauth_system_prompt": "",
+					"claude_oauth_system_prompt_blocks": "",
+					"cyber_session_block_enabled": false,
+					"cyber_session_block_ttl_seconds": 3600,
+					"enable_claude_oauth_system_prompt_injection": true,
 					"contact_info": "",
 					"doc_url": "",
 					"home_content": "",
@@ -1089,6 +1113,7 @@ func TestAPIContracts(t *testing.T) {
 					"auth_source_default_dingtalk_platform_quotas": null,
 					"custom_menu_items": [],
 					"custom_endpoints": [],
+					"default_proxy_id": null,
 					"default_concurrency": 0,
 					"default_balance": 0,
 					"affiliate_rebate_rate": 20,
@@ -1156,7 +1181,9 @@ func TestAPIContracts(t *testing.T) {
 					"openai_advanced_scheduler_effective_weight_session_sticky": "3",
 					"openai_codex_user_agent":           "",
 					"openai_fast_policy_settings": {
-						"rules": []
+						"rules": [
+							{"action": "filter", "scope": "all", "service_tier": "all"}
+						]
 					},
 					"payment_enabled": false,
 					"payment_min_amount": 0,
@@ -1350,7 +1377,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 	subscriptionService := service.NewSubscriptionService(groupRepo, userSubRepo, nil, nil, cfg)
 	subscriptionHandler := handler.NewSubscriptionHandler(subscriptionService)
 
-	redeemService := service.NewRedeemService(redeemRepo, userRepo, subscriptionService, nil, nil, nil, nil, nil)
+	redeemService := service.NewRedeemService(redeemRepo, userRepo, subscriptionService, nil, nil, nil, nil)
 	redeemHandler := handler.NewRedeemHandler(redeemService)
 
 	settingRepo := newStubSettingRepo()
@@ -2067,6 +2094,9 @@ func (stubUserSubscriptionRepo) GetByIDIncludeDeleted(ctx context.Context, id in
 	return nil, errors.New("not implemented")
 }
 func (stubUserSubscriptionRepo) GetByUserIDAndGroupID(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
+	return nil, errors.New("not implemented")
+}
+func (stubUserSubscriptionRepo) GetByUserIDAndGroupIDForUpdate(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
 	return nil, errors.New("not implemented")
 }
 func (stubUserSubscriptionRepo) GetActiveByUserIDAndGroupID(ctx context.Context, userID, groupID int64) (*service.UserSubscription, error) {
