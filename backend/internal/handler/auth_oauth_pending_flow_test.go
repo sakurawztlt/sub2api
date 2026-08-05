@@ -1049,6 +1049,73 @@ func TestCreateOIDCOAuthAccountCreatesUserBindsIdentityAndConsumesSession(t *tes
 	require.NotNil(t, storedSession.ConsumedAt)
 }
 
+func TestCreatePendingOAuthAccountRequiresFreshTurnstileProof(t *testing.T) {
+	verifier := &oauthPendingFlowTurnstileVerifierSpy{}
+	emailCache := &oauthPendingFlowEmailCacheStub{
+		verificationCodes: map[string]*service.VerificationCodeData{
+			"captcha@example.com": {
+				Code:      "246810",
+				CreatedAt: time.Now().UTC(),
+				ExpiresAt: time.Now().UTC().Add(15 * time.Minute),
+			},
+		},
+	}
+	handler, client := newOAuthPendingFlowTestHandlerWithDependencies(t, oauthPendingFlowTestHandlerOptions{
+		emailVerifyEnabled: true,
+		emailCache:         emailCache,
+		settingValues: map[string]string{
+			service.SettingKeyTurnstileEnabled:   "true",
+			service.SettingKeyTurnstileSecretKey: "turnstile-secret",
+		},
+		turnstileVerifier: verifier,
+	})
+	ctx := context.Background()
+
+	session, err := client.PendingAuthSession.Create().
+		SetSessionToken("captcha-create-account-session-token").
+		SetIntent("login").
+		SetProviderType("oidc").
+		SetProviderKey("https://issuer.example").
+		SetProviderSubject("oidc-captcha-create-123").
+		SetBrowserSessionKey("captcha-create-account-browser-session-key").
+		SetExpiresAt(time.Now().UTC().Add(10 * time.Minute)).
+		Save(ctx)
+	require.NoError(t, err)
+
+	performRequest := func(body string) *httptest.ResponseRecorder {
+		recorder := httptest.NewRecorder()
+		ginCtx, _ := gin.CreateTestContext(recorder)
+		req := httptest.NewRequest(
+			http.MethodPost,
+			"/api/v1/auth/oauth/pending/create-account",
+			bytes.NewBufferString(body),
+		)
+		req.Header.Set("Content-Type", "application/json")
+		req.AddCookie(&http.Cookie{Name: oauthPendingSessionCookieName, Value: encodeCookieValue(session.SessionToken)})
+		req.AddCookie(&http.Cookie{Name: oauthPendingBrowserCookieName, Value: encodeCookieValue(session.BrowserSessionKey)})
+		ginCtx.Request = req
+		handler.CreatePendingOAuthAccount(ginCtx)
+		return recorder
+	}
+
+	missingProof := performRequest(`{"email":"captcha@example.com","verify_code":"246810","password":"secret-123"}`)
+	require.Equal(t, http.StatusBadRequest, missingProof.Code)
+	require.Zero(t, verifier.calls)
+	require.Equal(t, 0, client.User.Query().Where(dbuser.EmailEQ("captcha@example.com")).CountX(ctx))
+	storedSession, err := client.PendingAuthSession.Get(ctx, session.ID)
+	require.NoError(t, err)
+	require.Nil(t, storedSession.ConsumedAt)
+
+	validProof := performRequest(`{"email":"captcha@example.com","verify_code":"246810","password":"secret-123","turnstile_token":"fresh-final-proof"}`)
+	require.Equal(t, http.StatusOK, validProof.Code)
+	require.Equal(t, 1, verifier.calls)
+	require.Equal(t, "fresh-final-proof", verifier.lastToken)
+	require.Equal(t, 1, client.User.Query().Where(dbuser.EmailEQ("captcha@example.com")).CountX(ctx))
+	storedSession, err = client.PendingAuthSession.Get(ctx, session.ID)
+	require.NoError(t, err)
+	require.NotNil(t, storedSession.ConsumedAt)
+}
+
 func TestCreateOIDCOAuthAccountExistingEmailReturnsChoicePendingSessionState(t *testing.T) {
 	handler, client := newOAuthPendingFlowTestHandlerWithEmailVerification(t, false, "owner@example.com", "135790")
 	ctx := context.Background()
@@ -2220,6 +2287,7 @@ type oauthPendingFlowTestHandlerOptions struct {
 	affiliateFactory   func(*dbent.Client, *service.SettingService) *service.AffiliateService
 	totpCache          service.TotpCache
 	totpEncryptor      service.SecretEncryptor
+	turnstileVerifier  service.TurnstileVerifier
 	userRepoOptions    oauthPendingFlowUserRepoOptions
 }
 
@@ -2299,6 +2367,10 @@ CREATE TABLE IF NOT EXISTS user_avatars (
 	if options.affiliateFactory != nil {
 		affiliateSvc = options.affiliateFactory(client, settingSvc)
 	}
+	var turnstileSvc *service.TurnstileService
+	if options.turnstileVerifier != nil {
+		turnstileSvc = service.NewTurnstileService(settingSvc, options.turnstileVerifier)
+	}
 	authSvc := service.NewAuthService(
 		client,
 		userRepo,
@@ -2307,7 +2379,7 @@ CREATE TABLE IF NOT EXISTS user_avatars (
 		cfg,
 		settingSvc,
 		emailService,
-		nil,
+		turnstileSvc,
 		nil,
 		nil,
 		options.defaultSubAssigner,
@@ -2349,6 +2421,22 @@ func boolPtr(v bool) *bool {
 
 type oauthPendingFlowSettingRepoStub struct {
 	values map[string]string
+}
+
+type oauthPendingFlowTurnstileVerifierSpy struct {
+	calls     int
+	lastToken string
+}
+
+func (s *oauthPendingFlowTurnstileVerifierSpy) VerifyToken(
+	_ context.Context,
+	_ string,
+	token string,
+	_ string,
+) (*service.TurnstileVerifyResponse, error) {
+	s.calls++
+	s.lastToken = token
+	return &service.TurnstileVerifyResponse{Success: true}, nil
 }
 
 func (s *oauthPendingFlowSettingRepoStub) Get(context.Context, string) (*service.Setting, error) {

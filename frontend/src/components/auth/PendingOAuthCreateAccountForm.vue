@@ -16,7 +16,7 @@
       :placeholder="t('auth.passwordPlaceholder')"
       :disabled="isSubmitting"
     />
-    <div v-if="emailVerifyEnabled && turnstileEnabled && turnstileSiteKey" class="space-y-2">
+    <div v-if="turnstileEnabled && turnstileSiteKey" class="space-y-2">
       <TurnstileWidget
         ref="turnstileRef"
         :site-key="turnstileSiteKey"
@@ -71,7 +71,7 @@
       :data-testid="`${testIdPrefix}-create-account-submit`"
       type="button"
       class="btn btn-primary w-full"
-      :disabled="isSubmitting || !email.trim() || password.length < 6 || (invitationCodeEnabled && !invitationCode.trim())"
+      :disabled="isSubmitting || !email.trim() || password.length < 6 || (invitationCodeEnabled && !invitationCode.trim()) || (turnstileEnabled && !turnstileToken)"
       @click="handleSubmit"
     >
       {{ isSubmitting ? t('common.processing') : t('auth.createAccount') }}
@@ -98,6 +98,7 @@ export type PendingOAuthCreateAccountPayload = {
   email: string
   password: string
   verifyCode: string
+  turnstileToken?: string
   invitationCode?: string
 }
 
@@ -229,12 +230,14 @@ async function handleSendCode() {
     })
     sendCodeSuccess.value = true
     startCountdown(response.countdown)
-    if (turnstileEnabled.value) {
-      resetTurnstile()
-    }
   } catch (error: unknown) {
     sendCodeError.value = getRequestErrorMessage(error, t('auth.sendCodeFailed'))
   } finally {
+    // A proof may already have reached the server even when the response is
+    // lost, so never make it available for a second protected action.
+    if (turnstileEnabled.value) {
+      resetTurnstile()
+    }
     isSendingCode.value = false
   }
 }
@@ -245,12 +248,29 @@ function handleSubmit() {
     return
   }
 
-  emit('submit', {
+  // The button's disabled state does not guard implicit form submission.
+  // Account creation consumes a fresh proof, separate from the send-code proof.
+  if (turnstileEnabled.value && !turnstileToken.value) {
+    sendCodeError.value = t('auth.completeVerification')
+    return
+  }
+
+  const payload: PendingOAuthCreateAccountPayload = {
     email: trimmedEmail,
     password: password.value,
     verifyCode: emailVerifyEnabled.value ? verifyCode.value.trim() : '',
+    ...(turnstileEnabled.value && turnstileToken.value
+      ? { turnstileToken: turnstileToken.value }
+      : {}),
     invitationCode: invitationCode.value.trim() || undefined
-  })
+  }
+
+  // Close the local gate before handing the proof to the parent request. This
+  // prevents double-clicks or a second implicit submit from reusing it.
+  if (turnstileEnabled.value) {
+    resetTurnstile()
+  }
+  emit('submit', payload)
 }
 
 function emitSwitchToBind() {

@@ -77,8 +77,26 @@
           />
         </div>
 
+        <!-- Pending OAuth account creation is a separate protected action. -->
+        <div
+          v-if="pendingOAuthCreateTurnstileRequired && turnstileSiteKey"
+          data-testid="pending-oauth-create-turnstile"
+        >
+          <TurnstileWidget
+            ref="createAccountTurnstileRef"
+            :site-key="turnstileSiteKey"
+            @verify="onCreateAccountTurnstileVerify"
+            @expire="onCreateAccountTurnstileExpire"
+            @error="onCreateAccountTurnstileError"
+          />
+        </div>
+
         <!-- Submit Button -->
-        <button type="submit" :disabled="isLoading || !verifyCode" class="btn btn-primary w-full">
+        <button
+          type="submit"
+          :disabled="isLoading || !verifyCode || (pendingOAuthCreateTurnstileRequired && !createAccountTurnstileToken)"
+          class="btn btn-primary w-full"
+        >
           <svg
             v-if="isLoading"
             class="-ml-1 mr-2 h-4 w-4 animate-spin text-white"
@@ -234,7 +252,9 @@ const registrationEmailSuffixWhitelist = ref<string[]>([])
 
 // Turnstile for resend
 const turnstileRef = ref<InstanceType<typeof TurnstileWidget> | null>(null)
+const createAccountTurnstileRef = ref<InstanceType<typeof TurnstileWidget> | null>(null)
 const resendTurnstileToken = ref<string>('')
+const createAccountTurnstileToken = ref<string>('')
 const showResendTurnstile = ref<boolean>(false)
 
 const errors = ref({
@@ -244,6 +264,9 @@ const errors = ref({
 
 const validationToastMessage = computed(
   () => errors.value.code || errors.value.turnstile || ''
+)
+const pendingOAuthCreateTurnstileRequired = computed(
+  () => isPendingOAuthFlow() && turnstileEnabled.value
 )
 
 watch(validationToastMessage, (value, previousValue) => {
@@ -353,6 +376,26 @@ function onTurnstileError(): void {
   errors.value.turnstile = t('auth.turnstileFailed')
 }
 
+function onCreateAccountTurnstileVerify(token: string): void {
+  createAccountTurnstileToken.value = token
+  errors.value.turnstile = ''
+}
+
+function onCreateAccountTurnstileExpire(): void {
+  createAccountTurnstileToken.value = ''
+  errors.value.turnstile = t('auth.turnstileExpired')
+}
+
+function onCreateAccountTurnstileError(): void {
+  createAccountTurnstileToken.value = ''
+  errors.value.turnstile = t('auth.turnstileFailed')
+}
+
+function resetCreateAccountTurnstile(): void {
+  createAccountTurnstileToken.value = ''
+  createAccountTurnstileRef.value?.reset()
+}
+
 function isPendingOAuthFlow(): boolean {
   return Boolean(pendingProvider.value.trim())
 }
@@ -398,6 +441,7 @@ function persistPendingOAuthSession(provider: string, redirect?: string): void {
 async function sendCode(): Promise<void> {
   isSendingCode.value = true
   errorMessage.value = ''
+  let turnstileProofUsed = false
 
   try {
     if (!shouldBypassRegistrationEmailPolicy() && !isRegistrationEmailSuffixAllowed(email.value, registrationEmailSuffixWhitelist.value)) {
@@ -410,8 +454,11 @@ async function sendCode(): Promise<void> {
       email: email.value,
       [pendingAuthTokenField.value]: pendingAuthToken.value || undefined,
       // 优先使用重发时新获取的 token（因为初始 token 可能已被使用）
-      turnstile_token: resendTurnstileToken.value || initialTurnstileToken.value || undefined
+      turnstile_token: turnstileEnabled.value
+        ? resendTurnstileToken.value || initialTurnstileToken.value || undefined
+        : undefined
     } as Parameters<typeof sendVerifyCode>[0]
+    turnstileProofUsed = Boolean(requestPayload.turnstile_token)
     const response = isPendingOAuthFlow()
       ? await sendPendingOAuthVerifyCode(requestPayload)
       : await sendVerifyCode(requestPayload)
@@ -434,10 +481,7 @@ async function sendCode(): Promise<void> {
     codeSent.value = true
     startCountdown(response.countdown)
 
-    // Reset turnstile state（token 已使用，清除以避免重复使用）
-    initialTurnstileToken.value = ''
     showResendTurnstile.value = false
-    resendTurnstileToken.value = ''
   } catch (error: unknown) {
     errorMessage.value = buildAuthErrorMessage(error, {
       fallback: t('auth.sendCodeFailed')
@@ -445,7 +489,27 @@ async function sendCode(): Promise<void> {
 
     appStore.showError(errorMessage.value)
   } finally {
+    // The server may have consumed the proof even if its response was lost.
+    if (turnstileProofUsed) {
+      clearStoredTurnstileProof()
+      initialTurnstileToken.value = ''
+      resendTurnstileToken.value = ''
+      turnstileRef.value?.reset()
+    }
     isSendingCode.value = false
+  }
+}
+
+function clearStoredTurnstileProof(): void {
+  const registerDataStr = sessionStorage.getItem('register_data')
+  if (!registerDataStr) return
+
+  try {
+    const registerData = JSON.parse(registerDataStr) as Record<string, unknown>
+    delete registerData.turnstile_token
+    sessionStorage.setItem('register_data', JSON.stringify(registerData))
+  } catch {
+    // Invalid registration state is handled by the existing mount logic.
   }
 }
 
@@ -490,6 +554,20 @@ async function handleVerify(): Promise<void> {
     return
   }
 
+  // The disabled button cannot protect an implicit form submit (for example,
+  // pressing Enter in the code field), so enforce the gate in the handler too.
+  if (pendingOAuthCreateTurnstileRequired.value && !createAccountTurnstileToken.value) {
+    errors.value.turnstile = t('auth.completeVerification')
+    return
+  }
+
+  const createAccountTurnstileProof = createAccountTurnstileToken.value
+  if (pendingOAuthCreateTurnstileRequired.value) {
+    // Close the local gate before the request to prevent double submission of
+    // the one-time proof.
+    resetCreateAccountTurnstile()
+  }
+
   isLoading.value = true
 
   try {
@@ -500,17 +578,28 @@ async function handleVerify(): Promise<void> {
     }
 
     if (isPendingOAuthFlow()) {
+      const payload: Record<string, unknown> = {
+        email: email.value,
+        password: password.value,
+        verify_code: verifyCode.value.trim(),
+        ...(createAccountTurnstileProof
+          ? { turnstile_token: createAccountTurnstileProof }
+          : {}),
+        ...oauthAffiliatePayload(affCode.value || loadAffiliateReferralCode())
+      }
+      if (invitationCode.value) {
+        payload.invitation_code = invitationCode.value
+      }
+      if (pendingAdoptionDecision.value?.adoptDisplayName !== undefined) {
+        payload.adopt_display_name = pendingAdoptionDecision.value.adoptDisplayName
+      }
+      if (pendingAdoptionDecision.value?.adoptAvatar !== undefined) {
+        payload.adopt_avatar = pendingAdoptionDecision.value.adoptAvatar
+      }
+
       const { data } = await apiClient.post<PendingOAuthCreateAccountResponse>(
         '/auth/oauth/pending/create-account',
-        {
-          email: email.value,
-          password: password.value,
-          verify_code: verifyCode.value.trim(),
-          invitation_code: invitationCode.value || undefined,
-          ...oauthAffiliatePayload(affCode.value || loadAffiliateReferralCode()),
-          adopt_display_name: pendingAdoptionDecision.value?.adoptDisplayName,
-          adopt_avatar: pendingAdoptionDecision.value?.adoptAvatar
-        }
+        payload
       )
       if (isPendingOAuthSessionResponse(data)) {
         sessionStorage.removeItem('register_data')
@@ -554,6 +643,9 @@ async function handleVerify(): Promise<void> {
 
     appStore.showError(errorMessage.value)
   } finally {
+    if (pendingOAuthCreateTurnstileRequired.value) {
+      resetCreateAccountTurnstile()
+    }
     isLoading.value = false
   }
 }

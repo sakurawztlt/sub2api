@@ -489,6 +489,61 @@ describe('OidcCallbackView', () => {
     expect(replace).toHaveBeenCalledWith('/welcome')
   })
 
+  it('forwards the fresh turnstile proof in the final pending oauth request', async () => {
+    getPublicSettings.mockResolvedValue({
+      oidc_oauth_provider_name: 'ExampleID',
+      email_verify_enabled: true,
+      turnstile_enabled: true,
+      turnstile_site_key: 'site-key'
+    })
+    exchangePendingOAuthCompletion.mockResolvedValue({
+      error: 'email_required',
+      redirect: '/welcome'
+    })
+    apiClientPost.mockResolvedValue({
+      data: {
+        access_token: 'new-access-token',
+        refresh_token: 'new-refresh-token',
+        expires_in: 3600,
+        token_type: 'Bearer'
+      }
+    })
+    setToken.mockResolvedValue({})
+
+    const wrapper = mount(OidcCallbackView, {
+      global: {
+        stubs: {
+          AuthLayout: { template: '<div><slot /></div>' },
+          Icon: true,
+          RouterLink: { template: '<a><slot /></a>' },
+          TurnstileWidget: {
+            template:
+              '<button data-testid="turnstile-verify" type="button" @click="$emit(\'verify\', \'fresh-final-token\')">verify</button>',
+            methods: { reset: vi.fn() }
+          },
+          transition: false
+        }
+      }
+    })
+
+    await flushPromises()
+    await wrapper.get('[data-testid="oidc-create-account-email"]').setValue('new@example.com')
+    await wrapper.get('[data-testid="oidc-create-account-password"]').setValue('secret-123')
+    await wrapper.get('[data-testid="turnstile-verify"]').trigger('click')
+    await wrapper.get('[data-testid="oidc-create-account-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(apiClientPost).toHaveBeenCalledWith('/auth/oauth/pending/create-account', {
+      email: 'new@example.com',
+      password: 'secret-123',
+      verify_code: undefined,
+      turnstile_token: 'fresh-final-token',
+      invitation_code: undefined,
+      adopt_display_name: false,
+      adopt_avatar: false
+    })
+  })
+
   it('switches to bind-login when create-account returns EMAIL_EXISTS', async () => {
     exchangePendingOAuthCompletion.mockResolvedValue({
       error: 'email_required',

@@ -15,6 +15,7 @@ const {
   sendPendingOAuthVerifyCodeMock,
   persistOAuthTokenContextMock,
   apiClientPostMock,
+  turnstileResetMock,
   authStoreState,
 } = vi.hoisted(() => ({
   pushMock: vi.fn(),
@@ -29,6 +30,7 @@ const {
   sendPendingOAuthVerifyCodeMock: vi.fn(),
   persistOAuthTokenContextMock: vi.fn(),
   apiClientPostMock: vi.fn(),
+  turnstileResetMock: vi.fn(),
   authStoreState: {
     pendingAuthSession: null as null | {
       token: string
@@ -110,6 +112,7 @@ describe('EmailVerifyView', () => {
     sendPendingOAuthVerifyCodeMock.mockReset()
     persistOAuthTokenContextMock.mockReset()
     apiClientPostMock.mockReset()
+    turnstileResetMock.mockReset()
     authStoreState.pendingAuthSession = null
     sessionStorage.clear()
     localStorage.clear()
@@ -137,7 +140,6 @@ describe('EmailVerifyView', () => {
       JSON.stringify({
         email: 'fresh@example.com',
         password: 'secret-123',
-        aff_code: 'AFF123',
       })
     )
 
@@ -305,6 +307,7 @@ describe('EmailVerifyView', () => {
       JSON.stringify({
         email: 'fresh@example.com',
         password: 'secret-123',
+        aff_code: 'AFF123',
       })
     )
     apiClientPostMock.mockResolvedValue({
@@ -412,6 +415,94 @@ describe('EmailVerifyView', () => {
     expect(persistOAuthTokenContextMock).not.toHaveBeenCalled()
     expect(clearPendingAuthSessionMock).not.toHaveBeenCalled()
     expect(showSuccessMock).not.toHaveBeenCalled()
+  })
+
+  it('consumes the send-code proof and gates pending oauth final creation on a fresh proof', async () => {
+    authStoreState.pendingAuthSession = {
+      token: 'pending-token-3',
+      token_field: 'pending_auth_token',
+      provider: 'oidc',
+      redirect: '/profile',
+    }
+    getPublicSettingsMock.mockResolvedValue({
+      turnstile_enabled: true,
+      turnstile_site_key: 'site-key',
+      site_name: 'Sub2API',
+      registration_email_suffix_whitelist: [],
+    })
+    sessionStorage.setItem(
+      'register_data',
+      JSON.stringify({
+        email: 'fresh@example.com',
+        password: 'secret-123',
+        turnstile_token: 'send-code-token',
+      })
+    )
+    apiClientPostMock.mockResolvedValue({
+      data: {
+        access_token: 'oauth-access-token',
+        refresh_token: 'oauth-refresh-token',
+        expires_in: 3600,
+        token_type: 'Bearer',
+      },
+    })
+
+    const wrapper = mount(EmailVerifyView, {
+      global: {
+        stubs: {
+          AuthLayout: { template: '<div><slot /><slot name="footer" /></div>' },
+          Icon: true,
+          TurnstileWidget: {
+            template:
+              '<button data-testid="turnstile-verify" type="button" @click="$emit(\'verify\', \'final-create-token\')">verify</button>',
+            methods: { reset: turnstileResetMock },
+          },
+          transition: false,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    expect(sendPendingOAuthVerifyCodeMock).toHaveBeenCalledWith({
+      email: 'fresh@example.com',
+      pending_auth_token: 'pending-token-3',
+      turnstile_token: 'send-code-token',
+    })
+    expect(JSON.parse(sessionStorage.getItem('register_data') || '{}')).not.toHaveProperty(
+      'turnstile_token'
+    )
+
+    await wrapper.get('#code').setValue('123456')
+    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeDefined()
+
+    // Pressing Enter submits the form even though the button is disabled.
+    await wrapper.get('form').trigger('submit.prevent')
+    expect(apiClientPostMock).not.toHaveBeenCalled()
+    expect(showErrorMock).toHaveBeenCalledWith('auth.completeVerification')
+
+    await wrapper
+      .get('[data-testid="pending-oauth-create-turnstile"] [data-testid="turnstile-verify"]')
+      .trigger('click')
+    expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeUndefined()
+
+    await wrapper.get('form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(apiClientPostMock).toHaveBeenCalledTimes(1)
+    expect(apiClientPostMock).toHaveBeenCalledWith(
+      '/auth/oauth/pending/create-account',
+      expect.objectContaining({
+        email: 'fresh@example.com',
+        password: 'secret-123',
+        verify_code: '123456',
+        turnstile_token: 'final-create-token',
+      })
+    )
+    expect(turnstileResetMock).toHaveBeenCalled()
+
+    await wrapper.get('form').trigger('submit.prevent')
+    expect(apiClientPostMock).toHaveBeenCalledTimes(1)
   })
 
   it('keeps the normal email registration flow unchanged', async () => {
