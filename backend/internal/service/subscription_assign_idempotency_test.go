@@ -141,10 +141,13 @@ func (userSubRepoNoop) BatchUpdateExpiredStatus(context.Context) (int64, error) 
 type subscriptionUserSubRepoStub struct {
 	userSubRepoNoop
 
-	nextID      int64
-	byID        map[int64]*UserSubscription
-	byUserGroup map[string]*UserSubscription
-	createCalls int
+	nextID           int64
+	byID             map[int64]*UserSubscription
+	byUserGroup      map[string]*UserSubscription
+	unlockedOverride *UserSubscription
+	createCalls      int
+	updateCalls      int
+	lockReads        int
 }
 
 func newSubscriptionUserSubRepoStub() *subscriptionUserSubRepoStub {
@@ -178,6 +181,20 @@ func (s *subscriptionUserSubRepoStub) ExistsByUserIDAndGroupID(_ context.Context
 }
 
 func (s *subscriptionUserSubRepoStub) GetByUserIDAndGroupID(_ context.Context, userID, groupID int64) (*UserSubscription, error) {
+	if s.unlockedOverride != nil {
+		cp := *s.unlockedOverride
+		return &cp, nil
+	}
+	sub := s.byUserGroup[s.key(userID, groupID)]
+	if sub == nil {
+		return nil, ErrSubscriptionNotFound
+	}
+	cp := *sub
+	return &cp, nil
+}
+
+func (s *subscriptionUserSubRepoStub) GetByUserIDAndGroupIDForUpdate(_ context.Context, userID, groupID int64) (*UserSubscription, error) {
+	s.lockReads++
 	sub := s.byUserGroup[s.key(userID, groupID)]
 	if sub == nil {
 		return nil, ErrSubscriptionNotFound
@@ -209,6 +226,7 @@ func (s *subscriptionUserSubRepoStub) Update(_ context.Context, sub *UserSubscri
 	if s.byID[sub.ID] == nil {
 		return ErrSubscriptionNotFound
 	}
+	s.updateCalls++
 	cp := *sub
 	s.byID[cp.ID] = &cp
 	s.byUserGroup[s.key(cp.UserID, cp.GroupID)] = &cp
@@ -300,6 +318,7 @@ func TestAssignSubscriptionRenewsExpiredExistingSubscription(t *testing.T) {
 	require.Zero(t, sub.DailyUsageUSD)
 	require.Zero(t, sub.WeeklyUsageUSD)
 	require.Zero(t, sub.MonthlyUsageUSD)
+	require.Equal(t, 1, subRepo.lockReads, "renewal must re-read the current row under lock")
 	require.Equal(t, 0, subRepo.createCalls, "expired existing subscription should be renewed in place")
 
 	reused, err := svc.AssignSubscription(context.Background(), &AssignSubscriptionInput{
@@ -312,6 +331,47 @@ func TestAssignSubscriptionRenewsExpiredExistingSubscription(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, sub.ID, reused.ID)
 	require.Equal(t, 0, subRepo.createCalls, "repeat assign after renewal should remain idempotent")
+}
+
+func TestAssignSubscriptionDoesNotReactivateSuspendedRowAfterStaleRead(t *testing.T) {
+	groupRepo := &subscriptionGroupRepoStub{
+		group: &Group{ID: 1, SubscriptionType: SubscriptionTypeSubscription},
+	}
+	subRepo := newSubscriptionUserSubRepoStub()
+	current := &UserSubscription{
+		ID:        13,
+		UserID:    3002,
+		GroupID:   1,
+		StartsAt:  time.Now().AddDate(0, 0, -10),
+		ExpiresAt: time.Now().Add(-time.Hour),
+		Status:    SubscriptionStatusSuspended,
+		Notes:     "suspended",
+	}
+	subRepo.seed(current)
+	subRepo.unlockedOverride = &UserSubscription{
+		ID:        current.ID,
+		UserID:    current.UserID,
+		GroupID:   current.GroupID,
+		StartsAt:  current.StartsAt,
+		ExpiresAt: current.ExpiresAt,
+		Status:    SubscriptionStatusExpired,
+		Notes:     "stale",
+	}
+
+	svc := NewSubscriptionService(groupRepo, subRepo, nil, nil, nil)
+	sub, err := svc.AssignSubscription(context.Background(), &AssignSubscriptionInput{
+		UserID:       current.UserID,
+		GroupID:      current.GroupID,
+		ValidityDays: 30,
+		Notes:        "renewed",
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, 1, subRepo.lockReads)
+	require.Equal(t, 0, subRepo.updateCalls)
+	require.Equal(t, SubscriptionStatusSuspended, sub.Status)
+	require.Equal(t, current.ExpiresAt, sub.ExpiresAt)
+	require.Equal(t, current.Notes, sub.Notes)
 }
 
 func TestAssignSubscriptionConflictWhenSemanticsMismatch(t *testing.T) {

@@ -23,7 +23,7 @@ const (
 	grokComposerImageBridgeVisionModel     = "grok-build-0.1"
 	grokComposerImageBridgeMaxOutputTokens = 512
 	grokUpstreamUserAgent                  = "sub2api-grok/1.0"
-	grokCLIVersion                         = "0.2.93"
+	grokCLIVersion                         = xai.CLIClientVersion
 )
 
 func (s *OpenAIGatewayService) forwardGrokResponses(

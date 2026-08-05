@@ -511,7 +511,8 @@ func isAssignableExistingSubscriptionExpiredAt(sub *UserSubscription, now time.T
 	if sub == nil {
 		return false
 	}
-	return sub.Status == SubscriptionStatusExpired || !sub.ExpiresAt.After(now)
+	return sub.Status == SubscriptionStatusExpired ||
+		(sub.Status != SubscriptionStatusSuspended && !sub.ExpiresAt.After(now))
 }
 
 func appendSubscriptionNotes(existingNotes, newNotes string) string {
@@ -529,32 +530,65 @@ func (s *SubscriptionService) renewExpiredAssignedSubscription(ctx context.Conte
 		return nil, ErrSubscriptionNotFound
 	}
 	validityDays := normalizeAssignValidityDays(input.ValidityDays)
-	now := s.currentTime()
-	expiresAt := now.AddDate(0, 0, validityDays)
-	if expiresAt.After(MaxExpiresAt) {
-		expiresAt = MaxExpiresAt
-	}
+	if err := s.withSubscriptionUpdateTx(ctx, func(txCtx context.Context) error {
+		// The preflight read in assignSubscriptionWithReuse is intentionally cheap
+		// and can become stale before renewal. Re-read under the existing row lock
+		// primitive so a concurrent renewal or suspension cannot be overwritten.
+		current, err := s.userSubRepo.GetByUserIDAndGroupIDForUpdate(txCtx, input.UserID, input.GroupID)
+		if err != nil {
+			return fmt.Errorf("lock subscription for renewal: %w", err)
+		}
+		if current == nil || current.ID != existing.ID {
+			return fmt.Errorf("lock subscription for renewal: %w", ErrSubscriptionNotFound)
+		}
+		if current.Status == SubscriptionStatusSuspended {
+			return nil
+		}
 
-	updated := *existing
-	updated.StartsAt = now
-	updated.ExpiresAt = expiresAt
-	updated.Status = SubscriptionStatusActive
-	updated.DailyWindowStart = &now
-	updated.WeeklyWindowStart = &now
-	updated.MonthlyWindowStart = &now
-	updated.DailyUsageUSD = 0
-	updated.WeeklyUsageUSD = 0
-	updated.MonthlyUsageUSD = 0
-	updated.AssignedAt = now
-	updated.Notes = input.Notes
-	if input.AssignedBy > 0 {
-		updated.AssignedBy = &input.AssignedBy
-	} else {
-		updated.AssignedBy = nil
-	}
-	updated.UpdatedAt = now
+		now := s.currentTime()
+		updated := *current
+		if current.Status == SubscriptionStatusExpired || !current.ExpiresAt.After(now) {
+			expiresAt := now.AddDate(0, 0, validityDays)
+			if expiresAt.After(MaxExpiresAt) {
+				expiresAt = MaxExpiresAt
+			}
+			updated.StartsAt = now
+			updated.ExpiresAt = expiresAt
+			updated.Status = SubscriptionStatusActive
+			updated.DailyWindowStart = &now
+			updated.WeeklyWindowStart = &now
+			updated.MonthlyWindowStart = &now
+			updated.DailyUsageUSD = 0
+			updated.WeeklyUsageUSD = 0
+			updated.MonthlyUsageUSD = 0
+			updated.AssignedAt = now
+			updated.Notes = input.Notes
+			if input.AssignedBy > 0 {
+				updated.AssignedBy = &input.AssignedBy
+			} else {
+				updated.AssignedBy = nil
+			}
+		} else {
+			// Another serialized renewal may have activated the row after the
+			// preflight read. Accumulate this renewal from the locked expiry.
+			updated.ExpiresAt = current.ExpiresAt.AddDate(0, 0, validityDays)
+			if updated.ExpiresAt.After(MaxExpiresAt) {
+				updated.ExpiresAt = MaxExpiresAt
+			}
+			if strings.TrimSpace(input.Notes) != "" && strings.TrimSpace(current.Notes) != strings.TrimSpace(input.Notes) {
+				if strings.TrimSpace(updated.Notes) != "" {
+					updated.Notes += "\n"
+				}
+				updated.Notes += input.Notes
+			}
+		}
+		updated.UpdatedAt = now
 
-	if err := s.userSubRepo.Update(ctx, &updated); err != nil {
+		if err := s.userSubRepo.Update(txCtx, &updated); err != nil {
+			return fmt.Errorf("renew subscription: %w", err)
+		}
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 
@@ -568,7 +602,27 @@ func (s *SubscriptionService) renewExpiredAssignedSubscription(ctx context.Conte
 		}()
 	}
 
-	return s.userSubRepo.GetByID(ctx, updated.ID)
+	return s.userSubRepo.GetByID(ctx, existing.ID)
+}
+
+func (s *SubscriptionService) withSubscriptionUpdateTx(ctx context.Context, fn func(context.Context) error) error {
+	if dbent.TxFromContext(ctx) != nil || s.entClient == nil {
+		return fn(ctx)
+	}
+
+	tx, err := s.entClient.Tx(ctx)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	txCtx := dbent.NewTxContext(ctx, tx)
+	if err := fn(txCtx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit transaction: %w", err)
+	}
+	return nil
 }
 
 func detectAssignSemanticConflict(existing *UserSubscription, input *AssignSubscriptionInput) (string, bool) {
