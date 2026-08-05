@@ -145,8 +145,8 @@ var codexCLIOnlyDebugHeaderWhitelist = []string{
 }
 
 // openAIPassthroughRollbackError — codex upstream PR#2498 (2026-05-16):
-// signals that the passthrough path detected a "missing instructions"
-// rejection before any response was written. Caller (Forward) catches
+// signals that the passthrough path detected an invalid explicit instructions
+// value before any response was written. Caller (Forward) catches
 // this via errors.As and falls back to the non-passthrough (full
 // transform) path instead of returning an internal-style 403 to the
 // client. Replaces the old behavior of writing
@@ -3354,10 +3354,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	if passthroughEnabled {
 		// 透传分支只需要轻量提取字段，避免热路径全量 Unmarshal。
 		reasoningEffort := extractOpenAIReasoningEffortFromBody(body, reqModel)
-		// codex upstream PR#2498 (2026-05-16): if passthrough detects
-		// missing instructions (was returning 403), roll back to the
-		// non-passthrough path which transforms the request fully and
-		// retries against the same upstream.
+		// Invalid explicit instructions still roll back to the full transform
+		// path. A missing field is synthesized inside forwardOpenAIPassthrough,
+		// preserving the native passthrough transport.
 		result, err := s.forwardOpenAIPassthrough(ctx, c, account, originalBody, reqModel, reasoningEffort, reqStream, startTime)
 		if err == nil {
 			return result, nil
@@ -4253,6 +4252,14 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			// retries the request via OAuth transform.
 			logOpenAIPassthroughInstructionsRejected(ctx, c, account, reqModel, rejectReason, body)
 			return nil, &openAIPassthroughRollbackError{Reason: rejectReason}
+		}
+		if isOpenAICodexModel(reqModel) && !gjson.GetBytes(body, "instructions").Exists() {
+			defaultInstructions := defaultCodexOAuthInstructions(map[string]any{"model": reqModel})
+			nextBody, setErr := sjson.SetBytes(body, "instructions", defaultInstructions)
+			if setErr != nil {
+				return nil, fmt.Errorf("set passthrough codex instructions: %w", setErr)
+			}
+			body = nextBody
 		}
 
 		normalizedBody, normalized, err := normalizeOpenAIPassthroughOAuthBody(body, isOpenAIResponsesCompactPath(c), account.IsOpenAIStoreEnabled())
@@ -9343,23 +9350,16 @@ func restoreResponsesTextFormatRaw(body []byte, format json.RawMessage) ([]byte,
 }
 
 func detectOpenAIPassthroughInstructionsRejectReason(reqModel string, body []byte) string {
-	// codex upstream PR#2498 (2026-05-16): keep codex-only model gate
-	// locally to avoid breaking 7 local tests (gpt-5.2 etc) that assume
-	// non-codex OAuth models pass through cleanly without an instructions
-	// field. Upstream PR drops the gate (all OAuth models fall back);
-	// local fork narrows the rejection scope to only codex models.
-	// **Decision pending**: if codex wants the broader upstream scope,
-	// remove the codex check below + update gpt-5.x test bodies to
-	// include instructions OR adjust mock upstream to simulate the
-	// fallback path response.
-	model := strings.ToLower(strings.TrimSpace(reqModel))
-	if !strings.Contains(model, "codex") {
+	// Keep the codex-only model gate so non-codex OAuth passthrough behavior
+	// remains unchanged. Missing instructions are synthesized before this
+	// check; malformed explicit values still use the protected rollback path.
+	if !isOpenAICodexModel(reqModel) {
 		return ""
 	}
 
 	instructions := gjson.GetBytes(body, "instructions")
 	if !instructions.Exists() {
-		return "instructions_missing"
+		return ""
 	}
 	if instructions.Type != gjson.String {
 		return "instructions_not_string"
@@ -9368,6 +9368,10 @@ func detectOpenAIPassthroughInstructionsRejectReason(reqModel string, body []byt
 		return "instructions_empty"
 	}
 	return ""
+}
+
+func isOpenAICodexModel(model string) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(model)), "codex")
 }
 
 func extractOpenAIReasoningEffortFromBody(body []byte, requestedModel string) *string {

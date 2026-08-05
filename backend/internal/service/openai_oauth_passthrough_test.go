@@ -1048,7 +1048,71 @@ func TestOpenAIGatewayService_OAuthLegacy_PreservesResponsesTextFormatSchemaOrde
 	require.Less(t, strings.Index(schemaRaw, `"k2"`), strings.Index(schemaRaw, `"k1"`))
 }
 
-func TestOpenAIGatewayService_OAuthPassthrough_CodexMissingInstructionsRejectedBeforeUpstream(t *testing.T) {
+func TestOpenAIGatewayService_OAuthPassthrough_CodexMissingInstructionsGetsDefault(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%t", stream), func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			path := "/v1/responses"
+			responseBody := strings.Join([]string{
+				`data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}`,
+				"", "data: [DONE]", "",
+			}, "\n")
+			responseContentType := "text/event-stream"
+			if !stream {
+				path = "/v1/responses/compact"
+				responseBody = `{"id":"resp_1","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`
+				responseContentType = "application/json"
+			}
+			c.Request = httptest.NewRequest(http.MethodPost, path, bytes.NewReader(nil))
+			c.Request.Header.Set("User-Agent", "codex_cli_rs/0.98.0")
+
+			originalBody := []byte(fmt.Sprintf(`{"model":"gpt-5.1-codex-max","stream":%t,"store":true,"prompt_cache_key":"cache-key","tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],"input":[{"type":"text","text":"hi"}]}`, stream))
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{responseContentType}, "x-request-id": []string{"rid"}},
+				Body:       io.NopCloser(strings.NewReader(responseBody)),
+			}}
+			svc := &OpenAIGatewayService{
+				cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+				httpUpstream: upstream,
+			}
+			account := &Account{
+				ID: 123, Name: "acc", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+				Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
+				Extra: map[string]any{
+					"openai_passthrough":                        true,
+					"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeOff,
+				},
+				Status: StatusActive, Schedulable: true, RateMultiplier: f64p(1),
+			}
+
+			result, err := svc.Forward(context.Background(), c, account, originalBody)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.NotNil(t, upstream.lastReq)
+			require.NotEqual(t, http.StatusForbidden, rec.Code)
+			passthrough, exists := c.Get("openai_passthrough")
+			require.True(t, exists)
+			require.Equal(t, true, passthrough)
+			if stream {
+				require.True(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())
+			} else {
+				require.False(t, gjson.GetBytes(upstream.lastBody, "stream").Exists())
+			}
+			expected := defaultCodexOAuthInstructions(map[string]any{"model": "gpt-5.1-codex-max"})
+			require.Equal(t, strings.TrimSpace(expected), strings.TrimSpace(gjson.GetBytes(upstream.lastBody, "instructions").String()))
+			require.Equal(t, "gpt-5.1-codex-max", gjson.GetBytes(upstream.lastBody, "model").String())
+			require.Equal(t, "cache-key", gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
+			require.Equal(t, "lookup", gjson.GetBytes(upstream.lastBody, "tools.0.name").String())
+			require.Equal(t, "text", gjson.GetBytes(upstream.lastBody, "input.0.type").String(), "request should remain on the native passthrough path")
+		})
+	}
+}
+
+func TestOpenAIGatewayService_OAuthPassthrough_CodexBlankInstructionsFallsBackToTransform(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	logSink, restore := captureStructuredLog(t)
 	defer restore()
@@ -1060,52 +1124,35 @@ func TestOpenAIGatewayService_OAuthPassthrough_CodexMissingInstructionsRejectedB
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Request.Header.Set("OpenAI-Beta", "responses=experimental")
 
-	// codex upstream PR#2498 (2026-05-16): codex 模型缺 instructions
-	// 不再 403 拒绝, 改 fall back 到非 passthrough (transform) 路径,
-	// 由 transform 把请求发上游. 测试改为验证 fall back 行为.
-	originalBody := []byte(`{"model":"gpt-5.1-codex-max","stream":false,"store":true,"input":[{"type":"text","text":"hi"}]}`)
-
-	// fall back 路径会用 SSE stream (codex transform 强制 stream=true)
-	upstream := &httpUpstreamRecorder{
-		resp: &http.Response{
-			StatusCode: http.StatusOK,
-			Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid"}},
-			Body:       io.NopCloser(strings.NewReader("data: [DONE]\n\n")),
-		},
-	}
-
+	originalBody := []byte(`{"model":"gpt-5.1-codex-max","instructions":"  ","stream":false,"store":true,"input":[{"type":"text","text":"hi"}]}`)
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid"}},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":1}}}`,
+			"", "data: [DONE]", "",
+		}, "\n"))),
+	}}
 	svc := &OpenAIGatewayService{
 		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
 		httpUpstream: upstream,
 	}
-
 	account := &Account{
-		ID:             123,
-		Name:           "acc",
-		Platform:       PlatformOpenAI,
-		Type:           AccountTypeOAuth,
-		Concurrency:    1,
-		Credentials:    map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
-		Extra:          map[string]any{"openai_passthrough": true},
-		Status:         StatusActive,
-		Schedulable:    true,
-		RateMultiplier: f64p(1),
+		ID: 123, Name: "acc", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
+		Extra:       map[string]any{"openai_passthrough": true},
+		Status:      StatusActive, Schedulable: true, RateMultiplier: f64p(1),
 	}
 
 	result, err := svc.Forward(context.Background(), c, account, originalBody)
-	// codex upstream PR#2498: passthrough rejects → fall back transform path.
-	// 1. Forward 不再返 error (transform 路径用 mock upstream 200 success)
-	// 2. upstream 被触达 (transform 路径会发请求过去, lastReq != nil)
-	// 3. 不再返 403 (现在客户看 transform 上游响应; mock 是 SSE stream)
-	// 4. log "本地拦截" 行仍打 (回退前还是先 log, 标记 reject_reason)
-	_ = err    // fall back may complete; either nil or transform-level error is OK
-	_ = result // depends on transform path outcome
-	require.NotNil(t, upstream.lastReq, "upstream should be hit via fall back transform path")
-	require.NotEqual(t, http.StatusForbidden, rec.Code, "no longer 403; either transform success 200 or transform error")
-
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, upstream.lastReq, "upstream should be reached through the transformed fallback path")
+	require.NotEqual(t, http.StatusForbidden, rec.Code)
+	_, passthroughMarked := c.Get("openai_passthrough")
+	require.False(t, passthroughMarked)
 	require.True(t, logSink.ContainsMessage("OpenAI passthrough 本地拦截：Codex 请求缺少有效 instructions"))
-	require.True(t, logSink.ContainsFieldValue("request_user_agent", "codex_cli_rs/0.98.0 (Windows 10.0.19045; x86_64) unknown"))
-	require.True(t, logSink.ContainsFieldValue("reject_reason", "instructions_missing"))
+	require.True(t, logSink.ContainsFieldValue("reject_reason", "instructions_empty"))
 }
 
 func TestOpenAIGatewayService_OAuthPassthrough_DisabledUsesLegacyTransform(t *testing.T) {

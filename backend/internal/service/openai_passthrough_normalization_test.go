@@ -85,3 +85,23 @@ func TestNormalizeOpenAIPassthroughOAuthBody_ArrayInputUnchanged(t *testing.T) {
 	require.Len(t, input.Array(), 1)
 	require.Equal(t, "message", input.Array()[0].Get("type").String())
 }
+
+func TestDetectOpenAIPassthroughInstructionsRejectReason(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		model string
+		body  string
+		want  string
+	}{
+		{name: "missing is optional", model: "gpt-5.1-codex", body: `{"model":"gpt-5.1-codex"}`, want: ""},
+		{name: "null remains rejected", model: "gpt-5.1-codex", body: `{"instructions":null}`, want: "instructions_not_string"},
+		{name: "non string remains rejected", model: "gpt-5.1-codex", body: `{"instructions":{"text":"invalid"}}`, want: "instructions_not_string"},
+		{name: "empty remains rejected", model: "gpt-5.1-codex", body: `{"instructions":"  "}`, want: "instructions_empty"},
+		{name: "non empty remains accepted", model: "gpt-5.1-codex", body: `{"instructions":"client guidance"}`, want: ""},
+		{name: "non codex missing remains accepted", model: "gpt-5.4", body: `{}`, want: ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, detectOpenAIPassthroughInstructionsRejectReason(tt.model, []byte(tt.body)))
+		})
+	}
+}
