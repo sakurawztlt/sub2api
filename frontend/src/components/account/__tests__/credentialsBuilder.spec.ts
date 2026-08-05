@@ -140,10 +140,11 @@ describe('JSON header override helpers', () => {
 })
 
 describe('isCustomGrokBaseUrl', () => {
-  it('distinguishes official and third-party hosts', () => {
-    expect(isCustomGrokBaseUrl('https://api.x.ai/v1')).toBe(false)
+  it('treats every endpoint except the CLI gateway as an explicit selection', () => {
+    expect(isCustomGrokBaseUrl('https://api.x.ai/v1')).toBe(true)
     expect(isCustomGrokBaseUrl('https://cli-chat-proxy.grok.com/v1')).toBe(false)
-    expect(isCustomGrokBaseUrl('HTTPS://API.X.AI:443/')).toBe(false)
+    expect(isCustomGrokBaseUrl('HTTPS://API.X.AI:443/')).toBe(true)
+    expect(isCustomGrokBaseUrl('https://us-west-2.api.x.ai/v1')).toBe(true)
     expect(isCustomGrokBaseUrl('https://relay.example.com/xai/v1')).toBe(true)
     expect(isCustomGrokBaseUrl('not a url')).toBe(false)
     expect(isCustomGrokBaseUrl(undefined)).toBe(false)

@@ -96,4 +96,27 @@ describe('UsageProgressBar', () => {
     expect(wrapper.text()).toContain('usage.resetNow')
     expect(wrapper.text()).not.toContain('usage.resetPending')
   })
+
+  it('remainingCapacity 使用剩余额度语义和对应告警颜色', async () => {
+    const wrapper = mount(UsageProgressBar, {
+      props: {
+        label: 'Req',
+        utilization: 12,
+        resetsAt: null,
+        remainingCapacity: true,
+        color: 'indigo'
+      }
+    })
+
+    expect(wrapper.text()).toContain('12%')
+    expect(wrapper.find('.bg-red-500').exists()).toBe(true)
+
+    await wrapper.setProps({ utilization: 75 })
+    expect(wrapper.text()).toContain('75%')
+    expect(wrapper.find('.bg-green-500').exists()).toBe(true)
+
+    await wrapper.setProps({ utilization: 120 })
+    expect(wrapper.text()).toContain('100%')
+    expect(wrapper.get('.h-full').attributes('style')).toContain('width: 100%')
+  })
 })

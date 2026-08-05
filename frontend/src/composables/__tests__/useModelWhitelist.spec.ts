@@ -4,7 +4,12 @@ vi.mock('@/api/admin/accounts', () => ({
   getAntigravityDefaultModelMapping: vi.fn()
 }))
 
-import { buildModelMappingObject, getModelsByPlatform, splitModelMappingObject } from '../useModelWhitelist'
+import {
+  buildModelMappingObject,
+  getModelsByPlatform,
+  getPresetMappingsByPlatform,
+  splitModelMappingObject
+} from '../useModelWhitelist'
 
 describe('useModelWhitelist', () => {
   it('openai 模型列表包含 GPT-5.4 官方快照', () => {
@@ -63,6 +68,20 @@ describe('useModelWhitelist', () => {
     const models = getModelsByPlatform('antigravity')
 
     expect(models).toContain('gemini-3.1-pro')
+  })
+
+  it('grok 模型列表保留当前模型和兼容别名', () => {
+    const models = getModelsByPlatform('grok')
+    const presets = getPresetMappingsByPlatform('grok')
+
+    expect(models).toContain('grok-4.5')
+    expect(models).toContain('grok-composer-2.5-fast')
+    expect(models).toContain('grok-composer')
+    expect(models).toContain('composer-2.5')
+    expect(presets).toContainEqual(expect.objectContaining({ from: 'grok-latest', to: 'grok-4.5' }))
+    expect(presets).toContainEqual(
+      expect.objectContaining({ from: 'composer-2.5', to: 'grok-composer-2.5-fast' })
+    )
   })
 
   it('whitelist 模式会忽略通配符条目', () => {

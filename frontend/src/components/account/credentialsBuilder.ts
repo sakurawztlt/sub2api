@@ -226,9 +226,12 @@ export function serializeHeaderOverrideRows(rows: HeaderOverrideRow[]): string {
 
 // ========== Grok 自定义转发地址 ==========
 
-const GROK_OFFICIAL_BASE_URL_HOSTS = new Set(['api.x.ai', 'cli-chat-proxy.grok.com'])
+const GROK_DEFAULT_GATEWAY_HOST = 'cli-chat-proxy.grok.com'
 
-/** 官方地址视为默认；只有可解析的第三方 host 才算显式自定义上游。 */
+/**
+ * CLI 网关是 OAuth 凭证的默认端点；官方 API、区域 API 与第三方端点都应
+ * 作为运营方显式选择回显，便于在单端点异常时切换。
+ */
 export function isCustomGrokBaseUrl(value: unknown): boolean {
   if (typeof value !== 'string') return false
   const trimmed = value.trim()
@@ -239,8 +242,22 @@ export function isCustomGrokBaseUrl(value: unknown): boolean {
   } catch {
     return false
   }
-  return !GROK_OFFICIAL_BASE_URL_HOSTS.has(parsed.hostname.toLowerCase())
+  return parsed.hostname.toLowerCase() !== GROK_DEFAULT_GATEWAY_HOST
 }
+
+export interface GrokBaseUrlPreset {
+  labelKey?: 'cli' | 'official'
+  label?: string
+  url: string
+}
+
+export const GROK_BASE_URL_PRESETS: GrokBaseUrlPreset[] = [
+  { labelKey: 'cli', url: 'https://cli-chat-proxy.grok.com/v1' },
+  { labelKey: 'official', url: 'https://api.x.ai/v1' },
+  { label: 'us-east-1', url: 'https://us-east-1.api.x.ai/v1' },
+  { label: 'us-west-2', url: 'https://us-west-2.api.x.ai/v1' },
+  { label: 'eu-west-1', url: 'https://eu-west-1.api.x.ai/v1' }
+]
 
 /**
  * 将请求头覆写写入 credentials。
