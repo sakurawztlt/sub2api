@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 )
 
 // TransformGeminiToClaude 将 Gemini 响应转换为 Claude 格式（非流式）
@@ -293,7 +295,7 @@ func (p *NonStreamingProcessor) buildResponse(geminiResp *GeminiResponse, respon
 		respID = geminiResp.ResponseID
 	}
 	if respID == "" {
-		respID = "msg_" + generateRandomID()
+		respID = claude.GenerateMessageID()
 	}
 
 	return &ClaudeResponse{

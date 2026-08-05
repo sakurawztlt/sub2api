@@ -80,6 +80,17 @@ func TestGenerateRandomID_Length(t *testing.T) {
 	}
 }
 
+func TestProcessorsGenerateAnthropicMessageIDs(t *testing.T) {
+	const messageIDPattern = `^msg_01[A-Za-z0-9]{22}$`
+
+	nonStreaming := NewNonStreamingProcessor().Process(&GeminiResponse{}, "", "claude-sonnet-4-5")
+	require.Regexp(t, messageIDPattern, nonStreaming.ID)
+
+	streaming := NewStreamingProcessor("claude-sonnet-4-5")
+	messageStart := streaming.emitMessageStart(&V1InternalResponse{})
+	require.Regexp(t, `"id":"msg_01[A-Za-z0-9]{22}"`, string(messageStart))
+}
+
 func TestGenerateRandomID_ConcurrentUniqueness(t *testing.T) {
 	// 验证并发调用不会产生重复 ID
 	const goroutines = 100

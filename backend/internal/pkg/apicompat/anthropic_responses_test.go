@@ -236,7 +236,7 @@ func TestResponsesToAnthropic_TextOnly(t *testing.T) {
 	anth := ResponsesToAnthropic(resp, "claude-opus-4-6")
 	// The Anthropic-facing id is synthesised (msg_01...), NOT the upstream
 	// OpenAI resp_<hex>. Leaking resp_ would reveal B-track impersonation.
-	assert.True(t, strings.HasPrefix(anth.ID, "msg_01"), "id should start with msg_01, got %s", anth.ID)
+	assert.Regexp(t, `^msg_01[A-Za-z0-9]{22}$`, anth.ID, "id should match Anthropic message shape")
 	assert.NotEqual(t, "resp_123", anth.ID)
 	assert.Equal(t, "claude-opus-4-6", anth.Model)
 	assert.Equal(t, "end_turn", AnthropicStopReasonString(anth.StopReason))

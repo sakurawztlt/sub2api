@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"strings"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 )
 
 // BlockType 内容块类型
@@ -195,7 +197,7 @@ func (p *StreamingProcessor) emitMessageStart(v1Resp *V1InternalResponse) []byte
 		responseID = v1Resp.Response.ResponseID
 	}
 	if responseID == "" {
-		responseID = "msg_" + generateRandomID()
+		responseID = claude.GenerateMessageID()
 	}
 
 	var usageValue any = usage

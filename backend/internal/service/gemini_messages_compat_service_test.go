@@ -741,6 +741,7 @@ func TestGeminiMessagesHandleStreamingResponse_ClosesToolBlockBeforeText(t *test
 	result, err := svc.handleStreamingResponse(c, resp, time.Now(), "claude-3-5-sonnet")
 	require.NoError(t, err)
 	require.NotNil(t, result)
+	require.Regexp(t, `"id":"msg_01[A-Za-z0-9]{22}"`, rec.Body.String())
 
 	events := parseAnthropicContentBlockEvents(t, rec.Body.String())
 
@@ -778,6 +779,11 @@ func TestGeminiMessagesHandleStreamingResponse_ClosesToolBlockBeforeText(t *test
 	require.True(t, textStarted, "expected a text content block to be emitted after the tool call")
 	require.True(t, toolClosedBeforeText, "tool_use block must be closed before the text block starts")
 	require.Equal(t, -1, open, "stream ended with a content block still open")
+}
+
+func TestConvertGeminiToClaudeMessage_UsesAnthropicMessageID(t *testing.T) {
+	response, _ := convertGeminiToClaudeMessage(map[string]any{}, "claude-sonnet-4-5", nil)
+	require.Regexp(t, `^msg_01[A-Za-z0-9]{22}$`, response["id"])
 }
 
 type anthropicContentBlockEvent struct {
