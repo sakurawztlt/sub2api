@@ -3784,7 +3784,6 @@ import {
 	getDefaultVideoPreviewPrice,
 	getImagePricePlaceholder,
 	getVideoPricePlaceholder,
-	imagePricingI18nKey,
 	supportsImagePricingPlatform,
 	supportsVideoPricingPlatform,
 	videoPricingI18nKey,
