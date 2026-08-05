@@ -233,12 +233,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	var upstreamReq *http.Request
 	if account.Platform == PlatformGrok {
-		upstreamModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
-		if originalModel != "" {
-			if mappedModel := normalizeOpenAIModelForUpstream(account, account.GetMappedModel(originalModel)); mappedModel != "" {
-				upstreamModel = mappedModel
-			}
-		}
+		upstreamModel := resolveOpenAIWSTurnUpstreamModel(account, body, originalModel)
 		if upstreamModel == "" {
 			upstreamModel = "grok-4.3"
 		}
@@ -325,7 +320,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	needModelReplace := false
 	var mappedModelBytes []byte
 	if originalModel != "" {
-		mappedModel = normalizeOpenAIModelForUpstream(account, account.GetMappedModel(originalModel))
+		mappedModel = resolveOpenAIWSTurnUpstreamModel(account, body, originalModel)
 		needModelReplace = mappedModel != "" && mappedModel != originalModel
 		if needModelReplace {
 			mappedModelBytes = []byte(mappedModel)

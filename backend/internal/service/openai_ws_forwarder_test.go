@@ -6,6 +6,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestResolveOpenAIWSTurnUpstreamModel(t *testing.T) {
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{"public-alias": "account-target"},
+		},
+	}
+
+	t.Run("payload model already contains channel and account mapping", func(t *testing.T) {
+		got := resolveOpenAIWSTurnUpstreamModel(account, []byte(`{"model":"channel-target"}`), "public-alias")
+		require.Equal(t, "channel-target", got)
+	})
+
+	t.Run("missing payload model falls back to account mapping", func(t *testing.T) {
+		got := resolveOpenAIWSTurnUpstreamModel(account, []byte(`{}`), "public-alias")
+		require.Equal(t, "account-target", got)
+	})
+}
+
 // TestIsOpenAIWSTokenEvent_TerminalEventsExcluded 覆盖 isOpenAIWSTokenEvent 的回归用例。
 // 重点验证终止事件（response.completed / response.done）不再被当作 token event，
 // 否则当上游没有可识别的 delta 时，firstTokenMs 会被填到终止时刻，
