@@ -79,6 +79,25 @@ func TestInjectSiteTitle(t *testing.T) {
 		assert.Equal(t, string(html), string(result))
 	})
 
+	t.Run("escapes_html_in_site_name", func(t *testing.T) {
+		html := []byte(`<html><head><title>Sub2API - AI API Gateway</title></head><body></body></html>`)
+		settingsJSON := []byte(`{"site_name":"</title><script>alert(1)</script><title>"}`)
+
+		result := injectSiteTitle(html, settingsJSON)
+
+		assert.NotContains(t, string(result), "<script>")
+		assert.Contains(t, string(result), "&lt;/title&gt;&lt;script&gt;alert(1)&lt;/script&gt;&lt;title&gt;")
+	})
+
+	t.Run("escapes_ampersand_in_site_name", func(t *testing.T) {
+		html := []byte(`<html><head><title>Sub2API</title></head><body></body></html>`)
+		settingsJSON := []byte(`{"site_name":"A&B"}`)
+
+		result := injectSiteTitle(html, settingsJSON)
+
+		assert.Contains(t, string(result), "<title>A&amp;B - AI API Gateway</title>")
+	})
+
 	t.Run("preserves_rest_of_html", func(t *testing.T) {
 		html := []byte(`<html><head><meta charset="UTF-8"><title>Sub2API</title><script src="app.js"></script></head><body><div id="app"></div></body></html>`)
 		settingsJSON := []byte(`{"site_name":"TestSite"}`)
@@ -89,6 +108,41 @@ func TestInjectSiteTitle(t *testing.T) {
 		assert.Contains(t, string(result), `<script src="app.js"></script>`)
 		assert.Contains(t, string(result), `<div id="app"></div>`)
 		assert.Contains(t, string(result), "<title>TestSite - AI API Gateway</title>")
+	})
+}
+
+func TestInjectSiteFavicon(t *testing.T) {
+	t.Run("replaces_favicon_with_site_logo", func(t *testing.T) {
+		html := []byte(`<html><head><link rel="icon" type="image/svg+xml" href="/logo.svg" /></head></html>`)
+		settingsJSON := []byte(`{"site_logo":"https://example.com/custom-logo.png"}`)
+
+		result := injectSiteFavicon(html, settingsJSON)
+
+		assert.Contains(t, string(result), `<link rel="icon" href="https://example.com/custom-logo.png" />`)
+		assert.NotContains(t, string(result), `/logo.svg`)
+	})
+
+	t.Run("supports_relative_and_data_image_urls", func(t *testing.T) {
+		html := []byte(`<link rel="icon" href="/logo.svg" />`)
+
+		assert.Contains(t, string(injectSiteFavicon(html, []byte(`{"site_logo":"/uploads/logo.svg"}`))), `/uploads/logo.svg`)
+		assert.Contains(t, string(injectSiteFavicon(html, []byte(`{"site_logo":"data:image/png;base64,abc"}`))), `data:image/png;base64,abc`)
+	})
+
+	t.Run("rejects_unsafe_logo_urls", func(t *testing.T) {
+		html := []byte(`<link rel="icon" href="/logo.svg" />`)
+
+		result := injectSiteFavicon(html, []byte(`{"site_logo":"javascript:alert(1)"}`))
+
+		assert.Equal(t, string(html), string(result))
+	})
+
+	t.Run("escapes_logo_url_for_html", func(t *testing.T) {
+		html := []byte(`<link rel="icon" href="/logo.svg" />`)
+
+		result := injectSiteFavicon(html, []byte(`{"site_logo":"https://example.com/logo.png?a=1&b=2"}`))
+
+		assert.Contains(t, string(result), `a=1&amp;b=2`)
 	})
 }
 
