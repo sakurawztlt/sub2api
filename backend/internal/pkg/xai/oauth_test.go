@@ -116,6 +116,17 @@ func TestValidateXAIURLsAllowOfficialOAuthAndGatewayHosts(t *testing.T) {
 	require.Equal(t, DefaultCLIBaseURL+"/chat/completions", chatURL)
 }
 
+func TestBuildVideoURLRejectsPathSemanticRequestIDs(t *testing.T) {
+	for _, requestID := range []string{".", "..", "video\x00id", "video\r\nid"} {
+		_, err := BuildVideoURL(DefaultBaseURL, requestID)
+		require.Error(t, err, "request id %q must be rejected", requestID)
+	}
+
+	got, err := BuildVideoURL(DefaultBaseURL, "video_123")
+	require.NoError(t, err)
+	require.Equal(t, DefaultBaseURL+"/videos/video_123", got)
+}
+
 func TestValidateXAIURLsRejectArbitraryHostsByDefault(t *testing.T) {
 	_, err := ValidateOAuthEndpointURL("https://auth.example.test/oauth2/token")
 	require.Error(t, err)

@@ -7816,31 +7816,66 @@ func resolveOpenAICompactSessionID(c *gin.Context, body []byte) string {
 }
 
 func openAIResponsesRequestPathSuffix(c *gin.Context) string {
-	if c == nil || c.Request == nil || c.Request.URL == nil {
+	rawSuffix, recognized := rawOpenAIResponsesRequestPathSuffix(c)
+	if !recognized {
 		return ""
 	}
-	normalizedPath := strings.TrimRight(strings.TrimSpace(c.Request.URL.Path), "/")
-	if normalizedPath == "" {
-		return ""
-	}
-	idx := strings.LastIndex(normalizedPath, "/responses")
-	if idx < 0 {
-		return ""
-	}
-	suffix := normalizedPath[idx+len("/responses"):]
-	if suffix == "" || suffix == "/" {
-		return ""
-	}
-	if !strings.HasPrefix(suffix, "/") {
+	suffix, ok := sanitizedUpstreamPathSuffix(rawSuffix)
+	if !ok {
 		return ""
 	}
 	return suffix
 }
 
+// IsForwardableOpenAIResponsesRequestPath lets the route reject malformed
+// suffixes before account scheduling or upstream forwarding.
+func IsForwardableOpenAIResponsesRequestPath(c *gin.Context) bool {
+	rawSuffix, recognized := rawOpenAIResponsesRequestPathSuffix(c)
+	if !recognized {
+		return false
+	}
+	_, ok := sanitizedUpstreamPathSuffix(rawSuffix)
+	return ok
+}
+
+func rawOpenAIResponsesRequestPathSuffix(c *gin.Context) (string, bool) {
+	if c == nil || c.Request == nil || c.Request.URL == nil {
+		return "", false
+	}
+	requestPath := c.Request.URL.Path
+	if requestPath != strings.TrimSpace(requestPath) || strings.HasSuffix(requestPath, "//") {
+		return "", false
+	}
+	normalizedPath := strings.TrimSuffix(requestPath, "/")
+	for _, marker := range []string{
+		"/backend-api/codex/responses",
+		"/v1/responses",
+		"/responses",
+	} {
+		searchFrom := 0
+		for searchFrom < len(normalizedPath) {
+			relativeIndex := strings.Index(normalizedPath[searchFrom:], marker)
+			if relativeIndex < 0 {
+				break
+			}
+			idx := searchFrom + relativeIndex
+			suffixStart := idx + len(marker)
+			if suffixStart == len(normalizedPath) {
+				return "", true
+			}
+			if normalizedPath[suffixStart] == '/' {
+				return normalizedPath[suffixStart:], true
+			}
+			searchFrom = idx + 1
+		}
+	}
+	return "", false
+}
+
 func appendOpenAIResponsesRequestPathSuffix(baseURL, suffix string) string {
 	trimmedBase := strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	trimmedSuffix := strings.TrimSpace(suffix)
-	if trimmedBase == "" || trimmedSuffix == "" {
+	trimmedSuffix, ok := sanitizedUpstreamPathSuffix(suffix)
+	if !ok || trimmedBase == "" || trimmedSuffix == "" {
 		return trimmedBase
 	}
 	return trimmedBase + trimmedSuffix

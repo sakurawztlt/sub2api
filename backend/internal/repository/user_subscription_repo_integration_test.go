@@ -497,6 +497,16 @@ func (s *UserSubscriptionRepoSuite) TestActivateWindows() {
 	s.Require().NotNil(got.WeeklyWindowStart)
 	s.Require().NotNil(got.MonthlyWindowStart)
 	s.Require().WithinDuration(activateAt, *got.DailyWindowStart, time.Microsecond)
+
+	// Activation is first-writer-wins so concurrent maintenance cannot shift
+	// already established quota windows.
+	later := activateAt.Add(time.Hour)
+	s.Require().NoError(s.repo.ActivateWindows(s.ctx, sub.ID, later))
+	again, err := s.repo.GetByID(s.ctx, sub.ID)
+	s.Require().NoError(err)
+	s.Require().WithinDuration(activateAt, *again.DailyWindowStart, time.Microsecond)
+	s.Require().WithinDuration(activateAt, *again.WeeklyWindowStart, time.Microsecond)
+	s.Require().WithinDuration(activateAt, *again.MonthlyWindowStart, time.Microsecond)
 }
 
 func (s *UserSubscriptionRepoSuite) TestResetDailyUsage() {

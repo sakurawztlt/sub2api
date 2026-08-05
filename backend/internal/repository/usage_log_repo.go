@@ -2933,11 +2933,11 @@ func shouldUseFastUsageLogTotal(filters UsageLogFilters) bool {
 	if filters.ExactTotal {
 		return false
 	}
-	// 强选择过滤下记录集通常较小，保留精确总数。
+	// 用户、密钥或账号过滤下记录集通常较小，保留精确总数；
+	// request_id 与其他条件沿用快速分页，除非调用方显式要求 ExactTotal。
 	return filters.UserID == 0 &&
 		filters.APIKeyID == 0 &&
-		filters.AccountID == 0 &&
-		strings.TrimSpace(filters.RequestID) == ""
+		filters.AccountID == 0
 }
 
 // UsageStats represents usage statistics

@@ -24,6 +24,9 @@ type resetQuotaUserSubRepoStub struct {
 	resetDailyErr      error
 	resetWeeklyErr     error
 	resetMonthlyErr    error
+	dailyWindowStart   time.Time
+	weeklyWindowStart  time.Time
+	monthlyWindowStart time.Time
 }
 
 func (r *resetQuotaUserSubRepoStub) GetByID(_ context.Context, id int64) (*UserSubscription, error) {
@@ -36,6 +39,7 @@ func (r *resetQuotaUserSubRepoStub) GetByID(_ context.Context, id int64) (*UserS
 
 func (r *resetQuotaUserSubRepoStub) ResetDailyUsage(_ context.Context, _ int64, windowStart time.Time) error {
 	r.resetDailyCalled = true
+	r.dailyWindowStart = windowStart
 	if r.resetDailyErr == nil && r.sub != nil {
 		r.sub.DailyUsageUSD = 0
 		r.sub.DailyWindowStart = &windowStart
@@ -43,13 +47,23 @@ func (r *resetQuotaUserSubRepoStub) ResetDailyUsage(_ context.Context, _ int64, 
 	return r.resetDailyErr
 }
 
-func (r *resetQuotaUserSubRepoStub) ResetWeeklyUsage(_ context.Context, _ int64, _ time.Time) error {
+func (r *resetQuotaUserSubRepoStub) ResetWeeklyUsage(_ context.Context, _ int64, windowStart time.Time) error {
 	r.resetWeeklyCalled = true
+	r.weeklyWindowStart = windowStart
+	if r.resetWeeklyErr == nil && r.sub != nil {
+		r.sub.WeeklyUsageUSD = 0
+		r.sub.WeeklyWindowStart = &windowStart
+	}
 	return r.resetWeeklyErr
 }
 
-func (r *resetQuotaUserSubRepoStub) ResetMonthlyUsage(_ context.Context, _ int64, _ time.Time) error {
+func (r *resetQuotaUserSubRepoStub) ResetMonthlyUsage(_ context.Context, _ int64, windowStart time.Time) error {
 	r.resetMonthlyCalled = true
+	r.monthlyWindowStart = windowStart
+	if r.resetMonthlyErr == nil && r.sub != nil {
+		r.sub.MonthlyUsageUSD = 0
+		r.sub.MonthlyWindowStart = &windowStart
+	}
 	return r.resetMonthlyErr
 }
 
@@ -62,6 +76,8 @@ func TestAdminResetQuota_ResetBoth(t *testing.T) {
 		sub: &UserSubscription{ID: 1, UserID: 10, GroupID: 20},
 	}
 	svc := newResetQuotaSvc(stub)
+	resetAt := time.Date(2026, 7, 1, 10, 37, 42, 123, time.UTC)
+	svc.now = func() time.Time { return resetAt }
 
 	result, err := svc.AdminResetQuota(context.Background(), 1, true, true, false)
 
@@ -70,6 +86,10 @@ func TestAdminResetQuota_ResetBoth(t *testing.T) {
 	require.True(t, stub.resetDailyCalled, "应调用 ResetDailyUsage")
 	require.True(t, stub.resetWeeklyCalled, "应调用 ResetWeeklyUsage")
 	require.False(t, stub.resetMonthlyCalled, "不应调用 ResetMonthlyUsage")
+	require.Equal(t, resetAt, stub.dailyWindowStart)
+	require.Equal(t, resetAt, stub.weeklyWindowStart)
+	require.Equal(t, resetAt, *result.DailyWindowStart)
+	require.Equal(t, resetAt, *result.WeeklyWindowStart)
 }
 
 func TestAdminResetQuota_ResetDailyOnly(t *testing.T) {
@@ -170,6 +190,30 @@ func TestAdminResetQuota_ResetMonthlyOnly(t *testing.T) {
 	require.False(t, stub.resetDailyCalled, "不应调用 ResetDailyUsage")
 	require.False(t, stub.resetWeeklyCalled, "不应调用 ResetWeeklyUsage")
 	require.True(t, stub.resetMonthlyCalled, "应调用 ResetMonthlyUsage")
+}
+
+func TestAdminResetQuotaPreservesExactManualAnchor(t *testing.T) {
+	startsAt := time.Date(2026, 7, 1, 15, 0, 0, 0, time.UTC)
+	resetAt := time.Date(2026, 7, 1, 10, 37, 42, 123, time.UTC)
+	stub := &resetQuotaUserSubRepoStub{
+		sub: &UserSubscription{
+			ID:        10,
+			UserID:    10,
+			GroupID:   20,
+			StartsAt:  startsAt,
+			ExpiresAt: startsAt.Add(45 * 24 * time.Hour),
+		},
+	}
+	svc := newResetQuotaSvc(stub)
+	svc.now = func() time.Time { return resetAt }
+
+	result, err := svc.AdminResetQuota(context.Background(), 10, false, false, true)
+
+	require.NoError(t, err)
+	require.Equal(t, resetAt, *result.MonthlyWindowStart)
+	boundary, ok := result.automaticWindowStartAt(result.MonthlyWindowStart, 30*24*time.Hour, resetAt.Add(30*24*time.Hour))
+	require.True(t, ok)
+	require.Equal(t, resetAt.Add(30*24*time.Hour), boundary)
 }
 
 func TestAdminResetQuota_ResetMonthlyUsageError(t *testing.T) {

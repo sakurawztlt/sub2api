@@ -373,12 +373,37 @@ func (r *userSubscriptionRepository) UpdateNotes(ctx context.Context, subscripti
 
 func (r *userSubscriptionRepository) ActivateWindows(ctx context.Context, id int64, start time.Time) error {
 	client := clientFromContext(ctx, r.client)
-	_, err := client.UserSubscription.UpdateOneID(id).
+	n, err := client.UserSubscription.Update().
+		Where(
+			usersubscription.IDEQ(id),
+			usersubscription.DailyWindowStartIsNil(),
+			usersubscription.WeeklyWindowStartIsNil(),
+			usersubscription.MonthlyWindowStartIsNil(),
+		).
 		SetDailyWindowStart(start).
 		SetWeeklyWindowStart(start).
 		SetMonthlyWindowStart(start).
 		Save(ctx)
-	return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	if err != nil {
+		return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	}
+	if n > 0 {
+		return nil
+	}
+
+	// A concurrent first-use activation is a successful no-op. Preserve the
+	// winner's exact activation instant instead of letting a later goroutine
+	// overwrite and shift every quota boundary.
+	exists, err := client.UserSubscription.Query().
+		Where(usersubscription.IDEQ(id)).
+		Exist(ctx)
+	if err != nil {
+		return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	}
+	if !exists {
+		return service.ErrSubscriptionNotFound
+	}
+	return nil
 }
 
 func (r *userSubscriptionRepository) ResetDailyUsage(ctx context.Context, id int64, newWindowStart time.Time) error {

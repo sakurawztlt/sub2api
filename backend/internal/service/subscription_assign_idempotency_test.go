@@ -252,24 +252,32 @@ func TestAssignSubscriptionReuseWhenSemanticsMatch(t *testing.T) {
 }
 
 func TestAssignSubscriptionRenewsExpiredExistingSubscription(t *testing.T) {
-	start := time.Now().AddDate(0, 0, -10)
+	renewedAt := time.Date(2026, 7, 15, 11, 23, 45, 0, time.UTC)
+	start := renewedAt.AddDate(0, 0, -10)
 	expiredAt := start.AddDate(0, 0, 3)
+	oldWindowStart := start.Add(12 * time.Hour)
 	groupRepo := &subscriptionGroupRepoStub{
 		group: &Group{ID: 1, SubscriptionType: SubscriptionTypeSubscription},
 	}
 	subRepo := newSubscriptionUserSubRepoStub()
 	subRepo.seed(&UserSubscription{
-		ID:        12,
-		UserID:    3001,
-		GroupID:   1,
-		StartsAt:  start,
-		ExpiresAt: expiredAt,
-		Status:    SubscriptionStatusExpired,
-		Notes:     "old-note",
+		ID:                 12,
+		UserID:             3001,
+		GroupID:            1,
+		StartsAt:           start,
+		ExpiresAt:          expiredAt,
+		Status:             SubscriptionStatusExpired,
+		Notes:              "old-note",
+		DailyWindowStart:   &oldWindowStart,
+		WeeklyWindowStart:  &oldWindowStart,
+		MonthlyWindowStart: &oldWindowStart,
+		DailyUsageUSD:      1.25,
+		WeeklyUsageUSD:     2.5,
+		MonthlyUsageUSD:    5,
 	})
 
 	svc := NewSubscriptionService(groupRepo, subRepo, nil, nil, nil)
-	before := time.Now()
+	svc.now = func() time.Time { return renewedAt }
 	sub, err := svc.AssignSubscription(context.Background(), &AssignSubscriptionInput{
 		UserID:       3001,
 		GroupID:      1,
@@ -277,16 +285,21 @@ func TestAssignSubscriptionRenewsExpiredExistingSubscription(t *testing.T) {
 		AssignedBy:   9,
 		Notes:        "new-note",
 	})
-	after := time.Now()
 	require.NoError(t, err)
 	require.Equal(t, int64(12), sub.ID)
 	require.Equal(t, SubscriptionStatusActive, sub.Status)
-	require.WithinDuration(t, before, sub.StartsAt, after.Sub(before)+time.Second)
-	require.WithinDuration(t, sub.StartsAt.AddDate(0, 0, 30), sub.ExpiresAt, time.Second)
+	require.Equal(t, renewedAt, sub.StartsAt)
+	require.Equal(t, renewedAt.AddDate(0, 0, 30), sub.ExpiresAt)
 	require.Equal(t, "new-note", sub.Notes)
 	require.NotNil(t, sub.AssignedBy)
 	require.Equal(t, int64(9), *sub.AssignedBy)
-	require.WithinDuration(t, sub.StartsAt, sub.AssignedAt, time.Second)
+	require.Equal(t, renewedAt, sub.AssignedAt)
+	require.Equal(t, renewedAt, *sub.DailyWindowStart)
+	require.Equal(t, renewedAt, *sub.WeeklyWindowStart)
+	require.Equal(t, renewedAt, *sub.MonthlyWindowStart)
+	require.Zero(t, sub.DailyUsageUSD)
+	require.Zero(t, sub.WeeklyUsageUSD)
+	require.Zero(t, sub.MonthlyUsageUSD)
 	require.Equal(t, 0, subRepo.createCalls, "expired existing subscription should be renewed in place")
 
 	reused, err := svc.AssignSubscription(context.Background(), &AssignSubscriptionInput{

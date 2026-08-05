@@ -116,6 +116,17 @@ func TestGetModelPricing_UnknownClaudeModelFallsBackToSonnet(t *testing.T) {
 	require.InDelta(t, 3e-6, pricing.InputPricePerToken, 1e-12)
 }
 
+func TestGetModelPricing_GLM52UsesOwnFallbackPrice(t *testing.T) {
+	svc := newTestBillingService()
+
+	got, err := svc.GetModelPricing("glm-5.2")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.InDelta(t, 1.4e-6, got.InputPricePerToken, 1e-12)
+	require.InDelta(t, 4.4e-6, got.OutputPricePerToken, 1e-12)
+	require.InDelta(t, 0.26e-6, got.CacheReadPricePerToken, 1e-12)
+}
+
 func TestGetModelPricing_UnknownOpenAIModelReturnsError(t *testing.T) {
 	svc := newTestBillingService()
 
@@ -149,6 +160,35 @@ func TestGetModelPricing_OpenAIGPT54MiniFallback(t *testing.T) {
 	require.InDelta(t, 4.5e-6, pricing.OutputPricePerToken, 1e-12)
 	require.InDelta(t, 7.5e-8, pricing.CacheReadPricePerToken, 1e-12)
 	require.Zero(t, pricing.LongContextInputThreshold)
+}
+
+func TestGetModelPricing_GPT56UsesDedicatedOfficialFallbacks(t *testing.T) {
+	svc := newTestBillingService()
+	tests := []struct {
+		model                                  string
+		input, cached, cacheWrite, output      float64
+		inputPriority, cachedPriority, outPrio float64
+		cacheWritePriority                     float64
+	}{
+		{model: "gpt-5.6-sol", input: 5e-6, cached: 0.5e-6, cacheWrite: 6.25e-6, output: 30e-6, inputPriority: 10e-6, cachedPriority: 1e-6, outPrio: 60e-6, cacheWritePriority: 12.5e-6},
+		{model: "gpt-5.6-terra", input: 2e-6, cached: 0.2e-6, cacheWrite: 2.5e-6, output: 12e-6, inputPriority: 4e-6, cachedPriority: 0.4e-6, outPrio: 24e-6, cacheWritePriority: 5e-6},
+		{model: "gpt-5.6-luna", input: 0.2e-6, cached: 0.02e-6, cacheWrite: 0.25e-6, output: 1.2e-6, inputPriority: 0.4e-6, cachedPriority: 0.04e-6, outPrio: 2.4e-6, cacheWritePriority: 0.5e-6},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			got, err := svc.GetModelPricing(tt.model)
+			require.NoError(t, err)
+			require.InDelta(t, tt.input, got.InputPricePerToken, 1e-12)
+			require.InDelta(t, tt.cached, got.CacheReadPricePerToken, 1e-12)
+			require.InDelta(t, tt.cacheWrite, got.CacheCreationPricePerToken, 1e-12)
+			require.InDelta(t, tt.output, got.OutputPricePerToken, 1e-12)
+			require.InDelta(t, tt.inputPriority, got.InputPricePerTokenPriority, 1e-12)
+			require.InDelta(t, tt.cachedPriority, got.CacheReadPricePerTokenPriority, 1e-12)
+			require.InDelta(t, tt.cacheWritePriority, got.CacheCreationPricePerTokenPriority, 1e-12)
+			require.InDelta(t, tt.outPrio, got.OutputPricePerTokenPriority, 1e-12)
+			require.Equal(t, 272000, got.LongContextInputThreshold)
+		})
+	}
 }
 
 func TestCalculateCost_OpenAIGPT54LongContextAppliesWholeSessionMultipliers(t *testing.T) {

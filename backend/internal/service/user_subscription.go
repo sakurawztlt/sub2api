@@ -52,24 +52,79 @@ func (s *UserSubscription) IsWindowActivated() bool {
 }
 
 func (s *UserSubscription) NeedsDailyReset() bool {
+	return s.NeedsDailyResetAt(time.Now())
+}
+
+func (s *UserSubscription) NeedsDailyResetAt(now time.Time) bool {
 	if s.DailyWindowStart == nil {
 		return false
 	}
-	return time.Since(*s.DailyWindowStart) >= 24*time.Hour
+	return !now.Before(s.DailyWindowStart.Add(24 * time.Hour))
 }
 
 func (s *UserSubscription) NeedsWeeklyReset() bool {
+	return s.NeedsWeeklyResetAt(time.Now())
+}
+
+func (s *UserSubscription) NeedsWeeklyResetAt(now time.Time) bool {
 	if s.WeeklyWindowStart == nil {
 		return false
 	}
-	return time.Since(*s.WeeklyWindowStart) >= 7*24*time.Hour
+	return !now.Before(s.WeeklyWindowStart.Add(7 * 24 * time.Hour))
 }
 
 func (s *UserSubscription) NeedsMonthlyReset() bool {
+	return s.NeedsMonthlyResetAt(time.Now())
+}
+
+func (s *UserSubscription) NeedsMonthlyResetAt(now time.Time) bool {
 	if s.MonthlyWindowStart == nil {
 		return false
 	}
-	return time.Since(*s.MonthlyWindowStart) >= 30*24*time.Hour
+	return !now.Before(s.MonthlyWindowStart.Add(30 * 24 * time.Hour))
+}
+
+func (s *UserSubscription) canAutomaticallyResetDailyAt(now time.Time) bool {
+	_, ok := s.automaticWindowStartAt(s.DailyWindowStart, 24*time.Hour, now)
+	return ok
+}
+
+func (s *UserSubscription) canAutomaticallyResetWeeklyAt(now time.Time) bool {
+	_, ok := s.automaticWindowStartAt(s.WeeklyWindowStart, 7*24*time.Hour, now)
+	return ok
+}
+
+func (s *UserSubscription) canAutomaticallyResetMonthlyAt(now time.Time) bool {
+	_, ok := s.automaticWindowStartAt(s.MonthlyWindowStart, 30*24*time.Hour, now)
+	return ok
+}
+
+// automaticWindowStartAt returns the latest elapsed window boundary that is
+// still inside the subscription term. The first legacy midnight anchor can be
+// identified unambiguously and is migrated to StartsAt; later/manual anchors
+// remain authoritative.
+func (s *UserSubscription) automaticWindowStartAt(previous *time.Time, period time.Duration, now time.Time) (time.Time, bool) {
+	if previous == nil {
+		return time.Time{}, false
+	}
+
+	anchor := *previous
+	legacyAnchor := startOfDay(s.StartsAt)
+	if legacyAnchor.Before(s.StartsAt) && anchor.Equal(legacyAnchor) {
+		anchor = s.StartsAt
+	}
+
+	next := anchor.Add(period)
+	if now.Before(next) || !next.Before(s.ExpiresAt) {
+		return time.Time{}, false
+	}
+
+	periods := now.Sub(anchor) / period
+	lastPeriodBeforeExpiry := (s.ExpiresAt.Sub(anchor) - 1) / period
+	if periods > lastPeriodBeforeExpiry {
+		periods = lastPeriodBeforeExpiry
+	}
+	return anchor.Add(periods * period), true
 }
 
 func (s *UserSubscription) DailyResetTime() *time.Time {

@@ -132,6 +132,50 @@ func TestGetModelPricing_Gpt54UsesStaticFallbackWhenRemoteMissing(t *testing.T) 
 	require.InDelta(t, 1.5, got.LongContextOutputCostMultiplier, 1e-12)
 }
 
+func TestGetModelPricing_GPT56DedicatedStaticFallbacks(t *testing.T) {
+	svc := &PricingService{pricingData: map[string]*LiteLLMModelPricing{}}
+	tests := []struct {
+		model                     string
+		input, cached, write, out float64
+	}{
+		{model: "gpt-5.6-sol-high", input: 5e-6, cached: 0.5e-6, write: 6.25e-6, out: 30e-6},
+		{model: "gpt-5.6-terra-high", input: 2e-6, cached: 0.2e-6, write: 2.5e-6, out: 12e-6},
+		{model: "gpt-5.6-luna-high", input: 0.2e-6, cached: 0.02e-6, write: 0.25e-6, out: 1.2e-6},
+	}
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			got := svc.GetModelPricing(tt.model)
+			require.NotNil(t, got)
+			require.InDelta(t, tt.input, got.InputCostPerToken, 1e-12)
+			require.InDelta(t, tt.cached, got.CacheReadInputTokenCost, 1e-12)
+			require.InDelta(t, tt.write, got.CacheCreationInputTokenCost, 1e-12)
+			require.InDelta(t, tt.out, got.OutputCostPerToken, 1e-12)
+			require.Equal(t, 272000, got.LongContextInputTokenThreshold)
+		})
+	}
+}
+
+func TestBundledPricingIncludesUpdatedGPT56Rates(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", "resources", "model-pricing", "model_prices_and_context_window.json"))
+	require.NoError(t, err)
+
+	svc := &PricingService{}
+	pricingData, err := svc.parsePricingData(data)
+	require.NoError(t, err)
+
+	terra := pricingData["gpt-5.6-terra"]
+	require.NotNil(t, terra)
+	require.InDelta(t, 2e-6, terra.InputCostPerToken, 1e-12)
+	require.InDelta(t, 12e-6, terra.OutputCostPerToken, 1e-12)
+	require.InDelta(t, 2.5e-6, terra.CacheCreationInputTokenCost, 1e-12)
+	require.Equal(t, 272000, terra.LongContextInputTokenThreshold)
+
+	luna := pricingData["gpt-5.6-luna"]
+	require.NotNil(t, luna)
+	require.InDelta(t, 0.2e-6, luna.InputCostPerToken, 1e-12)
+	require.InDelta(t, 1.2e-6, luna.OutputCostPerToken, 1e-12)
+}
+
 func TestGetModelPricing_Opus48FallsBackToOpus47Family(t *testing.T) {
 	opus47Pricing := &LiteLLMModelPricing{InputCostPerToken: 7}
 	svc := &PricingService{
