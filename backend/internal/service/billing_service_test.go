@@ -201,6 +201,16 @@ func TestGetFallbackPricing_FamilyMatching(t *testing.T) {
 		{name: "openai legacy gpt5.1 codex falls back to gpt5.3 codex", model: "gpt-5.1-codex", expectedInput: 1.5e-6},
 		{name: "openai legacy codex mini latest falls back to gpt5.3 codex", model: "codex-mini-latest", expectedInput: 1.5e-6},
 		{name: "openai unknown no fallback", model: "gpt-unknown-model", expectNilPricing: true},
+		{name: "kimi k3 flagship", model: "kimi-k3", expectedInput: 3e-6},
+		{name: "kimi code bare alias k3", model: "k3", expectedInput: 3e-6},
+		{name: "kimi code bare alias k3-256k", model: "k3-256k", expectedInput: 3e-6},
+		{name: "kimi k3 path suffix", model: "moonshot/kimi-k3", expectedInput: 3e-6},
+		{name: "kimi code bare path suffix", model: "kimi-code/k3", expectedInput: 3e-6},
+		{name: "k3-like unknown no fallback", model: "foo-k3-bar", expectNilPricing: true},
+		{name: "path segment not bare k3 no fallback", model: "vendor/foo-k3", expectNilPricing: true},
+		{name: "kimi-k30 unknown no fallback", model: "kimi-k30", expectNilPricing: true},
+		{name: "embedded kimi-k3 unknown no fallback", model: "foo-kimi-k3-bar", expectNilPricing: true},
+		{name: "kimi-k3 context selector no fallback", model: "kimi-k3[1m]", expectNilPricing: true},
 		{name: "non supported family", model: "qwen-max", expectNilPricing: true},
 	}
 
@@ -216,6 +226,15 @@ func TestGetFallbackPricing_FamilyMatching(t *testing.T) {
 		})
 	}
 }
+
+func TestGetFallbackPricing_KimiK3Rates(t *testing.T) {
+	pricing := newTestBillingService().getFallbackPricing("kimi-k3")
+	require.NotNil(t, pricing)
+	require.InDelta(t, 3e-6, pricing.InputPricePerToken, 1e-12)
+	require.InDelta(t, 15e-6, pricing.OutputPricePerToken, 1e-12)
+	require.InDelta(t, 0.30e-6, pricing.CacheReadPricePerToken, 1e-12)
+}
+
 func TestCalculateCostWithLongContext_BelowThreshold(t *testing.T) {
 	svc := newTestBillingService()
 

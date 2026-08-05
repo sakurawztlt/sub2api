@@ -33,7 +33,8 @@ const (
 // 匹配规则按厂商前缀硬编码：
 //   - anthropic-strict: claude-* / opus-* / sonnet-* / haiku-*
 //   - passback-required: deepseek-* / kimi-* / moonshot-* / glm-* /
-//     minimax-* / minimax-m* / (qwen-|qwen2-|qwen3-|qwen4-)*-thinking
+//     minimax-* / minimax-m* / (qwen-|qwen2-|qwen3-|qwen4-)*-thinking /
+//     Kimi Code bare aliases k3 / k3-256k
 //   - unknown: 其他模型（保守不剥离）
 //
 // 已知局限：前缀贪婪匹配（如 `claudette-`、`claude-foreign-relay-` 也会被分类为
@@ -54,7 +55,9 @@ func ResolveThinkingProtocol(modelID string) ThinkingProtocol {
 	case strings.HasPrefix(id, "deepseek-"),
 		strings.HasPrefix(id, "kimi-"),
 		strings.HasPrefix(id, "moonshot-"),
-		strings.HasPrefix(id, "glm-"):
+		strings.HasPrefix(id, "glm-"),
+		id == "k3",
+		id == "k3-256k":
 		return ThinkingProtocolPassbackRequired
 	}
 	// MiniMax M 系列：走 https://api.minimax.io/anthropic 端点，

@@ -22,6 +22,9 @@ func TestResolveThinkingProtocol(t *testing.T) {
 		{"deepseek-r2-thinking", "deepseek-r2-thinking", ThinkingProtocolPassbackRequired},
 		{"kimi-coding", "kimi-coding-v2", ThinkingProtocolPassbackRequired},
 		{"kimi-k2-thinking", "kimi-k2-thinking", ThinkingProtocolPassbackRequired},
+		{"kimi-k3 platform", "kimi-k3", ThinkingProtocolPassbackRequired},
+		{"kimi code bare k3", "k3", ThinkingProtocolPassbackRequired},
+		{"kimi code bare k3-256k", "k3-256k", ThinkingProtocolPassbackRequired},
 		{"moonshot-v1", "moonshot-v1-32k", ThinkingProtocolPassbackRequired},
 		{"glm-4.6", "glm-4.6", ThinkingProtocolPassbackRequired},
 		{"glm-5.1", "glm-5.1", ThinkingProtocolPassbackRequired},
@@ -45,6 +48,7 @@ func TestResolveThinkingProtocol(t *testing.T) {
 		{"qwen3 non-thinking", "qwen3-32b", ThinkingProtocolUnknown},
 		{"qwen2 non-thinking", "qwen-2-72b", ThinkingProtocolUnknown},
 		{"random vendor", "yi-large", ThinkingProtocolUnknown},
+		{"k3-like unknown", "foo-k3-bar", ThinkingProtocolUnknown},
 		// MiniMax 非 M 系列（如 abab、speech 等其他产品线）—— unknown
 		{"minimax abab non-M", "abab6.5-chat", ThinkingProtocolUnknown},
 		// Doubao 走 OpenAI 协议，不属于本网关 Anthropic 路径——归 unknown

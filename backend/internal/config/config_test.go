@@ -467,6 +467,17 @@ func TestLoadDefaultSecurityToggles(t *testing.T) {
 	if !cfg.Security.ResponseHeaders.Enabled {
 		t.Fatalf("ResponseHeaders.Enabled = false, want true")
 	}
+
+	wantHosts := []string{"api.kimi.com", "api.moonshot.ai", "api.moonshot.cn"}
+	hostSet := make(map[string]struct{}, len(cfg.Security.URLAllowlist.UpstreamHosts))
+	for _, host := range cfg.Security.URLAllowlist.UpstreamHosts {
+		hostSet[host] = struct{}{}
+	}
+	for _, want := range wantHosts {
+		if _, ok := hostSet[want]; !ok {
+			t.Fatalf("URLAllowlist.UpstreamHosts missing %q; got %v", want, cfg.Security.URLAllowlist.UpstreamHosts)
+		}
+	}
 }
 
 func TestLoadDefaultServerMode(t *testing.T) {

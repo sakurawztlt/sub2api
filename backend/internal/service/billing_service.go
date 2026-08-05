@@ -363,6 +363,15 @@ func (s *BillingService) initFallbackPricing() {
 		CacheReadPricePerTokenPriority: 0.3e-6,
 		SupportsCacheBreakdown:         false,
 	}
+
+	// Kimi K3 public API price. Kimi Code's bare k3 aliases have no separate
+	// token price, so they use the same fallback rate.
+	s.fallbackPrices["kimi-k3"] = &ModelPricing{
+		InputPricePerToken:     3e-6,
+		OutputPricePerToken:    15e-6,
+		CacheReadPricePerToken: 0.30e-6,
+		SupportsCacheBreakdown: false,
+	}
 }
 
 // getFallbackPricing 根据模型系列获取回退价格
@@ -413,6 +422,14 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	}
 	if strings.Contains(modelLower, "gemini-3.6-flash") || strings.Contains(modelLower, "gemini-3-6-flash") {
 		return s.fallbackPrices["gemini-3.6-flash"]
+	}
+
+	// Kimi K3 API IDs and Kimi Code bare aliases. Keep this exact to avoid
+	// billing unrelated custom names such as kimi-k30 or foo-k3-bar.
+	if modelLower == "kimi-k3" || strings.HasSuffix(modelLower, "/kimi-k3") ||
+		modelLower == "k3" || modelLower == "k3-256k" ||
+		strings.HasSuffix(modelLower, "/k3") || strings.HasSuffix(modelLower, "/k3-256k") {
+		return s.fallbackPrices["kimi-k3"]
 	}
 
 	// OpenAI 仅匹配已知 GPT-5/Codex 族，避免未知 OpenAI 型号误计价。
