@@ -202,6 +202,7 @@ vi.mock("vue-i18n", async () => {
     "admin.settings.openaiExperimentalScheduler.quotaHeadroomWeight": "额度余量",
     "admin.settings.openaiExperimentalScheduler.previousResponseWeight": "previous_response 粘性",
     "admin.settings.openaiExperimentalScheduler.sessionStickyWeight": "session_hash 粘性",
+    "admin.settings.gatewayForwarding.openaiCodexVersionSyncedValue": "已自动同步官方版本：{version}",
     "admin.settings.site.uploadImage": "上传图片",
     "admin.settings.site.remove": "移除",
     "admin.settings.platformQuota.platform": "平台",
@@ -425,6 +426,9 @@ const baseSettingsResponse = {
   enable_client_dateline_normalization: true,
   antigravity_user_agent_version: "",
   openai_codex_user_agent: "",
+  openai_codex_client_version: "0.145.0",
+  openai_codex_client_version_synced: "0.146.0",
+  openai_codex_version_auto_sync_enabled: true,
   payment_enabled: true,
   payment_min_amount: 1,
   payment_max_amount: 10000,
@@ -780,6 +784,36 @@ describe("admin SettingsView payment visible method controls", () => {
       expect.objectContaining({
         enable_anthropic_cache_ttl_1h_injection: true,
       }),
+    );
+  });
+
+  it("shows the synced Codex version and submits the auto-sync toggle", async () => {
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openGatewayTab(wrapper);
+
+    expect(wrapper.get('[data-testid="openai-codex-version-synced"]').text()).toContain(
+      "0.146.0",
+    );
+
+    const toggle = wrapper.get(
+      '[data-testid="openai-codex-version-auto-sync-toggle"]',
+    );
+    expect((toggle.element as HTMLInputElement).checked).toBe(true);
+    await toggle.setValue(false);
+
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        openai_codex_client_version: "0.145.0",
+        openai_codex_version_auto_sync_enabled: false,
+      }),
+    );
+    expect(updateSettings.mock.calls[0]?.[0]).not.toHaveProperty(
+      "openai_codex_client_version_synced",
     );
   });
 

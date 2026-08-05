@@ -4666,12 +4666,16 @@
                   </p>
                   <p
                     v-if="codexSyncedVersionLabel"
+                    data-testid="openai-codex-version-synced"
                     class="mt-0.5 text-xs text-gray-500 dark:text-gray-400"
                   >
                     {{ codexSyncedVersionLabel }}
                   </p>
                 </div>
-                <Toggle v-model="form.openai_codex_version_auto_sync_enabled" />
+                <Toggle
+                  v-model="form.openai_codex_version_auto_sync_enabled"
+                  data-testid="openai-codex-version-auto-sync-toggle"
+                />
               </div>
 
             </div>
