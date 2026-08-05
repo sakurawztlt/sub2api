@@ -6784,6 +6784,20 @@
                       {{ t("admin.settings.payment.orderTimeoutHint") }}
                     </p>
                   </div>
+                  <div class="sm:col-span-2">
+                    <label class="input-label">{{
+                      t("admin.settings.payment.quickAmounts")
+                    }}</label>
+                    <input
+                      v-model="paymentQuickAmountsInput"
+                      type="text"
+                      class="input"
+                      placeholder="10,20,50,100,200,500"
+                    />
+                    <p class="mt-0.5 text-xs text-gray-400">
+                      {{ t("admin.settings.payment.quickAmountsHint") }}
+                    </p>
+                  </div>
                 </div>
                 <!-- Row 3: Pending orders + load balance + cancel rate limit (all in one row) -->
                 <div class="flex flex-wrap items-end gap-4">
@@ -7740,6 +7754,7 @@ const testEmailAddress = ref("");
 const registrationEmailSuffixWhitelistTags = ref<string[]>([]);
 const registrationEmailSuffixWhitelistDraft = ref("");
 const tablePageSizeOptionsInput = ref("10, 20, 50, 100");
+const paymentQuickAmountsInput = ref("10,20,50,100,200,500,1000,2000,5000");
 
 // Admin API Key 状态
 const adminApiKeyLoading = ref(true);
@@ -7970,6 +7985,7 @@ const form = reactive<SettingsForm>({
   payment_balance_recharge_multiplier: 1,
   payment_subscription_usd_to_cny_rate: 0,
   payment_recharge_fee_rate: 0,
+  payment_quick_amounts: [10, 20, 50, 100, 200, 500, 1000, 2000, 5000],
   payment_enabled_types: [],
   payment_help_image_url: "",
   payment_help_text: "",
@@ -8855,6 +8871,18 @@ function parseTablePageSizeOptionsInput(raw: string): number[] | null {
   return deduped;
 }
 
+function formatPaymentQuickAmounts(amounts: number[]): string {
+  return amounts.join(",");
+}
+
+function parsePaymentQuickAmountsInput(raw: string): number[] | null {
+  const amounts = raw
+    .split(",")
+    .map((token) => Number(token.trim()))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  return amounts.length > 0 ? amounts : null;
+}
+
 // ── codex_cli_only 黑/白名单结构化编辑（行 ↔ JSON）──
 interface CodexClientRow {
   originator: string;
@@ -8988,6 +9016,11 @@ async function loadSettings() {
       Array.isArray(settings.table_page_size_options)
         ? settings.table_page_size_options
         : [10, 20, 50, 100],
+    );
+    paymentQuickAmountsInput.value = formatPaymentQuickAmounts(
+      Array.isArray(settings.payment_quick_amounts)
+        ? settings.payment_quick_amounts
+        : [10, 20, 50, 100, 200, 500, 1000, 2000, 5000],
     );
     registrationEmailSuffixWhitelistDraft.value = "";
     form.smtp_password = "";
@@ -9186,6 +9219,15 @@ async function saveSettings() {
 
     form.table_default_page_size = normalizedTableDefaultPageSize;
     form.table_page_size_options = normalizedTablePageSizeOptions;
+
+    const normalizedPaymentQuickAmounts = parsePaymentQuickAmountsInput(
+      paymentQuickAmountsInput.value,
+    );
+    if (!normalizedPaymentQuickAmounts) {
+      appStore.showError(t("admin.settings.payment.quickAmountsFormatError"));
+      return;
+    }
+    form.payment_quick_amounts = normalizedPaymentQuickAmounts;
 
     const normalizedLoginAgreementDocuments =
       normalizeLoginAgreementDocumentsForSave();
@@ -9491,6 +9533,7 @@ async function saveSettings() {
       payment_subscription_usd_to_cny_rate:
         Number(form.payment_subscription_usd_to_cny_rate) || 0,
       payment_recharge_fee_rate: Number(form.payment_recharge_fee_rate) || 0,
+      payment_quick_amounts: form.payment_quick_amounts,
       payment_enabled_types: form.payment_enabled_types,
       payment_load_balance_strategy: form.payment_load_balance_strategy,
       payment_product_name_prefix: form.payment_product_name_prefix,
@@ -9608,6 +9651,11 @@ async function saveSettings() {
       Array.isArray(updated.table_page_size_options)
         ? updated.table_page_size_options
         : [10, 20, 50, 100],
+    );
+    paymentQuickAmountsInput.value = formatPaymentQuickAmounts(
+      Array.isArray(updated.payment_quick_amounts)
+        ? updated.payment_quick_amounts
+        : [10, 20, 50, 100, 200, 500, 1000, 2000, 5000],
     );
     registrationEmailSuffixWhitelistDraft.value = "";
     form.smtp_password = "";
