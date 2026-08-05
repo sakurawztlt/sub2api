@@ -1050,33 +1050,45 @@ func mergeMap(existing map[string]any, updates map[string]any) map[string]any {
 	return out
 }
 
-// reconcileCRSUpstreamBillingProbeExtra keeps browser-derived usage state
-// write-only. CRS imports cannot inject it, while a sync of the same local
-// Ollama Cloud identity preserves the encrypted session and last snapshot.
 func reconcileCRSUpstreamBillingProbeExtra(
 	existing *Account,
 	targetPlatform, targetType string,
 	targetCredentials map[string]any,
 	extra map[string]any,
 ) {
-	for _, key := range ollamaCloudUsageManagedExtraKeys {
+	for _, key := range []string{
+		UpstreamBillingProbeEnabledExtraKey,
+		UpstreamBillingRateSyncEnabledExtraKey,
+		UpstreamBillingProbeExtraKey,
+		OllamaCloudUsageSessionExtraKey,
+		OllamaCloudUsageAutoRefreshExtraKey,
+		OllamaCloudUsageSnapshotExtraKey,
+	} {
 		delete(extra, key)
 	}
 	if existing == nil {
 		return
 	}
-
-	target := &Account{
-		Platform:    targetPlatform,
-		Type:        targetType,
-		Credentials: targetCredentials,
+	target := &Account{Platform: targetPlatform, Type: targetType, Credentials: targetCredentials}
+	if IsUpstreamBillingProbeIdentity(targetPlatform, targetType) {
+		probeEnabled := false
+		if enabled, ok := existing.Extra[UpstreamBillingProbeEnabledExtraKey]; ok {
+			extra[UpstreamBillingProbeEnabledExtraKey] = enabled
+			probeEnabled, _ = enabled.(bool)
+		}
+		if enabled, ok := existing.Extra[UpstreamBillingRateSyncEnabledExtraKey].(bool); ok {
+			extra[UpstreamBillingRateSyncEnabledExtraKey] = enabled && probeEnabled
+		}
+		if reflect.DeepEqual(upstreamBillingProbeIdentity(existing), upstreamBillingProbeIdentity(target)) {
+			if snapshot, ok := existing.Extra[UpstreamBillingProbeExtraKey]; ok {
+				extra[UpstreamBillingProbeExtraKey] = snapshot
+			}
+		}
 	}
-	if !IsOllamaCloudUsageAccount(existing) ||
-		!IsOllamaCloudUsageAccount(target) ||
-		!reflect.DeepEqual(ollamaCloudUsageIdentity(existing), ollamaCloudUsageIdentity(target)) {
-		return
+	if IsOllamaCloudUsageAccount(existing) && IsOllamaCloudUsageAccount(target) &&
+		reflect.DeepEqual(ollamaCloudUsageIdentity(existing), ollamaCloudUsageIdentity(target)) {
+		preserveOllamaCloudUsageManagedExtra(existing.Extra, extra)
 	}
-	preserveOllamaCloudUsageManagedExtra(existing.Extra, extra)
 }
 
 func (s *CRSSyncService) mapOrCreateProxy(ctx context.Context, enabled bool, cached *[]Proxy, src *crsProxy, defaultName string) (*int64, error) {

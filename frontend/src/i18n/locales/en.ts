@@ -3356,6 +3356,7 @@ export default {
         notes: 'Notes',
         priority: 'Priority',
         billingRateMultiplier: 'Billing Rate',
+        upstreamBillingRate: 'Upstream Declared Rate',
         weight: 'Weight',
         schedulerScore: 'Scheduler Score',
         status: 'Status',
@@ -3373,7 +3374,7 @@ export default {
         baseShort: 'Base',
         stickyShort: 'Sticky',
         ungrouped: 'Ungrouped',
-        hint: 'Displayed as "group / base score / sticky bonus". The base score is computed within the current filtered candidate set and includes priority, load, queue depth, error rate, first-token latency, reset window, quota headroom, and related factors. The sticky bonus applies only when sticky weighting is enabled for previous_response_id or session_hash. Higher scores are preferred.'
+        hint: 'Displayed as "group / base score / sticky bonus". The base score is computed within the current filtered candidate set and includes priority, load, queue depth, error rate, first-token latency, reset window, quota headroom, billing rate, and related factors. The sticky bonus applies only when sticky weighting is enabled for previous_response_id or session_hash. Higher scores are preferred.'
       },
       usageWindowsHint: '"5h / 7d" are the upstream account\'s official rolling usage windows (e.g. OpenAI ChatGPT, Claude). They are imposed by the upstream provider on the account itself — not configured by sub2api, and unrelated to the models you map. Usage resets automatically once each window rolls over, and the limit cannot be lifted from within sub2api.',
       ollamaCloud: {
@@ -3424,6 +3425,43 @@ export default {
           invalid_html: 'Settings page format was not recognized',
           OLLAMA_CLOUD_USAGE_REFRESH_RATE_LIMITED: 'Refresh is limited. Try again in {retry_after_seconds} seconds.'
         }
+      },
+      upstreamBilling: {
+        trustWarning: 'This rate is declared by the upstream site for the current API key. Sub2API cannot verify that it matches actual charges. The upstream site or an intermediary may return forged, stale, or modified data. Verify it against bills, balance changes, and actual usage.',
+        autoProbe: 'Automatically probe upstream declared rate',
+        autoProbeHint: 'Refresh the upstream declared rate on the global interval. This switch alone does not change the account rate.',
+        syncRate: 'Sync upstream declared rate',
+        syncRateHint: 'Update the account rate after each successful probe, using the base rate excluding peak hours. Failed probes or declarations outside the allowed range leave it unchanged. Enabling this also turns on "Automatically probe upstream declared rate".',
+        syncRateManagedHint: 'The current rate is maintained automatically from the upstream declared base rate (excluding peak hours).',
+        syncedRateTooltip: 'This account rate is synchronized from the upstream declared base rate (excluding peak hours)',
+        manualProbe: 'Probe upstream rate now',
+        stale: 'Stale',
+        unsupported: 'Unsupported',
+        failed: 'Failed',
+        notProbed: 'Not probed',
+        groupRate: 'Group default: {value}x',
+        userRate: 'User rate: {value}x',
+        peakRate: 'Peak: {start}-{end}, {value}x ({timezone})',
+        noPeakRate: 'Peak rate: disabled',
+        effectiveRate: 'Current rate: {value}x',
+        updatedAt: 'Updated: {value}',
+        nextProbeAt: 'Next probe: {value}',
+        lastDetectedRate: 'Last detected rate: {value}x',
+        lastDetectedAt: 'Last detected: {value}',
+        elapsedSince: 'Elapsed: {value}',
+        justNow: 'less than 1 minute',
+        minutesAgo: '{count} minutes',
+        hoursAgo: '{count} hours',
+        daysAgo: '{count} days',
+        accountProbeState: 'Automatic detection for this account:',
+        globalProbeState: 'Global probe switch:',
+        enabled: 'On',
+        disabled: 'Off',
+        probeFailed: 'Failed to probe upstream rate',
+        noEligibleAccounts: 'Select API key accounts',
+        batchLimit: 'A batch can probe at most 20 accounts',
+        batchCompleted: 'Probed {count} account(s)',
+        batchPartial: 'Probe partially completed: {success} succeeded, {failed} failed'
       },
       allPrivacyModes: 'All Privacy States',
       privacyUnset: 'Unset',
@@ -3572,6 +3610,7 @@ export default {
         disableScheduling: 'Disable Scheduling',
         resetStatus: 'Reset Status',
         refreshToken: 'Refresh Token',
+        probeUpstreamBilling: 'Probe Upstream Rate',
         resetStatusSuccess: 'Successfully reset {count} account(s) status',
         refreshTokenSuccess: 'Successfully refreshed {count} account(s) token',
         partialSuccess: 'Partially completed: {success} succeeded, {failed} failed'
@@ -3589,6 +3628,7 @@ export default {
         partialSuccess: 'Partially updated: {success} succeeded, {failed} failed',
         failed: 'Bulk update failed',
         noSelection: 'Please select accounts to edit',
+        rateSyncWarning: 'Accounts with upstream rate sync enabled cannot be assigned a manual rate in bulk. Disable sync on the account edit page first.',
         noFieldsSelected: 'Select at least one field to update',
         mixedPlatformWarning: 'Selected accounts span multiple platforms ({platforms}). Model mapping presets shown are combined — ensure mappings are appropriate for each platform.'
       },
@@ -6110,6 +6150,16 @@ export default {
         allowUngroupedKey: 'Allow Ungrouped Key Scheduling',
         allowUngroupedKeyHint: 'When disabled, API Keys not assigned to any group cannot make requests (403 Forbidden). Keep disabled to ensure all Keys belong to a specific group.'
       },
+      upstreamBillingProbe: {
+        title: 'Upstream Rate Auto Detection',
+        description: 'Periodically retrieve rates declared by upstream Sub2API sites. Account rates change only when the separate sync switch is enabled.',
+        enabled: 'Enable global auto detection',
+        enabledHint: 'When enabled, scheduled detection runs only for accounts that also enable automatic detection. Disabling stops all scheduled detection; manual detection remains available.',
+        intervalMinutes: 'Detection interval (minutes)',
+        intervalHint: 'Range: 5–1440 minutes. A successful result remains valid for two detection intervals.',
+        saved: 'Upstream rate auto detection settings saved',
+        saveFailed: 'Failed to save upstream rate auto detection settings'
+      },
       gatewayForwarding: {
         title: 'Request Forwarding',
         description: 'Control how requests are forwarded to upstream OAuth accounts',
@@ -6891,6 +6941,11 @@ export default {
       openaiExperimentalScheduler: {
         title: 'OpenAI experimental scheduler policy',
         description: "Disabled by default. When enabled, this only changes the gateway's experimental account-selection policy for OpenAI traffic; it does not indicate an upstream OpenAI capability.",
+        lowRatePriorityTitle: 'Prefer lower rates',
+        lowRatePriorityDescription: 'When enabled, accounts with lower billing rates are preferred. If rates are equal, account priority, current load, and other scheduling factors are considered. This switch is ignored when the experimental scheduler is enabled.',
+        oauthRateTitle: 'OAuth scheduling reference rate',
+        oauthRatePriorityDescription: 'When a group contains both API Key and OAuth accounts, this rate is used to order OAuth accounts alongside probed API Key billing rates.',
+        oauthRateWeightedDescription: 'When a group contains both API Key and OAuth accounts, this rate is used for OAuth accounts when calculating the billing-rate score.',
         stickyWeightedTitle: 'Sticky weighting',
         stickyWeightedDescription: 'When enabled, previous_response_id and session_hash affinity are scored by the advanced scheduler. When disabled, sticky accounts keep the legacy hard-hit behavior.',
         subscriptionPriorityTitle: 'Subscription priority',
@@ -6906,6 +6961,7 @@ export default {
         ttftWeight: 'TTFT',
         resetWeight: 'Reset window',
         quotaHeadroomWeight: 'Quota headroom',
+        upstreamCostWeight: 'Billing rate',
         previousResponseWeight: 'previous_response sticky',
         sessionStickyWeight: 'session_hash sticky'
       },

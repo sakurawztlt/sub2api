@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -106,9 +107,14 @@ type schedulerTestConcurrencyCache struct {
 	acquireResults  map[int64]bool
 	waitCounts      map[int64]int
 	skipDefaultLoad bool
+	acquiredIDs     *[]int64
+	releasedIDs     *[]int64
 }
 
 func (c schedulerTestConcurrencyCache) AcquireAccountSlot(ctx context.Context, accountID int64, maxConcurrency int, requestID string) (bool, error) {
+	if c.acquiredIDs != nil {
+		*c.acquiredIDs = append(*c.acquiredIDs, accountID)
+	}
 	if c.acquireResults != nil {
 		if result, ok := c.acquireResults[accountID]; ok {
 			return result, nil
@@ -118,6 +124,9 @@ func (c schedulerTestConcurrencyCache) AcquireAccountSlot(ctx context.Context, a
 }
 
 func (c schedulerTestConcurrencyCache) ReleaseAccountSlot(ctx context.Context, accountID int64, requestID string) error {
+	if c.releasedIDs != nil {
+		*c.releasedIDs = append(*c.releasedIDs, accountID)
+	}
 	return nil
 }
 
@@ -321,14 +330,16 @@ func TestOpenAIGatewayService_OpenAIAdvancedSchedulerRuntimeSettings_DBOverrides
 		TTFT:             5,
 		Reset:            6,
 		QuotaHeadroom:    7,
-		PreviousResponse: 8,
-		SessionSticky:    9,
+		UpstreamCost:     8,
+		PreviousResponse: 9,
+		SessionSticky:    10,
 	}
 	repo := &openAIAdvancedSchedulerSettingRepoStub{
 		values: map[string]string{
 			openAIAdvancedSchedulerSettingKey:                       "true",
 			SettingKeyOpenAIAdvancedSchedulerLBTopK:                 "3",
 			SettingKeyOpenAIAdvancedSchedulerWeightPriority:         "2.5",
+			SettingKeyOpenAIAdvancedSchedulerWeightReset:            "0.25",
 			SettingKeyOpenAIAdvancedSchedulerWeightPreviousResponse: "12",
 		},
 	}
@@ -342,8 +353,57 @@ func TestOpenAIGatewayService_OpenAIAdvancedSchedulerRuntimeSettings_DBOverrides
 	weights := svc.openAIWSSchedulerWeightsForRequest(ctx)
 	require.Equal(t, 2.5, weights.Priority)
 	require.Equal(t, 2.0, weights.Load)
+	require.Equal(t, 8.0, weights.UpstreamCost)
+	require.Equal(t, 0.25, weights.Reset)
 	require.Equal(t, 12.0, weights.Previous)
-	require.Equal(t, 9.0, weights.SessionSticky)
+	require.Equal(t, 10.0, weights.SessionSticky)
+}
+
+func TestOpenAIGatewayService_OpenAIAdvancedSchedulerRuntimeSettings_InvalidWeightSumsFallBackToConfig(t *testing.T) {
+	base := config.GatewayOpenAIWSSchedulerScoreWeights{
+		Priority: 1, Load: 2, Queue: 3, ErrorRate: 4, TTFT: 5, Reset: 6,
+		QuotaHeadroom: 7, UpstreamCost: 8, PreviousResponse: 9, SessionSticky: 10,
+	}
+	maxFloat := strconv.FormatFloat(math.MaxFloat64, 'g', -1, 64)
+	tests := []struct {
+		name   string
+		values map[string]string
+	}{
+		{
+			name: "invalid single value",
+			values: map[string]string{
+				SettingKeyOpenAIAdvancedSchedulerWeightPriority: "NaN",
+			},
+		},
+		{
+			name: "base sum overflow",
+			values: map[string]string{
+				SettingKeyOpenAIAdvancedSchedulerWeightPriority: maxFloat,
+				SettingKeyOpenAIAdvancedSchedulerWeightLoad:     maxFloat,
+			},
+		},
+		{
+			name: "sticky total sum overflow",
+			values: map[string]string{
+				SettingKeyOpenAIAdvancedSchedulerWeightPriority:         maxFloat,
+				SettingKeyOpenAIAdvancedSchedulerWeightPreviousResponse: maxFloat,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resetOpenAIAdvancedSchedulerSettingCacheForTest()
+			defer resetOpenAIAdvancedSchedulerSettingCacheForTest()
+			tt.values[openAIAdvancedSchedulerSettingKey] = "true"
+			cfg := &config.Config{}
+			cfg.Gateway.OpenAIWS.SchedulerScoreWeights = base
+			repo := &openAIAdvancedSchedulerSettingRepoStub{values: tt.values}
+			svc := &OpenAIGatewayService{cfg: cfg, rateLimitService: &RateLimitService{settingService: NewSettingService(repo, cfg)}}
+
+			require.Equal(t, (&OpenAIGatewayService{cfg: cfg}).openAIWSSchedulerWeights(), svc.openAIWSSchedulerWeightsForRequest(context.Background()))
+		})
+	}
 }
 
 func TestOpenAIGatewayService_SelectAccountWithScheduler_DefaultDisabledUsesLegacyLoadAwareness(t *testing.T) {
@@ -548,6 +608,7 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_DefaultDisabled_Embeddi
 		OpenAIEndpointCapabilityEmbeddings,
 		false,
 		false,
+		true,
 	)
 	require.NoError(t, err)
 	require.NotNil(t, selection)
@@ -590,6 +651,7 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_DefaultDisabled_AllowsG
 		nil,
 		OpenAIUpstreamTransportAny,
 		OpenAIEndpointCapabilityChatCompletions,
+		false,
 		false,
 		false,
 		PlatformGrok,
@@ -947,6 +1009,7 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_StickyWeightedPreviousR
 		OpenAIEndpointCapabilityChatCompletions,
 		false,
 		false,
+		true,
 		PlatformOpenAI,
 	)
 	require.NoError(t, err)
@@ -969,6 +1032,7 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_StickyWeightedPreviousR
 		OpenAIUpstreamTransportAny,
 		OpenAIEndpointCapabilityChatCompletions,
 		false,
+		true,
 		true,
 		PlatformOpenAI,
 	)
@@ -1112,6 +1176,7 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_Enabled_EmbeddingsSkips
 		OpenAIEndpointCapabilityEmbeddings,
 		false,
 		false,
+		true,
 	)
 	require.NoError(t, err)
 	require.NotNil(t, selection)
@@ -1186,6 +1251,7 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_Enabled_EmbeddingsSkips
 		OpenAIEndpointCapabilityEmbeddings,
 		false,
 		false,
+		true,
 	)
 	require.NoError(t, err)
 	require.NotNil(t, selection)
@@ -1285,10 +1351,10 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionStickyRateLimite
 	ctx := context.Background()
 	groupID := int64(10101)
 	rateLimitedUntil := time.Now().Add(30 * time.Minute)
-	staleSticky := &Account{ID: 31001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0}
-	staleBackup := &Account{ID: 31002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5}
-	freshSticky := &Account{ID: 31001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, RateLimitResetAt: &rateLimitedUntil}
-	freshBackup := &Account{ID: 31002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5}
+	staleSticky := &Account{ID: 31001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}}
+	staleBackup := &Account{ID: 31002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}}
+	freshSticky := &Account{ID: 31001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}, RateLimitResetAt: &rateLimitedUntil}
+	freshBackup := &Account{ID: 31002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}}
 	cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{"openai:session_hash_rate_limited": 31001}}
 	snapshotCache := &openAISnapshotCacheStub{snapshotAccounts: []*Account{staleSticky, staleBackup}, accountsByID: map[int64]*Account{31001: freshSticky, 31002: freshBackup}}
 	snapshotService := &SchedulerSnapshotService{cache: snapshotCache}
@@ -1594,10 +1660,10 @@ func TestOpenAIGatewayService_SelectAccountForModelWithExclusions_SkipsFreshlyRa
 	ctx := context.Background()
 	groupID := int64(10102)
 	rateLimitedUntil := time.Now().Add(30 * time.Minute)
-	stalePrimary := &Account{ID: 32001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0}
-	staleSecondary := &Account{ID: 32002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5}
-	freshPrimary := &Account{ID: 32001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, RateLimitResetAt: &rateLimitedUntil}
-	freshSecondary := &Account{ID: 32002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5}
+	stalePrimary := &Account{ID: 32001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}}
+	staleSecondary := &Account{ID: 32002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}}
+	freshPrimary := &Account{ID: 32001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}, RateLimitResetAt: &rateLimitedUntil}
+	freshSecondary := &Account{ID: 32002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}}
 	snapshotCache := &openAISnapshotCacheStub{snapshotAccounts: []*Account{stalePrimary, staleSecondary}, accountsByID: map[int64]*Account{32001: freshPrimary, 32002: freshSecondary}}
 	snapshotService := &SchedulerSnapshotService{cache: snapshotCache}
 	svc := &OpenAIGatewayService{
@@ -1661,10 +1727,10 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionStickyDBRuntimeR
 	ctx := context.Background()
 	groupID := int64(10103)
 	rateLimitedUntil := time.Now().Add(30 * time.Minute)
-	staleSticky := &Account{ID: 33001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0}
-	staleBackup := &Account{ID: 33002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5}
-	dbSticky := Account{ID: 33001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, RateLimitResetAt: &rateLimitedUntil}
-	dbBackup := Account{ID: 33002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5}
+	staleSticky := &Account{ID: 33001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}}
+	staleBackup := &Account{ID: 33002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}}
+	dbSticky := Account{ID: 33001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}, RateLimitResetAt: &rateLimitedUntil}
+	dbBackup := Account{ID: 33002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}}
 	cache := &schedulerTestGatewayCache{sessionBindings: map[string]int64{"openai:session_hash_db_runtime_recheck": 33001}}
 	snapshotCache := &openAISnapshotCacheStub{
 		snapshotAccounts: []*Account{staleSticky, staleBackup},
@@ -1691,8 +1757,8 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionStickyDBRuntimeR
 func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionStickyQuotaExceededFallsBackToFreshCandidate(t *testing.T) {
 	ctx := context.Background()
 	groupID := int64(10105)
-	staleSticky := &Account{ID: 33101, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0}
-	staleBackup := &Account{ID: 33102, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5}
+	staleSticky := &Account{ID: 33101, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}}
+	staleBackup := &Account{ID: 33102, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}}
 	dbSticky := Account{
 		ID:          33101,
 		Platform:    PlatformOpenAI,
@@ -1701,13 +1767,14 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionStickyQuotaExcee
 		Schedulable: true,
 		Concurrency: 1,
 		Priority:    0,
+		GroupIDs:    []int64{groupID},
 		Extra: map[string]any{
 			"quota_daily_limit": 10.0,
 			"quota_daily_used":  10.0,
 			"quota_daily_start": time.Now().Add(-1 * time.Hour).Format(time.RFC3339),
 		},
 	}
-	dbBackup := Account{ID: 33102, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5}
+	dbBackup := Account{ID: 33102, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}}
 	cache := &stubGatewayCache{sessionBindings: map[string]int64{"openai:session_hash_quota_runtime_recheck": 33101}}
 	snapshotCache := &openAISnapshotCacheStub{
 		snapshotAccounts: []*Account{staleSticky, staleBackup},
@@ -1736,10 +1803,10 @@ func TestOpenAIGatewayService_SelectAccountForModelWithExclusions_DBRuntimeReche
 	ctx := context.Background()
 	groupID := int64(10104)
 	rateLimitedUntil := time.Now().Add(30 * time.Minute)
-	stalePrimary := &Account{ID: 34001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0}
-	staleSecondary := &Account{ID: 34002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5}
-	dbPrimary := Account{ID: 34001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, RateLimitResetAt: &rateLimitedUntil}
-	dbSecondary := Account{ID: 34002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5}
+	stalePrimary := &Account{ID: 34001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}}
+	staleSecondary := &Account{ID: 34002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}}
+	dbPrimary := Account{ID: 34001, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}, RateLimitResetAt: &rateLimitedUntil}
+	dbSecondary := Account{ID: 34002, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 5, GroupIDs: []int64{groupID}}
 	snapshotCache := &openAISnapshotCacheStub{
 		snapshotAccounts: []*Account{stalePrimary, staleSecondary},
 		accountsByID:     map[int64]*Account{34001: stalePrimary, 34002: staleSecondary},
@@ -1756,6 +1823,101 @@ func TestOpenAIGatewayService_SelectAccountForModelWithExclusions_DBRuntimeReche
 	require.NoError(t, err)
 	require.NotNil(t, account)
 	require.Equal(t, int64(34002), account.ID)
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_DBFreshGroupRecheckReleasesMovedAccount(t *testing.T) {
+	ctx := context.Background()
+	groupID, otherGroupID := int64(10105), int64(10106)
+	stalePrimary := &Account{ID: 34101, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}}
+	staleBackup := &Account{ID: 34102, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 10, GroupIDs: []int64{groupID}}
+	dbPrimary := *stalePrimary
+	dbPrimary.GroupIDs = []int64{otherGroupID}
+	dbBackup := *staleBackup
+	snapshotCache := &openAISnapshotCacheStub{
+		snapshotAccounts: []*Account{stalePrimary, staleBackup},
+		accountsByID:     map[int64]*Account{stalePrimary.ID: stalePrimary, staleBackup.ID: staleBackup},
+	}
+	acquiredIDs, releasedIDs := []int64{}, []int64{}
+	cfg := &config.Config{RunMode: config.RunModeStandard}
+	svc := &OpenAIGatewayService{
+		accountRepo:       schedulerTestOpenAIAccountRepo{accounts: []Account{dbPrimary, dbBackup}},
+		cfg:               cfg,
+		schedulerSnapshot: &SchedulerSnapshotService{cache: snapshotCache},
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{
+			acquiredIDs: &acquiredIDs,
+			releasedIDs: &releasedIDs,
+		}),
+	}
+	scheduler := &defaultOpenAIAccountScheduler{service: svc}
+
+	selection, _, err := scheduler.tryAcquireOpenAISelectionOrder(ctx, OpenAIAccountScheduleRequest{
+		GroupID: &groupID, Platform: PlatformOpenAI, RequestedModel: "gpt-5.1",
+	}, []openAIAccountCandidateScore{
+		{account: stalePrimary, loadInfo: &AccountLoadInfo{AccountID: stalePrimary.ID}},
+		{account: staleBackup, loadInfo: &AccountLoadInfo{AccountID: staleBackup.ID}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, staleBackup.ID, selection.Account.ID)
+	require.Equal(t, []int64{stalePrimary.ID, staleBackup.ID}, acquiredIDs)
+	require.Equal(t, []int64{stalePrimary.ID}, releasedIDs)
+	selection.ReleaseFunc()
+}
+
+func TestOpenAIGatewayService_SelectAccountWithLoadAwareness_DBFreshGroupRecheckWaitsOnValidAccount(t *testing.T) {
+	ctx := context.Background()
+	groupID, otherGroupID := int64(10107), int64(10108)
+	stalePrimary := &Account{ID: 34201, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 0, GroupIDs: []int64{groupID}}
+	staleBackup := &Account{ID: 34202, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 10, GroupIDs: []int64{groupID}}
+	dbPrimary := *stalePrimary
+	dbPrimary.GroupIDs = []int64{otherGroupID}
+	dbBackup := *staleBackup
+	snapshotCache := &openAISnapshotCacheStub{
+		snapshotAccounts: []*Account{stalePrimary, staleBackup},
+		accountsByID:     map[int64]*Account{stalePrimary.ID: stalePrimary, staleBackup.ID: staleBackup},
+	}
+	cfg := &config.Config{RunMode: config.RunModeStandard}
+	cfg.Gateway.Scheduling.LoadBatchEnabled = true
+	svc := &OpenAIGatewayService{
+		accountRepo:       schedulerTestOpenAIAccountRepo{accounts: []Account{dbPrimary, dbBackup}},
+		cfg:               cfg,
+		schedulerSnapshot: &SchedulerSnapshotService{cache: snapshotCache},
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{
+			acquireResults: map[int64]bool{staleBackup.ID: false},
+		}),
+	}
+
+	selection, err := svc.SelectAccountWithLoadAwareness(ctx, &groupID, "", "gpt-5.1", nil)
+	require.NoError(t, err)
+	require.NotNil(t, selection.WaitPlan)
+	require.Equal(t, staleBackup.ID, selection.Account.ID)
+	require.Equal(t, staleBackup.ID, selection.WaitPlan.AccountID)
+}
+
+func TestOpenAIGatewayService_RecheckSelectedOpenAIAccountFromDB_SimpleModeUsesFullPool(t *testing.T) {
+	grouped := Account{ID: 34301, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Status: StatusActive, Schedulable: true, Concurrency: 1, GroupIDs: []int64{99}}
+	svc := &OpenAIGatewayService{
+		accountRepo:       schedulerTestOpenAIAccountRepo{accounts: []Account{grouped}},
+		cfg:               &config.Config{RunMode: config.RunModeSimple},
+		schedulerSnapshot: &SchedulerSnapshotService{cache: &openAISnapshotCacheStub{}},
+	}
+	requestedGroupID := int64(100)
+
+	for _, groupID := range []*int64{nil, &requestedGroupID} {
+		fresh := svc.recheckSelectedOpenAIAccountFromDB(context.Background(), &grouped, groupID, PlatformOpenAI, "gpt-5.1", false, "")
+		require.NotNil(t, fresh)
+		require.Equal(t, grouped.ID, fresh.ID)
+	}
+
+	ungrouped := grouped
+	ungrouped.ID++
+	ungrouped.GroupIDs = nil
+	standardSvc := &OpenAIGatewayService{
+		accountRepo:       schedulerTestOpenAIAccountRepo{accounts: []Account{grouped, ungrouped}},
+		cfg:               &config.Config{RunMode: config.RunModeStandard},
+		schedulerSnapshot: &SchedulerSnapshotService{cache: &openAISnapshotCacheStub{}},
+	}
+	require.Nil(t, standardSvc.recheckSelectedOpenAIAccountFromDB(context.Background(), &grouped, nil, PlatformOpenAI, "gpt-5.1", false, ""))
+	require.NotNil(t, standardSvc.recheckSelectedOpenAIAccountFromDB(context.Background(), &ungrouped, nil, PlatformOpenAI, "gpt-5.1", false, ""))
 }
 
 func TestOpenAIGatewayService_SelectAccountWithScheduler_PreviousResponseSticky(t *testing.T) {
@@ -2157,6 +2319,12 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionStickyEscapeDisa
 func TestOpenAIGatewayService_SelectAccountWithScheduler_SubscriptionPriorityChoosesSubscriptionPoolFirst(t *testing.T) {
 	ctx := context.Background()
 	groupID := int64(10120)
+	cheapAPIKey := upstreamCostTestAccount(21602, UpstreamBillingProbeStatusOK, 0.01, time.Now().Add(-time.Minute), 30*time.Minute)
+	cheapAPIKey.Status = StatusActive
+	cheapAPIKey.Schedulable = true
+	cheapAPIKey.Concurrency = 1
+	cheapAPIKey.Priority = 0
+	cheapAPIKey.GroupIDs = []int64{groupID}
 	accounts := []Account{
 		{
 			ID:          21601,
@@ -2169,16 +2337,7 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SubscriptionPriorityCho
 			GroupIDs:    []int64{groupID},
 			Credentials: map[string]any{"plan_type": "plus"},
 		},
-		{
-			ID:          21602,
-			Platform:    PlatformOpenAI,
-			Type:        AccountTypeAPIKey,
-			Status:      StatusActive,
-			Schedulable: true,
-			Concurrency: 1,
-			Priority:    0,
-			GroupIDs:    []int64{groupID},
-		},
+		*cheapAPIKey,
 	}
 	concurrencyCache := schedulerTestConcurrencyCache{
 		acquireResults: map[int64]bool{21601: true, 21602: true},
@@ -2187,10 +2346,12 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SubscriptionPriorityCho
 			21602: {AccountID: 21602, LoadRate: 0, WaitingCount: 0},
 		},
 	}
+	cfg := newSchedulerTestSubscriptionPriorityConfig()
+	cfg.Gateway.OpenAIWS.SchedulerScoreWeights.UpstreamCost = 100
 	svc := &OpenAIGatewayService{
 		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts},
 		cache:              &schedulerTestGatewayCache{},
-		cfg:                newSchedulerTestSubscriptionPriorityConfig(),
+		cfg:                cfg,
 		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true", "", "true"),
 		concurrencyService: NewConcurrencyService(concurrencyCache),
 	}

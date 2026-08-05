@@ -3391,6 +3391,7 @@ export default {
         notes: '备注',
         priority: '优先级',
         billingRateMultiplier: '账号倍率',
+        upstreamBillingRate: '上游声明倍率',
         weight: '权重',
         schedulerScore: '调度权值',
         status: '状态',
@@ -3408,7 +3409,7 @@ export default {
         baseShort: '普通',
         stickyShort: '粘性',
         ungrouped: '未分组',
-        hint: '显示格式为“分组名 / 基础分 / 粘性加分”。基础分按当前筛选条件限定的候选账号计算，包含优先级、负载、排队、错误率、首包延迟、重置窗口、额度余量等因子；粘性加分只在开启粘性加权时用于 previous_response_id 或 session_hash。分数越大越优先。'
+        hint: '显示格式为“分组名 / 基础分 / 粘性加分”。基础分按当前筛选条件限定的候选账号计算，包含优先级、负载、排队、错误率、首包延迟、重置窗口、额度余量、计费倍率等因子；粘性加分只在开启粘性加权时用于 previous_response_id 或 session_hash。分数越大越优先。'
       },
       usageWindowsHint: '“5h / 7d”是上游账号（如 OpenAI ChatGPT、Claude）官方的滚动用量窗口限制，由上游对账号设定，并非 sub2api 配置，也与你映射的模型无关。窗口滚动到期后用量会自动重置，无法在 sub2api 端解除该限制。',
       ollamaCloud: {
@@ -3459,6 +3460,43 @@ export default {
           invalid_html: '无法识别设置页格式',
           OLLAMA_CLOUD_USAGE_REFRESH_RATE_LIMITED: '刷新过于频繁，请在 {retry_after_seconds} 秒后重试。'
         }
+      },
+      upstreamBilling: {
+        trustWarning: '此倍率由上游站点针对当前 API Key 自行声明。Sub2API 无法验证该值是否与实际扣费一致；上游站点或中间代理可能返回伪造、过期或被篡改的数据。请结合账单、余额变化和实际用量自行核验。',
+        autoProbe: '自动探测上游声明倍率',
+        autoProbeHint: '启用后按全局周期刷新上游声明倍率；此开关本身不会修改账号倍率。',
+        syncRate: '同步上游声明倍率',
+        syncRateHint: '成功探测后自动更新账号倍率，同步的是不含高峰的基准倍率；探测失败或声明超出允许范围时保持不变。开启本项会同时打开“自动探测上游声明倍率”。',
+        syncRateManagedHint: '当前倍率由上游声明的基准倍率（不含高峰）自动维护。',
+        syncedRateTooltip: '该账号倍率由上游声明的基准倍率（不含高峰）自动同步',
+        manualProbe: '立即探测上游倍率',
+        stale: '已过期',
+        unsupported: '不支持',
+        failed: '失败',
+        notProbed: '未探测',
+        groupRate: '分组默认：{value}x',
+        userRate: '用户专属倍率：{value}x',
+        peakRate: '高峰：{start}-{end}，{value}x（{timezone}）',
+        noPeakRate: '高峰倍率：未启用',
+        effectiveRate: '当前倍率：{value}x',
+        updatedAt: '更新时间：{value}',
+        nextProbeAt: '下一次探测：{value}',
+        lastDetectedRate: '上次探测倍率：{value}x',
+        lastDetectedAt: '上次探测时间：{value}',
+        elapsedSince: '已过去：{value}',
+        justNow: '不足 1 分钟',
+        minutesAgo: '{count} 分钟',
+        hoursAgo: '{count} 小时',
+        daysAgo: '{count} 天',
+        accountProbeState: '当前账号自动检测：',
+        globalProbeState: '全局探测开关：',
+        enabled: '打开',
+        disabled: '关闭',
+        probeFailed: '探测上游倍率失败',
+        noEligibleAccounts: '请选择 API Key 账号',
+        batchLimit: '每次最多探测 20 个账号',
+        batchCompleted: '已完成 {count} 个账号的倍率探测',
+        batchPartial: '倍率探测部分完成：成功 {success} 个，失败 {failed} 个'
       },
       allPrivacyModes: '全部Privacy状态',
       privacyUnset: '未设置',
@@ -3730,6 +3768,7 @@ export default {
         disableScheduling: '批量停止调度',
         resetStatus: '批量重置状态',
         refreshToken: '批量刷新令牌',
+        probeUpstreamBilling: '探测上游倍率',
         resetStatusSuccess: '已成功重置 {count} 个账号状态',
         refreshTokenSuccess: '已成功刷新 {count} 个账号令牌',
         partialSuccess: '操作部分完成：{success} 成功，{failed} 失败'
@@ -3745,6 +3784,7 @@ export default {
         partialSuccess: '部分更新成功：成功 {success} 个，失败 {failed} 个',
         failed: '批量更新失败',
         noSelection: '请选择要编辑的账号',
+        rateSyncWarning: '已开启上游倍率同步的账号不能批量手工修改倍率，请先在账号编辑页关闭同步。',
         noFieldsSelected: '请至少选择一个要更新的字段',
         mixedPlatformWarning: '所选账号跨越多个平台（{platforms}）。显示的模型映射预设为合并结果——请确保映射对每个平台都适用。'
       },
@@ -6257,6 +6297,16 @@ export default {
         allowUngroupedKey: '允许未分组 Key 调度',
         allowUngroupedKeyHint: '关闭后，未分配到任何分组的 API Key 将无法发起请求（返回 403）。建议保持关闭以确保所有 Key 都归属明确的分组。'
       },
+      upstreamBillingProbe: {
+        title: '上游倍率自动探测',
+        description: '定期获取 API Key 账号所连接上游 Sub2API 站点声明的计费倍率；只有另行开启“同步上游声明倍率”的账号才会更新账号倍率。',
+        enabled: '启用全局自动探测',
+        enabledHint: '开启后，仅对账号自身已启用自动检测的账号执行定时探测；关闭后停止所有定时探测，手动探测不受影响。',
+        intervalMinutes: '探测周期（分钟）',
+        intervalHint: '范围 5–1440 分钟。成功探测结果的有效期为两个探测周期。',
+        saved: '上游倍率自动探测设置已保存',
+        saveFailed: '保存上游倍率自动探测设置失败'
+      },
       gatewayForwarding: {
         title: '请求转发行为',
         description: '控制请求转发到上游 OAuth 账号时的行为',
@@ -7039,6 +7089,11 @@ export default {
       openaiExperimentalScheduler: {
         title: 'OpenAI 实验调度策略',
         description: '默认关闭。开启后仅影响本网关在 OpenAI 账号间的实验性调度选择逻辑，不代表上游 OpenAI 官方能力。',
+        lowRatePriorityTitle: '低倍率优先',
+        lowRatePriorityDescription: '开启后优先选择计费倍率较低的账号；倍率相同时，再比较账号优先级和当前负载等。启用实验调度策略后，此开关不生效。',
+        oauthRateTitle: 'OAuth 调度参考倍率',
+        oauthRatePriorityDescription: '同一分组同时包含 API Key 和 OAuth 账号时，OAuth 账号按此倍率与已探测的 API Key 计费倍率一起排序。',
+        oauthRateWeightedDescription: '同一分组同时包含 API Key 和 OAuth 账号时，计算“计费倍率”得分时，OAuth 账号按此倍率参与计算。',
         stickyWeightedTitle: '粘性加权',
         stickyWeightedDescription: '开启后 previous_response_id 和 session_hash 粘性进入高级调度打分；关闭时仍按旧逻辑硬命中粘性账号。',
         subscriptionPriorityTitle: '订阅优先',
@@ -7054,6 +7109,7 @@ export default {
         ttftWeight: '首包延迟',
         resetWeight: '重置窗口',
         quotaHeadroomWeight: '额度余量',
+        upstreamCostWeight: '计费倍率',
         previousResponseWeight: 'previous_response 粘性',
         sessionStickyWeight: 'session_hash 粘性'
       },

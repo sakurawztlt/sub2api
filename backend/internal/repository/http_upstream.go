@@ -214,6 +214,12 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 	if profile == nil {
 		return s.Do(req, proxyURL, accountID, accountConcurrency)
 	}
+	// TLS fingerprinting only applies to HTTPS targets. Routing a plain HTTP
+	// request through the uTLS transport bypasses the normal proxy dialer (most
+	// visibly for HTTP and SOCKS proxies), so keep the standard transport here.
+	if req != nil && req.URL != nil && strings.EqualFold(req.URL.Scheme, "http") {
+		return s.Do(req, proxyURL, accountID, accountConcurrency)
+	}
 	upstreamProfile := service.HTTPUpstreamProfileDefault
 	if req != nil {
 		upstreamProfile = service.HTTPUpstreamProfileFromContext(req.Context())
@@ -1156,7 +1162,11 @@ func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *u
 			slog.Debug("tls_fingerprint_transport_socks5", "proxy", proxyURL.Host)
 			socks5Dialer := tlsfingerprint.NewSOCKS5ProxyDialer(profile, proxyURL)
 			transport.DialTLSContext = socks5Dialer.DialTLSContext
-		case "http", "https":
+		case "https":
+			// The fingerprint dialer emits a plaintext CONNECT preface and cannot
+			// establish TLS to an HTTPS proxy. Keep proxy routing via net/http.
+			return buildUpstreamTransport(settings, proxyURL, upstreamProtocolModeDefault)
+		case "http":
 			// HTTP/HTTPS 代理：使用 HTTPProxyDialer（CONNECT 隧道）
 			slog.Debug("tls_fingerprint_transport_http_connect", "proxy", proxyURL.Host)
 			httpDialer := tlsfingerprint.NewHTTPProxyDialer(profile, proxyURL)

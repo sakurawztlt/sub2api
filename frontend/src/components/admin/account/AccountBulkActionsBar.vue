@@ -47,6 +47,7 @@
         <button @click="$emit('delete')" class="btn btn-danger btn-sm">{{ t('admin.accounts.bulkActions.delete') }}</button>
         <button @click="$emit('reset-status')" class="btn btn-secondary btn-sm">{{ t('admin.accounts.bulkActions.resetStatus') }}</button>
         <button @click="$emit('refresh-token')" class="btn btn-secondary btn-sm">{{ t('admin.accounts.bulkActions.refreshToken') }}</button>
+        <button @click="$emit('probe-upstream-billing')" class="btn btn-secondary btn-sm">{{ t('admin.accounts.bulkActions.probeUpstreamBilling') }}</button>
         <button @click="$emit('batch-test')" :disabled="batchTesting" class="btn btn-secondary btn-sm">
           {{ batchTesting ? t('admin.accounts.bulkActions.batchTesting') : t('admin.accounts.bulkActions.batchTest') }}
         </button>
@@ -82,6 +83,7 @@ defineEmits([
   'toggle-schedulable',
   'reset-status',
   'refresh-token',
+  'probe-upstream-billing',
   'batch-test'
 ])
 

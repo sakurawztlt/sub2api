@@ -84,6 +84,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil, // channelMonitorRunner
 		nil, // quotaFlusher
 		nil, // ollamaCloudUsage
+		nil, // upstreamBillingProbe
 	)
 
 	require.NotPanics(t, func() {

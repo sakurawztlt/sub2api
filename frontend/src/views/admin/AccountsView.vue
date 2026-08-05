@@ -197,6 +197,7 @@
           @delete="handleBulkDelete"
           @reset-status="handleBulkResetStatus"
           @refresh-token="handleBulkRefreshToken"
+          @probe-upstream-billing="handleBulkProbeUpstreamBilling"
           @edit-selected="openBulkEditSelected"
           @edit-filtered="openBulkEditFiltered"
           @clear="clearSelection"
@@ -325,9 +326,35 @@
             </div>
           </template>
           <template #cell-rate_multiplier="{ row }">
-            <span class="text-sm font-mono text-gray-700 dark:text-gray-300">
-              {{ (row.rate_multiplier ?? 1).toFixed(2) }}x
+            <span class="inline-flex items-center gap-1 text-sm font-mono text-gray-700 dark:text-gray-300">
+              <span>{{ formatMultiplier(row.rate_multiplier ?? 1) }}x</span>
+              <span
+                v-if="row.extra?.upstream_billing_rate_sync_enabled === true"
+                class="inline-flex cursor-help text-emerald-600 dark:text-emerald-400"
+                :aria-label="t('admin.accounts.upstreamBilling.syncedRateTooltip')"
+                :title="t('admin.accounts.upstreamBilling.syncedRateTooltip')"
+                data-testid="account-rate-sync-indicator"
+              >
+                <Icon name="sync" size="xs" />
+              </span>
             </span>
+          </template>
+          <template #header-upstream_billing_rate="{ column }">
+            <div class="flex items-center gap-1">
+              <span>{{ column.label }}</span>
+              <span @click.stop>
+                <HelpTooltip :content="t('admin.accounts.upstreamBilling.trustWarning')" width-class="w-80" />
+              </span>
+            </div>
+          </template>
+          <template #cell-upstream_billing_rate="{ row }">
+            <UpstreamBillingRateCell
+              :account="row"
+              :global-probe-enabled="upstreamBillingProbeGloballyEnabled"
+              :now="upstreamBillingNow"
+              :probing="probingUpstreamBilling.has(row.id)"
+              @probe="handleProbeUpstreamBilling(row)"
+            />
           </template>
           <template #cell-priority="{ value }">
             <span class="text-sm text-gray-700 dark:text-gray-300">{{ value }}</span>
@@ -477,6 +504,7 @@ import AccountUsageCell from '@/components/account/AccountUsageCell.vue'
 import AccountTodayStatsCell from '@/components/account/AccountTodayStatsCell.vue'
 import AccountGroupsCell from '@/components/account/AccountGroupsCell.vue'
 import AccountCapacityCell from '@/components/account/AccountCapacityCell.vue'
+import UpstreamBillingRateCell from '@/components/account/UpstreamBillingRateCell.vue'
 import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ErrorPassthroughRulesModal from '@/components/admin/ErrorPassthroughRulesModal.vue'
@@ -485,8 +513,10 @@ import { fetchAllAccountIds } from '@/utils/accountSelection'
 import { buildOpenAIUsageRefreshKey } from '@/utils/accountUsageRefresh'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
 import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
+import { extractApiErrorMessage } from '@/utils/apiError'
 import { getFloatingPanelPosition } from '@/utils/floatingPanel'
-import type { Account, AccountPlatform, AccountSchedulerGroupScore, AccountType, Proxy as AccountProxy, AdminGroup, WindowStats, ClaudeModel, BatchAccountTestResponse } from '@/types'
+import { formatMultiplier } from '@/utils/formatters'
+import type { Account, AccountPlatform, AccountSchedulerGroupScore, AccountType, Proxy as AccountProxy, AdminGroup, WindowStats, ClaudeModel, BatchAccountTestResponse, UpstreamBillingProbeSnapshot } from '@/types'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -570,6 +600,11 @@ const scheduleModelOptions = ref<SelectOption[]>([])
 const togglingSchedulable = ref<number | null>(null)
 const menu = reactive<{show:boolean, acc:Account|null, pos:{top:number, left:number}|null}>({ show: false, acc: null, pos: null })
 const exportingData = ref(false)
+const probingUpstreamBilling = reactive(new Set<number>())
+const upstreamBillingProbeGloballyEnabled = ref<boolean | undefined>(undefined)
+const upstreamBillingNow = ref(Date.now())
+let lastUpstreamBillingSortRefreshMinute = -1
+useIntervalFn(() => { upstreamBillingNow.value = Date.now() }, 60_000)
 
 // Account tools dropdown
 const showAccountToolsDropdown = ref(false)
@@ -608,6 +643,7 @@ const ACCOUNT_SORTABLE_KEYS = new Set([
   'schedulable',
   'priority',
   'rate_multiplier',
+  'upstream_billing_rate',
   'last_used_at',
   'created_at',
   'expires_at'
@@ -956,8 +992,15 @@ const resetAutoRefreshCache = () => {
 
 const isFirstLoad = ref(true)
 
+function markUpstreamBillingSortRefresh() {
+  if (sortState.sort_by === 'upstream_billing_rate') {
+    lastUpstreamBillingSortRefreshMinute = Math.floor(Date.now() / 60_000)
+  }
+}
+
 const load = async () => {
   const requestParams = params as any
+  markUpstreamBillingSortRefresh()
   syncAccountListDerivedParams()
   hasPendingListSync.value = false
   resetAutoRefreshCache()
@@ -974,12 +1017,26 @@ const load = async () => {
 }
 
 const reload = async () => {
+  markUpstreamBillingSortRefresh()
   syncAccountListDerivedParams()
   hasPendingListSync.value = false
   resetAutoRefreshCache()
   pendingTodayStatsRefresh.value = false
   await baseReload()
   await refreshTodayStatsBatch()
+}
+
+const refreshUpstreamBillingSortedList = async (force = false) => {
+  if (sortState.sort_by !== 'upstream_billing_rate') return
+
+  const minute = Math.floor(upstreamBillingNow.value / 60_000)
+  if (!force && lastUpstreamBillingSortRefreshMinute === minute) return
+  lastUpstreamBillingSortRefreshMinute = minute
+  try {
+    await reload()
+  } catch (error) {
+    console.error('Failed to refresh upstream billing sort:', error)
+  }
 }
 
 const debouncedReload = () => {
@@ -1022,12 +1079,21 @@ const handleSort = (key: string, order: AccountSortOrder) => {
 }
 
 watch(loading, (isLoading, wasLoading) => {
+  if (wasLoading && !isLoading) {
+    upstreamBillingNow.value = Date.now()
+  }
   if (wasLoading && !isLoading && pendingTodayStatsRefresh.value) {
     pendingTodayStatsRefresh.value = false
     refreshTodayStatsBatch().catch((error) => {
       console.error('Failed to refresh account today stats after table load:', error)
     })
   }
+})
+
+watch(upstreamBillingNow, () => {
+  if (sortState.sort_by !== 'upstream_billing_rate' || loading.value) return
+  if (typeof document !== 'undefined' && document.hidden) return
+  void refreshUpstreamBillingSortedList()
 })
 
 watch([selIds, accounts], syncSelectedAccountCache, { immediate: true })
@@ -1144,7 +1210,9 @@ const refreshAccountsIncrementally = async () => {
       pagination.pages = result.data.pages || 0
       mergeAccountsIncrementally(result.data.items || [])
       hasPendingListSync.value = false
+      markUpstreamBillingSortRefresh()
     }
+    upstreamBillingNow.value = Date.now()
 
     await refreshTodayStatsBatch()
   } catch (error) {
@@ -1155,9 +1223,18 @@ const refreshAccountsIncrementally = async () => {
 }
 
 const handleManualRefresh = async () => {
-  await load()
+  await Promise.all([load(), loadUpstreamBillingProbeGlobalState()])
   // Force usage cells to refetch /usage on explicit user refresh.
   usageManualRefreshToken.value += 1
+}
+
+const loadUpstreamBillingProbeGlobalState = async () => {
+  try {
+    const settings = await adminAPI.accounts.getUpstreamBillingProbeSettings()
+    upstreamBillingProbeGloballyEnabled.value = settings.enabled
+  } catch (error) {
+    console.error('Failed to load upstream billing probe settings:', error)
+  }
 }
 
 const closeAccountToolsDropdown = () => {
@@ -1352,6 +1429,7 @@ const allColumns = computed(() => {
     { key: 'priority', label: t('admin.accounts.columns.priority'), sortable: true },
     { key: 'scheduler_score', label: t('admin.accounts.columns.schedulerScore'), sortable: false },
     { key: 'rate_multiplier', label: t('admin.accounts.columns.billingRateMultiplier'), sortable: true },
+    { key: 'upstream_billing_rate', label: t('admin.accounts.columns.upstreamBillingRate'), sortable: true },
     { key: 'last_used_at', label: t('admin.accounts.columns.lastUsed'), sortable: true },
     { key: 'created_at', label: t('admin.accounts.columns.createdAt'), sortable: true },
     { key: 'expires_at', label: t('admin.accounts.columns.expiresAt'), sortable: true },
@@ -1480,6 +1558,40 @@ const handleBulkRefreshToken = async () => {
   } catch (error) {
     console.error('Failed to bulk refresh token:', error)
     appStore.showError(String(error))
+  }
+}
+const handleBulkProbeUpstreamBilling = async () => {
+  const accountIDs = [...selIds.value]
+  if (accountIDs.length === 0) {
+    appStore.showError(t('admin.accounts.upstreamBilling.noEligibleAccounts'))
+    return
+  }
+  if (accountIDs.length > 20) {
+    appStore.showError(t('admin.accounts.upstreamBilling.batchLimit'))
+    return
+  }
+  accountIDs.forEach(id => probingUpstreamBilling.add(id))
+  try {
+    const results = await adminAPI.accounts.probeUpstreamBillingBatch(accountIDs)
+    let patched = false
+    results.forEach(result => {
+      if (result.snapshot) {
+        patchUpstreamBillingSnapshot(result.account_id, result.snapshot)
+        patched = true
+      }
+    })
+    if (patched) await refreshAccountsAfterUpstreamBillingProbe()
+    const failed = results.filter(result => result.error).length
+    if (failed > 0) {
+      appStore.showError(t('admin.accounts.upstreamBilling.batchPartial', { success: results.length - failed, failed }))
+    } else {
+      appStore.showSuccess(t('admin.accounts.upstreamBilling.batchCompleted', { count: results.length }))
+    }
+  } catch (error) {
+    console.error('Failed to probe upstream billing in batch:', error)
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.upstreamBilling.probeFailed')))
+  } finally {
+    accountIDs.forEach(id => probingUpstreamBilling.delete(id))
   }
 }
 const handleBulkTest = async () => {
@@ -1834,6 +1946,39 @@ const patchAccountInList = (updatedAccount: Account) => {
   accounts.value = nextAccounts
   syncAccountRefs(mergedAccount)
 }
+const patchUpstreamBillingSnapshot = (accountID: number, snapshot: UpstreamBillingProbeSnapshot) => {
+  const account = accounts.value.find(item => item.id === accountID)
+  if (!account) return
+  markUpstreamBillingSortRefresh()
+  upstreamBillingNow.value = Date.now()
+  patchAccountInList({
+    ...account,
+    extra: { ...account.extra, upstream_billing_probe: snapshot }
+  })
+}
+const refreshAccountsAfterUpstreamBillingProbe = async () => {
+  try {
+    await load()
+  } catch (error) {
+    console.error('Failed to refresh accounts after upstream billing probe:', error)
+  }
+}
+const handleProbeUpstreamBilling = async (account: Account) => {
+  if (probingUpstreamBilling.has(account.id)) return
+  probingUpstreamBilling.add(account.id)
+  try {
+    const result = await adminAPI.accounts.probeUpstreamBilling(account.id)
+    if (result.snapshot) {
+      patchUpstreamBillingSnapshot(account.id, result.snapshot)
+      await refreshAccountsAfterUpstreamBillingProbe()
+    }
+  } catch (error) {
+    console.error('Failed to probe upstream billing:', error)
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.upstreamBilling.probeFailed')))
+  } finally {
+    probingUpstreamBilling.delete(account.id)
+  }
+}
 const handleAccountUpdated = (updatedAccount: Account) => {
   patchAccountInList(updatedAccount)
   enterAutoRefreshSilentWindow()
@@ -2050,6 +2195,7 @@ const handleClickOutside = (event: MouseEvent) => {
 
 onMounted(async () => {
   load()
+  loadUpstreamBillingProbeGlobalState()
   try {
     const [p, g] = await Promise.all([adminAPI.proxies.getAll(), adminAPI.groups.getAll()])
     proxies.value = p

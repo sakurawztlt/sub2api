@@ -42,8 +42,10 @@ func ProvideAdminHandlers(
 	affiliateHandler *admin.AffiliateHandler,
 	trafficCaptureHandler *admin.TrafficCaptureHandler,
 	ollamaCloudUsage *service.OllamaCloudUsageService,
+	upstreamBillingProbe *service.UpstreamBillingProbeService,
 ) *AdminHandlers {
 	accountHandler.SetOllamaCloudUsageService(ollamaCloudUsage)
+	accountHandler.SetUpstreamBillingProbeService(upstreamBillingProbe)
 	return &AdminHandlers{
 		Dashboard:              dashboardHandler,
 		User:                   userHandler,

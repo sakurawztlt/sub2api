@@ -815,6 +815,14 @@
             aria-labelledby="bulk-edit-rate-multiplier-label"
           />
           <p class="input-hint">{{ t('admin.accounts.billingRateMultiplierHint') }}</p>
+          <p
+            v-if="enableRateMultiplier"
+            class="mt-2 flex items-start gap-1 text-xs text-amber-700 dark:text-amber-300"
+            data-testid="bulk-rate-sync-warning"
+          >
+            <Icon name="exclamationTriangle" size="xs" class="mt-0.5 flex-shrink-0" />
+            <span>{{ t('admin.accounts.bulkEdit.rateSyncWarning') }}</span>
+          </p>
         </div>
       </div>
 
@@ -967,6 +975,45 @@
               ]"
             />
           </button>
+        </div>
+      </div>
+
+      <!-- Upstream billing auto probe (any API-key platform) -->
+      <div v-if="allBillingProbeCapable" class="border-t border-gray-200 pt-4 dark:border-dark-600">
+        <div class="mb-3 flex items-center justify-between">
+          <div class="flex-1 pr-4">
+            <label
+              id="bulk-edit-upstream-billing-auto-probe-label"
+              class="input-label mb-0"
+              for="bulk-edit-upstream-billing-auto-probe-enabled"
+            >
+              {{ t('admin.accounts.upstreamBilling.autoProbe') }}
+            </label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.upstreamBilling.autoProbeHint') }}
+            </p>
+          </div>
+          <input
+            v-model="enableUpstreamBillingAutoProbe"
+            id="bulk-edit-upstream-billing-auto-probe-enabled"
+            type="checkbox"
+            aria-controls="bulk-edit-upstream-billing-auto-probe"
+            class="rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+        <div
+          id="bulk-edit-upstream-billing-auto-probe"
+          :class="!enableUpstreamBillingAutoProbe && 'pointer-events-none opacity-50'"
+          role="group"
+          aria-labelledby="bulk-edit-upstream-billing-auto-probe-label"
+        >
+          <Select
+            v-model="upstreamBillingAutoProbeMode"
+            :disabled="!enableUpstreamBillingAutoProbe"
+            data-testid="bulk-edit-upstream-billing-auto-probe-select"
+            :options="upstreamBillingAutoProbeOptions"
+            aria-labelledby="bulk-edit-upstream-billing-auto-probe-label"
+          />
         </div>
       </div>
 
@@ -1427,6 +1474,15 @@ const allOpenAIAPIKey = computed(() => {
   )
 })
 
+// 上游倍率自动探测已放宽到全部 API-key 平台：只要求所选类型全为 apikey，
+// 平台不限（sub2api 上游即可应答 /v1/sub2api/billing）。
+const allBillingProbeCapable = computed(() => {
+  return (
+    targetSelectedTypes.value.length > 0 &&
+    targetSelectedTypes.value.every(t => t === 'apikey')
+  )
+})
+
 // 是否全部为 anthropic/openai 平台的 apikey 账号（请求头覆写仅在此条件下显示）
 // 所选平台 × 所选类型的全组合均需具备覆写资格（实际选中账号是该组合的子集，
 // 按交叉积判定偏保守但绝不放行不合资格的账号）
@@ -1488,6 +1544,7 @@ const enableOpenAIPassthrough = ref(false)
 const enableOpenAIFlattenNamespaces = ref(false)
 const enableOpenAIWSMode = ref(false)
 const enableOpenAIAPIKeyWSMode = ref(false)
+const enableUpstreamBillingAutoProbe = ref(false)
 const enableCodexCLIOnly = ref(false)
 const enableCodexCLIOnlyAppServer = ref(false)
 const enableOpenAICompactMode = ref(false)
@@ -1551,6 +1608,7 @@ const openaiPassthroughEnabled = ref(false)
 const openaiFlattenNamespacesEnabled = ref(false)
 const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
+const upstreamBillingAutoProbeMode = ref<'enabled' | 'disabled'>('enabled')
 const codexCLIOnlyEnabled = ref(false)
 const codexCLIOnlyAppServerEnabled = ref(false)
 const openAICompactMode = ref<OpenAICompactMode>('auto')
@@ -1580,6 +1638,10 @@ const commonErrorCodes = [
 const statusOptions = computed(() => [
   { value: 'active', label: t('common.active') },
   { value: 'inactive', label: t('common.inactive') }
+])
+const upstreamBillingAutoProbeOptions = computed(() => [
+  { value: 'enabled', label: t('common.enabled') },
+  { value: 'disabled', label: t('common.disabled') }
 ])
 const isOpenAIModelRestrictionDisabled = computed(
   () =>
@@ -1813,6 +1875,10 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
     )
   }
 
+  if (enableUpstreamBillingAutoProbe.value) {
+    updates.upstream_billing_probe_enabled = upstreamBillingAutoProbeMode.value === 'enabled'
+  }
+
   if (enableCodexCLIOnly.value) {
     const extra = ensureExtra()
     extra.codex_cli_only = codexCLIOnlyEnabled.value
@@ -1936,6 +2002,7 @@ const handleSubmit = async () => {
     enableGroups.value ||
     enableOpenAIWSMode.value ||
     enableOpenAIAPIKeyWSMode.value ||
+    enableUpstreamBillingAutoProbe.value ||
     enableCodexCLIOnly.value ||
     enableCodexCLIOnlyAppServer.value ||
     enableOpenAICompactMode.value ||
@@ -2021,6 +2088,10 @@ const submitBulkUpdate = async (baseUpdates: Record<string, unknown>) => {
       pendingUpdatesForConfirm.value = baseUpdates
       mixedChannelWarningMessage.value = error.message
       showMixedChannelWarning.value = true
+    } else if (error.reason === 'UPSTREAM_BILLING_RATE_SYNC_BULK_CONFLICT') {
+      appStore.showError(t('admin.accounts.bulkEdit.rateSyncConflict', {
+        count: error.metadata?.count ?? 1
+      }))
     } else {
       appStore.showError(error.message || t('admin.accounts.bulkEdit.failed'))
       console.error('Error bulk updating accounts:', error)
@@ -2065,6 +2136,7 @@ watch(
       enableOpenAIFlattenNamespaces.value = false
       enableOpenAIWSMode.value = false
       enableOpenAIAPIKeyWSMode.value = false
+      enableUpstreamBillingAutoProbe.value = false
       enableCodexCLIOnly.value = false
       enableCodexCLIOnlyAppServer.value = false
       enableOpenAICompactMode.value = false
@@ -2092,6 +2164,7 @@ watch(
       groupIds.value = []
       openaiOAuthResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
       openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
+      upstreamBillingAutoProbeMode.value = 'enabled'
       codexCLIOnlyEnabled.value = false
       codexCLIOnlyAppServerEnabled.value = false
       openAICompactMode.value = 'auto'

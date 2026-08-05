@@ -211,6 +211,7 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_CompactAllowsGrok(t *te
 		OpenAIEndpointCapabilityChatCompletions,
 		true,
 		false,
+		true,
 		PlatformGrok,
 	)
 	require.NoError(t, err)

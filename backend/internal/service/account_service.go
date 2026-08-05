@@ -86,6 +86,19 @@ type AccountRepository interface {
 	RevertProxyFallback(ctx context.Context, accountID int64) error
 }
 
+// AccountBillingSettingsRepository applies an admin edit without overwriting a
+// rate_multiplier that a successful upstream probe synchronized after the edit
+// form was loaded. A nil rateMultiplier means the request did not edit it.
+type AccountBillingSettingsRepository interface {
+	UpdateWithAccountBillingSettings(
+		ctx context.Context,
+		account *Account,
+		probeEnabled *bool,
+		rateSyncEnabled *bool,
+		rateMultiplier *float64,
+	) error
+}
+
 // AccountBulkUpdate describes the fields that can be updated in a bulk operation.
 // Nil pointers mean "do not change".
 type AccountBulkUpdate struct {
@@ -99,6 +112,7 @@ type AccountBulkUpdate struct {
 	Schedulable    *bool
 	Credentials    map[string]any
 	Extra          map[string]any
+	ProbeEnabled   *bool
 }
 
 // CreateAccountRequest 创建账号请求

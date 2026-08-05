@@ -326,6 +326,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		h.errorResponse(c, contentModerationStatus(decision), contentModerationErrorCode(decision), decision.Message)
 		return
 	}
+	imageIntent := service.IsImageGenerationIntent("/v1/responses", reqModel, body)
 
 	// 解析渠道级模型映射
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
@@ -397,6 +398,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			service.OpenAIEndpointCapabilityChatCompletions,
 			requireCompact,
 			false,
+			!imageIntent,
 			requestPlatform,
 		)
 		if err != nil {
@@ -1000,6 +1002,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			service.OpenAIEndpointCapabilityChatCompletions,
 			false,
 			false,
+			true,
 			requestPlatform,
 		)
 		if err != nil {
@@ -1567,6 +1570,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	}
 	firstMessageToolCoverage := service.AnalyzeToolCallOutputContextCoverageBytes(firstMessage)
 	previousResponseCanMove := !firstMessageToolCoverage.HasFunctionCallOutput || firstMessageToolCoverage.ContextCoversAllCallIDs
+	imageIntent := service.IsImageGenerationIntent("/v1/responses", reqModel, firstMessage)
 	reqLog = reqLog.With(
 		zap.Bool("ws_ingress", true),
 		zap.String("model", reqModel),
@@ -1679,6 +1683,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			service.OpenAIEndpointCapabilityChatCompletions,
 			false,
 			previousResponseCanMove,
+			!imageIntent,
 			requestPlatform,
 		)
 		if err != nil {
