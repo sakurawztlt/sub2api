@@ -1405,7 +1405,11 @@ func (s *AntigravityGatewayService) unwrapV1InternalResponse(body []byte) ([]byt
 //	      └─ retryDelay <  7s → 等待后重试 1 次
 //	          ├─ 成功 → 正常返回
 //	          └─ 失败 → 设置模型限流 + 清除粘性绑定 → 切换账号
-func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte, isStickySession bool) (*ForwardResult, error) {
+func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte, isStickySession bool) (forwardResultOut *ForwardResult, _ error) {
+	beginUpstreamResponseModelObservation(c)
+	defer func() {
+		forwardResultOut = attachObservedUpstreamResponseModel(c, forwardResultOut)
+	}()
 	// 上游透传账号直接转发，不走 OAuth token 刷新
 	if account.Type == AccountTypeUpstream {
 		return s.ForwardUpstream(ctx, c, account, body)
@@ -2153,7 +2157,11 @@ func WithForwardGeminiSession(groupID int64, sessionHash string) ForwardGeminiOp
 	}
 }
 
-func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Context, account *Account, originalModel string, action string, stream bool, body []byte, isStickySession bool, options ...ForwardGeminiOption) (*ForwardResult, error) {
+func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Context, account *Account, originalModel string, action string, stream bool, body []byte, isStickySession bool, options ...ForwardGeminiOption) (forwardResultOut *ForwardResult, _ error) {
+	beginUpstreamResponseModelObservation(c)
+	defer func() {
+		forwardResultOut = attachObservedUpstreamResponseModel(c, forwardResultOut)
+	}()
 	startTime := time.Now()
 	forwardOpts := forwardGeminiOptions{}
 	for _, apply := range options {
@@ -3076,6 +3084,26 @@ type antigravityStreamResult struct {
 	clientDisconnect bool // 客户端是否在流式传输过程中断开
 }
 
+func (s *AntigravityGatewayService) observeAntigravityGeminiSSELine(c *gin.Context, line string) {
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "data:") {
+		return
+	}
+	payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
+	if payload == "" || payload == "[DONE]" {
+		return
+	}
+	raw := []byte(payload)
+	if inner, err := s.unwrapV1InternalResponse(raw); err == nil && len(inner) > 0 {
+		raw = inner
+	}
+	observer.ObserveGemini(raw)
+}
+
 // antigravityClientWriter 封装流式响应的客户端写入，自动检测断开并标记。
 // 断开后所有写入操作变为 no-op，调用方通过 Disconnected() 判断是否继续 drain 上游。
 type antigravityClientWriter struct {
@@ -3149,6 +3177,9 @@ func handleStreamReadError(err error, clientDisconnected bool, prefix string) (d
 }
 
 func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context, resp *http.Response, startTime time.Time) (*antigravityStreamResult, error) {
+	if upstreamResponseModelObserverFromContext(c) == nil {
+		beginUpstreamResponseModelObservation(c)
+	}
 	c.Status(resp.StatusCode)
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
@@ -3274,6 +3305,7 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 			lastDataAt = time.Now()
 
 			line := ev.line
+			s.observeAntigravityGeminiSSELine(c, line)
 			trimmed := strings.TrimRight(line, "\r\n")
 			if strings.HasPrefix(trimmed, "data:") {
 				payload := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
@@ -3352,6 +3384,9 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 // handleGeminiStreamToNonStreaming 读取上游流式响应，合并为非流式响应返回给客户端
 // Gemini 流式响应是增量的，需要累积所有 chunk 的内容
 func (s *AntigravityGatewayService) handleGeminiStreamToNonStreaming(c *gin.Context, resp *http.Response, startTime time.Time) (*antigravityStreamResult, error) {
+	if upstreamResponseModelObserverFromContext(c) == nil {
+		beginUpstreamResponseModelObservation(c)
+	}
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
 	if s.settingService.cfg != nil && s.settingService.cfg.Gateway.MaxLineSize > 0 {
@@ -3431,6 +3466,7 @@ func (s *AntigravityGatewayService) handleGeminiStreamToNonStreaming(c *gin.Cont
 			}
 
 			line := ev.line
+			s.observeAntigravityGeminiSSELine(c, line)
 			trimmed := strings.TrimRight(line, "\r\n")
 
 			if !strings.HasPrefix(trimmed, "data:") {
@@ -3819,7 +3855,16 @@ func (s *AntigravityGatewayService) writeGoogleError(c *gin.Context, status int,
 
 // collectClaudeStreamResponse 收集上游流式响应，转换为 Claude 非流式格式返回
 // 用于处理客户端非流式请求但上游只支持流式的情况
-func (s *AntigravityGatewayService) collectClaudeStreamResponse(resp *http.Response, startTime time.Time, originalModel string) ([]byte, *antigravityStreamResult, error) {
+func (s *AntigravityGatewayService) collectClaudeStreamResponse(resp *http.Response, startTime time.Time, originalModel string, contexts ...*gin.Context) ([]byte, *antigravityStreamResult, error) {
+	var responseObserver *upstreamResponseModelObserver
+	if len(contexts) > 0 && contexts[0] != nil {
+		responseObserver = upstreamResponseModelObserverFromContext(contexts[0])
+		if responseObserver == nil {
+			responseObserver = beginUpstreamResponseModelObservation(contexts[0])
+		}
+	} else {
+		responseObserver = &upstreamResponseModelObserver{}
+	}
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
 	if s.settingService != nil && s.settingService.cfg != nil && s.settingService.cfg.Gateway.MaxLineSize > 0 {
@@ -3937,6 +3982,7 @@ func (s *AntigravityGatewayService) collectClaudeStreamResponse(resp *http.Respo
 			if parseErr != nil {
 				continue
 			}
+			responseObserver.ObserveGemini(inner)
 
 			var parsed map[string]any
 			if err := json.Unmarshal(inner, &parsed); err != nil {
@@ -4046,7 +4092,7 @@ returnResponse:
 // handleClaudeStreamToNonStreaming collects an upstream stream and writes the
 // resulting Claude response for the native Messages path.
 func (s *AntigravityGatewayService) handleClaudeStreamToNonStreaming(c *gin.Context, resp *http.Response, startTime time.Time, originalModel string) (*antigravityStreamResult, error) {
-	claudeResp, streamRes, err := s.collectClaudeStreamResponse(resp, startTime, originalModel)
+	claudeResp, streamRes, err := s.collectClaudeStreamResponse(resp, startTime, originalModel, c)
 	if err != nil {
 		var failoverErr *UpstreamFailoverError
 		if errors.As(err, &failoverErr) {
@@ -4073,6 +4119,9 @@ func (s *AntigravityGatewayService) handleClaudeStreamToNonStreaming(c *gin.Cont
 
 // handleClaudeStreamingResponse 处理 Claude 流式响应（Gemini SSE → Claude SSE 转换）
 func (s *AntigravityGatewayService) handleClaudeStreamingResponse(c *gin.Context, resp *http.Response, startTime time.Time, originalModel string) (*antigravityStreamResult, error) {
+	if upstreamResponseModelObserverFromContext(c) == nil {
+		beginUpstreamResponseModelObservation(c)
+	}
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
@@ -4225,6 +4274,7 @@ func (s *AntigravityGatewayService) handleClaudeStreamingResponse(c *gin.Context
 			lastDataAt = time.Now()
 
 			// 处理 SSE 行，转换为 Claude 格式
+			s.observeAntigravityGeminiSSELine(c, ev.line)
 			claudeEvents := processor.ProcessLine(strings.TrimRight(ev.line, "\r\n"))
 			if len(claudeEvents) > 0 {
 				if firstTokenMs == nil {
@@ -4404,7 +4454,11 @@ func filterEmptyPartsFromGeminiRequest(body []byte) ([]byte, error) {
 }
 
 // ForwardUpstream 使用 base_url + /v1/messages + 双 header 认证透传上游 Claude 请求
-func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.Context, account *Account, body []byte) (*ForwardResult, error) {
+func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.Context, account *Account, body []byte) (forwardResultOut *ForwardResult, _ error) {
+	beginUpstreamResponseModelObservation(c)
+	defer func() {
+		forwardResultOut = attachObservedUpstreamResponseModel(c, forwardResultOut)
+	}()
 	startTime := time.Now()
 	sessionID := getSessionID(c)
 	prefix := logPrefix(sessionID, account.Name)
@@ -4513,6 +4567,7 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 		if err != nil {
 			return nil, fmt.Errorf("read upstream response: %w", err)
 		}
+		upstreamResponseModelObserverFromContext(c).ObserveAnthropic(respBody)
 
 		// 提取 usage
 		usage = s.extractClaudeUsage(respBody)
@@ -4543,6 +4598,9 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 
 // streamUpstreamResponse 透传上游 SSE 流并提取 Claude usage
 func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp *http.Response, startTime time.Time) *antigravityStreamResult {
+	if upstreamResponseModelObserverFromContext(c) == nil {
+		beginUpstreamResponseModelObservation(c)
+	}
 	usage := &ClaudeUsage{}
 	var firstTokenMs *int
 
@@ -4633,6 +4691,9 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 			lastDataAt = time.Now()
 
 			line := ev.line
+			if data, ok := extractAnthropicSSEDataLine(line); ok {
+				upstreamResponseModelObserverFromContext(c).ObserveAnthropic([]byte(strings.TrimSpace(data)))
+			}
 
 			// 记录首 token 时间
 			if firstTokenMs == nil && len(line) > 0 {

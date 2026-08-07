@@ -170,7 +170,11 @@ func (s *AntigravityGatewayService) forwardAntigravityCompat(
 	c *gin.Context,
 	account *Account,
 	request antigravityCompatRequest,
-) (*ForwardResult, error) {
+) (forwardResultOut *ForwardResult, _ error) {
+	beginUpstreamResponseModelObservation(c)
+	defer func() {
+		forwardResultOut = attachObservedUpstreamResponseModel(c, forwardResultOut)
+	}()
 	call, err := s.prepareAntigravityCompatCall(ctx, c, account, request)
 	if err != nil {
 		return nil, err
@@ -497,7 +501,7 @@ func (s *AntigravityGatewayService) handleChatCompletionsNonStreamingFromAntigra
 	startTime time.Time,
 	originalModel string,
 ) (*antigravityStreamResult, error) {
-	claudeResponse, result, err := s.collectClaudeStreamResponse(resp, startTime, originalModel)
+	claudeResponse, result, err := s.collectClaudeStreamResponse(resp, startTime, originalModel, c)
 	if err != nil {
 		return nil, s.mapAntigravityCompatCollectionError(c, err)
 	}
@@ -516,7 +520,7 @@ func (s *AntigravityGatewayService) handleResponsesNonStreamingFromAntigravity(
 	startTime time.Time,
 	originalModel string,
 ) (*antigravityStreamResult, error) {
-	claudeResponse, result, err := s.collectClaudeStreamResponse(resp, startTime, originalModel)
+	claudeResponse, result, err := s.collectClaudeStreamResponse(resp, startTime, originalModel, c)
 	if err != nil {
 		return nil, s.mapAntigravityCompatCollectionError(c, err)
 	}

@@ -317,6 +317,7 @@ func (s *AntigravityGatewayService) handleAntigravityCompatStream(
 			if event.err != nil {
 				return s.handleAntigravityCompatReadError(c, session, event.err, maxLineSize, prefix)
 			}
+			s.observeAntigravityGeminiSSELine(c, event.line)
 			session.consume(event.line)
 			if session.hasMeaningfulData() {
 				stopAntigravityCompatTimer(firstMeaningfulTimer)

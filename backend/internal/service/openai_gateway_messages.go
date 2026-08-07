@@ -45,7 +45,11 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	body []byte,
 	promptCacheKey string,
 	defaultMappedModel string,
-) (*OpenAIForwardResult, error) {
+) (forwardResultOut *OpenAIForwardResult, _ error) {
+	beginUpstreamResponseModelObservation(c)
+	defer func() {
+		forwardResultOut = attachObservedOpenAIUpstreamResponseModel(c, forwardResultOut)
+	}()
 	startTime := time.Now()
 
 	// 5/9 codex audit: defense-in-depth. gcr 入口已经 canonicalize 过
@@ -694,6 +698,11 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 			return nil, fmt.Errorf("upstream stream ended without terminal event")
 		}
 	}
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
+	observer.Observe(finalResponse.Model, true)
 
 	if strings.TrimSpace(finalResponse.Status) == "failed" {
 		payload, _ := json.Marshal(gin.H{"type": "response.failed", "response": finalResponse})
@@ -808,6 +817,11 @@ func (s *OpenAIGatewayService) handleAnthropicJSONResponse(
 		}
 		return nil, fmt.Errorf("read responses json body: %w", err)
 	}
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
+	observer.ObserveOpenAI(respBody, strings.TrimSpace(gjson.GetBytes(respBody, "type").String()))
 
 	var finalResponse apicompat.ResponsesResponse
 	if err := json.Unmarshal(respBody, &finalResponse); err != nil {
@@ -1500,6 +1514,10 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	lowLatencyWebSearchProbe bool,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
 
 	// 5/8 codex audit #1+#2: WriteHeader(200) 延后到首个 meaningful event.
 	// 原本立即写 200 → 上游空流时客户傻等 stream_data_interval_timeout
@@ -1701,6 +1719,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			)
 			return false
 		}
+		observer.ObserveOpenAI([]byte(payload), event.Type)
 
 		isTerminalEvent := isOpenAICompatResponsesTerminalEvent(event.Type)
 		if isTerminalEvent {

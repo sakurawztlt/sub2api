@@ -34,7 +34,11 @@ func (s *GatewayService) ForwardAsResponses(
 	account *Account,
 	body []byte,
 	parsed *ParsedRequest,
-) (*ForwardResult, error) {
+) (forwardResultOut *ForwardResult, _ error) {
+	beginUpstreamResponseModelObservation(c)
+	defer func() {
+		forwardResultOut = attachObservedUpstreamResponseModel(c, forwardResultOut)
+	}()
 	startTime := time.Now()
 
 	// 1. Lower Codex client-side tools to function tools understood by Anthropic.
@@ -342,6 +346,7 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 		if !ok {
 			continue
 		}
+		upstreamResponseModelObserverFromContext(c).ObserveAnthropic([]byte(payload))
 
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
@@ -581,6 +586,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 		if !ok {
 			continue
 		}
+		upstreamResponseModelObserverFromContext(c).ObserveAnthropic([]byte(payload))
 
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {

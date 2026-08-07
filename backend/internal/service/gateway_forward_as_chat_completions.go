@@ -32,7 +32,11 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	account *Account,
 	body []byte,
 	parsed *ParsedRequest,
-) (*ForwardResult, error) {
+) (forwardResultOut *ForwardResult, _ error) {
+	beginUpstreamResponseModelObservation(c)
+	defer func() {
+		forwardResultOut = attachObservedUpstreamResponseModel(c, forwardResultOut)
+	}()
 	startTime := time.Now()
 
 	// 1. Parse Chat Completions request
@@ -258,6 +262,7 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 		if !ok {
 			continue
 		}
+		upstreamResponseModelObserverFromContext(c).ObserveAnthropic([]byte(payload))
 
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
@@ -472,6 +477,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		if !ok {
 			continue
 		}
+		upstreamResponseModelObserverFromContext(c).ObserveAnthropic([]byte(payload))
 
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
