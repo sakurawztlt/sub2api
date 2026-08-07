@@ -34,12 +34,12 @@ func TestShouldFailoverUpstreamErrorForAccount_404NilAccountDoesNotFailover(t *t
 func TestShouldFailoverUpstreamErrorForAccount_PreservesExistingStatusFailover(t *testing.T) {
 	s := &OpenAIGatewayService{}
 	acc := &Account{Type: AccountTypeOAuth}
-	for _, code := range []int{401, 402, 403, 429, 529, 500, 502, 503, 504} {
+	for _, code := range []int{401, 402, 403, 405, 429, 529, 500, 502, 503, 504} {
 		if !s.shouldFailoverUpstreamErrorForAccount(code, acc) {
 			t.Errorf("status %d should still trigger failover (existing rule)", code)
 		}
 	}
-	for _, code := range []int{200, 400, 405, 422} {
+	for _, code := range []int{200, 400, 422} {
 		if s.shouldFailoverUpstreamErrorForAccount(code, acc) {
 			t.Errorf("status %d should NOT trigger failover", code)
 		}
