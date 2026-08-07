@@ -692,6 +692,17 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					return nil
 				}
 				errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(payload)
+				if isOpenAIUpstreamCapacityShedEvent(payload) {
+					return s.newOpenAIStreamFailoverError(
+						c,
+						account,
+						true,
+						strings.TrimSpace(handshakeHeaders.Get("x-request-id")),
+						payload,
+						errMsgRaw,
+						handshakeHeaders,
+					)
+				}
 				if !isOpenAIWSRateLimitError(errCodeRaw, errTypeRaw, errMsgRaw) {
 					return nil
 				}
@@ -708,6 +719,19 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					ResponseBody:    append([]byte(nil), payload...),
 					ResponseHeaders: cloneHeader(handshakeHeaders),
 				}
+			},
+			RewriteClientPayload: func(msgType coderws.MessageType, payload []byte, _ bool) []byte {
+				if msgType != coderws.MessageText {
+					return payload
+				}
+				eventType, _, _ := parseOpenAIWSEventEnvelope(payload)
+				if eventType != "error" && eventType != "response.failed" {
+					return payload
+				}
+				if rewritten, changed := sanitizeOpenAICapacityShedErrorCodeForClient(payload); changed {
+					return rewritten
+				}
+				return payload
 			},
 			OnTrace: func(event openaiwsv2.RelayTraceEvent) {
 				logOpenAIWSV2Passthrough(

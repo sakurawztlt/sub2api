@@ -126,6 +126,7 @@ func TestRunUpstreamToClient_ErrorAndDropPaths(t *testing.T) {
 			nil,
 			nil,
 			nil,
+			nil,
 			drop,
 			nil,
 			nil,
@@ -153,6 +154,7 @@ func TestRunUpstreamToClient_ErrorAndDropPaths(t *testing.T) {
 			time.Now(),
 			time.Now,
 			&relayState{},
+			nil,
 			nil,
 			nil,
 			nil,
@@ -191,6 +193,7 @@ func TestRunUpstreamToClient_ErrorAndDropPaths(t *testing.T) {
 			nil,
 			nil,
 			nil,
+			nil,
 			drop,
 			nil,
 			dropped,
@@ -203,6 +206,48 @@ func TestRunUpstreamToClient_ErrorAndDropPaths(t *testing.T) {
 		require.True(t, sig.graceful)
 		require.Equal(t, int64(1), dropped.Load())
 	})
+}
+
+func TestRunUpstreamToClient_RewritesOnlyClientCopyAfterRawObservation(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte(`{"type":"response.completed","response":{"id":"resp_raw","usage":{"input_tokens":3,"output_tokens":4}}}`)
+	clientCopy := []byte(`{"type":"response.completed","response":{"id":"resp_client","usage":{"input_tokens":99,"output_tokens":88}}}`)
+	exitCh := make(chan relayExitSignal, 1)
+	drop := &atomic.Bool{}
+	var writes [][]byte
+	var turns []RelayTurnResult
+
+	runUpstreamToClient(
+		context.Background(),
+		newPassthroughTestFrameConn([]passthroughTestFrame{{msgType: coderws.MessageText, payload: raw}}, true),
+		func(_ coderws.MessageType, payload []byte) error {
+			writes = append(writes, append([]byte(nil), payload...))
+			return nil
+		},
+		time.Now(),
+		time.Now,
+		&relayState{},
+		nil,
+		func(turn RelayTurnResult) { turns = append(turns, turn) },
+		nil,
+		func(_ coderws.MessageType, _ []byte, _ bool) []byte { return clientCopy },
+		func() {},
+		drop,
+		nil,
+		nil,
+		func() {},
+		nil,
+		exitCh,
+	)
+
+	require.Len(t, writes, 1)
+	require.JSONEq(t, string(clientCopy), string(writes[0]))
+	require.Len(t, turns, 1)
+	require.Equal(t, "resp_raw", turns[0].RequestID)
+	require.Equal(t, 3, turns[0].Usage.InputTokens)
+	require.Equal(t, 4, turns[0].Usage.OutputTokens)
+	require.Equal(t, "read_upstream", (<-exitCh).stage)
 }
 
 func TestRunIdleWatchdog_NoTimeoutWhenDisabled(t *testing.T) {

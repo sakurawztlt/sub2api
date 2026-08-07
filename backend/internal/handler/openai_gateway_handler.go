@@ -505,7 +505,11 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					if c.Request.Context().Err() != nil {
 						return
 					}
-					if service.OpenAICompactKeepaliveAdjustedWrittenSize(c) != writerSizeBeforeForward {
+					if reqStream && service.OpenAIStreamSemanticOutputStarted(c) {
+						h.handleFailoverExhausted(c, failoverErr, true)
+						return
+					}
+					if !reqStream && service.OpenAICompactKeepaliveAdjustedWrittenSize(c) != writerSizeBeforeForward {
 						h.handleFailoverExhausted(c, failoverErr, true)
 						return
 					}

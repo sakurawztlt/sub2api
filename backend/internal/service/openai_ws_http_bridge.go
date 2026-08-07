@@ -181,11 +181,16 @@ func buildOpenAIWSHTTPBridgeErrorEvent(statusCode int, message string) []byte {
 }
 
 func newOpenAIWSHTTPBridgeFailoverError(statusCode int, headers http.Header, responseBody []byte) *UpstreamFailoverError {
-	return &UpstreamFailoverError{
+	err := &UpstreamFailoverError{
 		StatusCode:      statusCode,
 		ResponseBody:    append([]byte(nil), responseBody...),
 		ResponseHeaders: cloneHeader(headers),
 	}
+	if isOpenAIUpstreamCapacityShedEvent(responseBody) {
+		err.RetryableOnSameAccount = true
+		err.RequestScopedTransient = true
+	}
+	return err
 }
 
 func openAIWSHTTPBridgeSchedulingModel(account *Account, originalModel string) string {
@@ -466,8 +471,14 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			upstreamEventErr = errors.New(errMessage)
 		}
 
+		clientMessage := upstreamMessage
+		if eventType == "error" || eventType == "response.failed" {
+			if rewritten, changed := sanitizeOpenAICapacityShedErrorCodeForClient(clientMessage); changed {
+				clientMessage = rewritten
+			}
+		}
 		if !clientDisconnected {
-			if err := writeClientMessage(upstreamMessage); err != nil {
+			if err := writeClientMessage(clientMessage); err != nil {
 				if isOpenAIWSClientDisconnectError(err) {
 					clientDisconnected = true
 					closeStatus, closeReason := summarizeOpenAIWSReadCloseError(err)

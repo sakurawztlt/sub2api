@@ -210,6 +210,82 @@ func TestProxyOpenAIWSHTTPBridgeTurnSSEErrorFailoverSafety(t *testing.T) {
 	}
 }
 
+func TestProxyOpenAIWSHTTPBridgeTurnCapacityShedClientCopyAndFailover(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name             string
+		turn             int
+		body             string
+		wantFailover     bool
+		wantInputTokens  int
+		wantOutputTokens int
+	}{
+		{
+			name:         "first_turn_error_fails_over_before_ws_output",
+			turn:         1,
+			body:         "data: {\"type\":\"error\",\"error\":{\"code\":\"server_is_overloaded\",\"message\":\"overloaded\"}}\n\n",
+			wantFailover: true,
+		},
+		{
+			name: "later_turn_error_rewrites_client_copy",
+			turn: 2,
+			body: "data: {\"type\":\"error\",\"error\":{\"code\":\"slow_down\",\"message\":\"slow down\"}}\n\n",
+		},
+		{
+			name:             "bare_failed_rewrites_after_raw_usage_parse",
+			turn:             1,
+			body:             "data: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_shed\",\"error\":{\"code\":\"server_is_overloaded\",\"message\":\"overloaded\"},\"usage\":{\"input_tokens\":5,\"output_tokens\":3}}}\n\n",
+			wantInputTokens:  5,
+			wantOutputTokens: 3,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(tt.body)),
+			}}
+			svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+			account := &Account{ID: 12, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1}
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+			payload := []byte(`{"type":"response.create","model":"gpt-5","input":"hi"}`)
+			var writes [][]byte
+
+			result, err := svc.proxyOpenAIWSHTTPBridgeTurn(
+				context.Background(), c, account, "sk-test", payload, len(payload),
+				"gpt-5", "", "", "", "", tt.turn,
+				func(message []byte) error {
+					writes = append(writes, append([]byte(nil), message...))
+					return nil
+				},
+			)
+
+			if tt.wantFailover {
+				failoverErr := assertCapacityShedFailover(t, err)
+				require.NotContains(t, string(failoverErr.ResponseBody), "server_error", "failover/monitoring keeps raw upstream evidence")
+				require.Empty(t, writes)
+				return
+			}
+			if tt.wantInputTokens > 0 {
+				require.NoError(t, err)
+				require.NotNil(t, result)
+				require.Equal(t, tt.wantInputTokens, result.Usage.InputTokens)
+				require.Equal(t, tt.wantOutputTokens, result.Usage.OutputTokens)
+			} else {
+				require.Error(t, err)
+			}
+			require.Len(t, writes, 1)
+			require.Contains(t, string(writes[0]), `"code":"server_error"`)
+			require.NotContains(t, string(writes[0]), "server_is_overloaded")
+			require.NotContains(t, string(writes[0]), "slow_down")
+		})
+	}
+}
+
 func TestProxyOpenAIWSHTTPBridgeTurnRequiresTerminalEvent(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

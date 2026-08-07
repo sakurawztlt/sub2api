@@ -72,6 +72,7 @@ type RelayOptions struct {
 	OnUsageParseFailure             func(eventType string, usageRaw string)
 	OnTurnComplete                  func(turn RelayTurnResult)
 	BeforeWriteClient               func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) error
+	RewriteClientPayload            func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) []byte
 	ReadClientFrame                 func(ctx context.Context, clientConn FrameConn) (coderws.MessageType, []byte, error)
 	OnTrace                         func(event RelayTraceEvent)
 	Now                             func() time.Time
@@ -253,6 +254,7 @@ func Relay(
 		options.OnUsageParseFailure,
 		options.OnTurnComplete,
 		options.BeforeWriteClient,
+		options.RewriteClientPayload,
 		func() {
 			if options.StartClientAfterFirstDownstream {
 				startClientReader()
@@ -449,6 +451,7 @@ func runUpstreamToClient(
 	onUsageParseFailure func(eventType string, usageRaw string),
 	onTurnComplete func(turn RelayTurnResult),
 	beforeWriteClient func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) error,
+	rewriteClientPayload func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) []byte,
 	afterWriteClient func(),
 	dropDownstreamWrites *atomic.Bool,
 	forwardedFrames *atomic.Int64,
@@ -503,6 +506,9 @@ func runUpstreamToClient(
 			// binary frame 直接透传，不进入 JSON 观测路径（避免无效解析开销）。
 		}
 		emitTurnComplete(onTurnComplete, state, observedEvent)
+		if rewriteClientPayload != nil {
+			payload = rewriteClientPayload(msgType, payload, wroteDownstream)
+		}
 		if dropDownstreamWrites != nil && dropDownstreamWrites.Load() {
 			if droppedFrames != nil {
 				droppedFrames.Add(1)
