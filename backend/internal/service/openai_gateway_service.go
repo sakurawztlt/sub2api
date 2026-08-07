@@ -3297,6 +3297,17 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return nil, errors.New("codex_cli_only restriction: only codex official clients are allowed")
 	}
 
+	// Sanitize explicit null tool schema types before selecting passthrough,
+	// Codex transform, or ChatCompletions fallback paths. Otherwise the same
+	// invalid schema can be retried across the account pool after upstream 400s.
+	sanitizedToolBody, toolSchemaSanitized, toolSchemaErr := sanitizeOpenAIResponsesToolParameterTypes(body)
+	if toolSchemaErr != nil {
+		return nil, fmt.Errorf("sanitize OpenAI Responses tool parameters: %w", toolSchemaErr)
+	}
+	if toolSchemaSanitized {
+		body = sanitizedToolBody
+	}
+
 	originalBody := body
 	requestView := newOpenAIRequestView(body)
 	reqModel, reqStream, promptCacheKey := requestView.Model, requestView.Stream, requestView.PromptCacheKey
