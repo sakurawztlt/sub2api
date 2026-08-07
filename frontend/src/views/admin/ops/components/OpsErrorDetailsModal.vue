@@ -5,6 +5,7 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select from '@/components/common/Select.vue'
 import OpsErrorLogTable from './OpsErrorLogTable.vue'
 import { opsAPI, type OpsErrorLog } from '@/api/admin/ops'
+import { buildOpsErrorTimeParams } from '../utils/opsErrorParams'
 
 interface Props {
   show: boolean
@@ -104,11 +105,11 @@ async function fetchErrorLogs() {
     const params: Record<string, any> = {
       page: page.value,
       page_size: pageSize.value,
-      time_range: props.timeRange,
       view: viewMode.value,
       sort_by: sortBy.value,
       sort_order: sortOrder.value
     }
+    Object.assign(params, buildOpsErrorTimeParams(props.timeRange, props.customStartTime, props.customEndTime))
 
     if (props.timeRange === 'custom') {
       if (props.customStartTime && props.customEndTime) {
