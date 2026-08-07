@@ -203,8 +203,8 @@ func NewOpenAIGatewayHandler(
 // POST /openai/v1/responses
 func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// 局部兜底：确保该 handler 内部任何 panic 都不会击穿到进程级。
-	streamStarted := false
-	defer h.recoverResponsesPanic(c, &streamStarted)
+	transportCommitted := false
+	defer h.recoverResponsesPanic(c, &transportCommitted)
 	compactStartedAt := time.Now()
 	defer h.logOpenAIRemoteCompactOutcome(c, compactStartedAt)
 	setOpenAIClientTransportHTTP(c)
@@ -349,7 +349,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	service.SetOpsLatencyMs(c, service.OpsAuthLatencyMsKey, time.Since(requestStart).Milliseconds())
 	routingStart := time.Now()
 
-	userReleaseFunc, acquired := h.acquireResponsesUserSlot(c, subject.UserID, subject.Concurrency, reqStream, &streamStarted, reqLog)
+	userReleaseFunc, acquired := h.acquireResponsesUserSlot(c, subject.UserID, subject.Concurrency, reqStream, &transportCommitted, reqLog)
 	if !acquired {
 		return
 	}
@@ -365,7 +365,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		if retryAfter > 0 {
 			c.Header("Retry-After", strconv.Itoa(retryAfter))
 		}
-		h.handleStreamingAwareError(c, status, code, message, streamStarted)
+		h.handleStreamingAwareError(c, status, code, message, transportCommitted)
 		return
 	}
 
@@ -412,20 +412,20 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			if len(failedAccountIDs) == 0 {
 				if errors.Is(err, service.ErrNoAvailableCompactAccounts) {
 					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
-					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "compact_not_supported", "No available accounts support /responses/compact", streamStarted)
+					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "compact_not_supported", "No available accounts support /responses/compact", transportCommitted)
 					return
 				}
 				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, reqModel, reqModel, requestPlatform)
 				if !cls.ModelNotFound {
 					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
 				}
-				h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
+				h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, transportCommitted)
 				return
 			}
 			if lastFailoverErr != nil {
-				h.handleFailoverExhausted(c, lastFailoverErr, streamStarted)
+				h.handleFailoverExhausted(c, lastFailoverErr, transportCommitted)
 			} else {
-				h.handleFailoverExhaustedSimple(c, 502, streamStarted)
+				h.handleFailoverExhaustedSimple(c, 502, transportCommitted)
 			}
 			return
 		}
@@ -434,7 +434,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			if !cls.ModelNotFound {
 				markOpsRoutingCapacityLimited(c)
 			}
-			h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, streamStarted)
+			h.handleStreamingAwareError(c, cls.Status, cls.ErrType, cls.Message, transportCommitted)
 			return
 		}
 		if previousResponseID != "" && selection != nil && selection.Account != nil {
@@ -454,7 +454,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		reqLog.Debug("openai.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 		setOpsSelectedAccount(c, account.ID, account.Platform)
 
-		accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &streamStarted, reqLog)
+		accountReleaseFunc, acquired := h.acquireResponsesAccountSlot(c, apiKey.GroupID, sessionHash, selection, reqStream, &transportCommitted, reqLog)
 		if !acquired {
 			return
 		}
@@ -492,6 +492,11 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		if err == nil && result != nil && result.FirstTokenMs != nil {
 			service.SetOpsLatencyMs(c, service.OpsTimeToFirstTokenMsKey, int64(*result.FirstTokenMs))
 		}
+		// A streamed attempt may have flushed only SSE comments/keepalives.
+		// Those bytes commit HTTP 200 and require a terminal SSE error if all
+		// retries are exhausted, but they are not semantic output and therefore
+		// must not prevent trying another account.
+		transportCommitted = openAIResponsesTransportCommitted(c, reqStream, transportCommitted)
 		if err != nil {
 			if result != nil && result.ImageCount > 0 {
 				reqLog.Warn("openai.forward_partial_error_with_image_result",
@@ -505,7 +510,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					if c.Request.Context().Err() != nil {
 						return
 					}
-					if reqStream && service.OpenAIStreamSemanticOutputStarted(c) {
+					semanticStarted := reqStream && service.OpenAIStreamSemanticOutputStarted(c)
+					if semanticStarted {
 						h.handleFailoverExhausted(c, failoverErr, true)
 						return
 					}
@@ -517,7 +523,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 						h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, false, nil)
 					}
 					if !failoverErr.ShouldRetryNextAccount() {
-						h.handleFailoverExhausted(c, failoverErr, streamStarted)
+						h.handleFailoverExhausted(c, failoverErr, transportCommitted)
 						return
 					}
 					// 池模式：同账号重试
@@ -543,12 +549,12 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr
 					if switchCount >= maxAccountSwitches {
-						h.handleFailoverExhausted(c, failoverErr, streamStarted)
+						h.handleFailoverExhausted(c, failoverErr, transportCommitted)
 						return
 					}
 					switchCount++
 					if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState) {
-						h.handleFailoverExhausted(c, failoverErr, streamStarted)
+						h.handleFailoverExhausted(c, failoverErr, transportCommitted)
 						return
 					}
 					reqLog.Warn("openai.upstream_failover_switching",
@@ -563,7 +569,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				upstreamErrorAlreadyCommunicated := openAIForwardErrorAlreadyCommunicated(c, writerSizeBeforeForward, err)
 				wroteFallback := false
 				if !upstreamErrorAlreadyCommunicated {
-					wroteFallback = h.ensureForwardErrorResponse(c, streamStarted)
+					wroteFallback = h.ensureForwardErrorResponse(c, transportCommitted)
 				}
 				fields := []zap.Field{
 					zap.Int64("account_id", account.ID),
@@ -633,6 +639,17 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		)
 		return
 	}
+}
+
+// openAIResponsesTransportCommitted tracks the HTTP/SSE transport separately
+// from OpenAIStreamSemanticOutputStarted. A comment-only stream is still safe
+// to retry, but once its HTTP 200 is on the wire an exhausted retry chain must
+// terminate with response.failed SSE instead of appending a JSON response.
+func openAIResponsesTransportCommitted(c *gin.Context, reqStream, committed bool) bool {
+	if committed || !reqStream {
+		return committed
+	}
+	return service.OpenAIStreamTransportCommitted(c)
 }
 
 func isOpenAIRemoteCompactPath(c *gin.Context) bool {
@@ -2080,6 +2097,10 @@ func (h *OpenAIGatewayHandler) recoverResponsesPanic(c *gin.Context, streamStart
 	if streamStarted != nil {
 		started = *streamStarted
 	}
+	// Forward may panic after flushing a transport-only SSE comment but before
+	// the main loop can persist that state. Re-read the writer here so panic
+	// recovery never appends a standalone JSON response to committed HTTP 200.
+	started = started || service.OpenAIStreamTransportCommitted(c)
 	wroteFallback := h.ensureForwardErrorResponse(c, started)
 	requestLogger(c, "handler.openai_gateway.responses").Error(
 		"openai.responses_panic_recovered",

@@ -2352,8 +2352,17 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			}
 			// error 事件后连接不再可复用，避免回池后污染下一请求。
 			lease.MarkBroken()
-			if !wroteDownstream && canFallback {
-				return nil, wrapOpenAIWSFallback(fallbackReason, errors.New(errMsg))
+			if preOutputErr, handled := s.openAIWSV2PreOutputFailure(
+				c,
+				account,
+				fallbackReason,
+				canFallback,
+				wroteDownstream,
+				message,
+				errMsg,
+				lease.HandshakeHeaders(),
+			); handled {
+				return nil, preOutputErr
 			}
 			statusCode := openAIWSErrorHTTPStatusFromRaw(errCodeRaw, errTypeRaw)
 			setOpsUpstreamError(c, statusCode, errMsg, "")
@@ -4759,6 +4768,33 @@ func classifyOpenAIWSErrorEventFromRaw(codeRaw, errTypeRaw, msgRaw string) (stri
 		return "upstream_error_event", true
 	}
 	return "event_error", false
+}
+
+func (s *OpenAIGatewayService) openAIWSV2PreOutputFailure(
+	c *gin.Context,
+	account *Account,
+	fallbackReason string,
+	canFallback bool,
+	wroteDownstream bool,
+	rawPayload []byte,
+	message string,
+	headers http.Header,
+) (error, bool) {
+	if wroteDownstream || !canFallback {
+		return nil, false
+	}
+	if fallbackReason == "upstream_capacity_shed" {
+		return s.newOpenAIStreamFailoverError(
+			c,
+			account,
+			true,
+			strings.TrimSpace(headers.Get("x-request-id")),
+			rawPayload,
+			message,
+			headers,
+		), true
+	}
+	return wrapOpenAIWSFallback(fallbackReason, errors.New(message)), true
 }
 
 func classifyOpenAIWSErrorEvent(message []byte) (string, bool) {

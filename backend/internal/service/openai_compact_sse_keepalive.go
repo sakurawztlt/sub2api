@@ -181,6 +181,27 @@ func OpenAICompactKeepaliveAdjustedWrittenSize(c *gin.Context) int {
 	return -1
 }
 
+// OpenAIStreamTransportCommitted reports whether any streamed response bytes
+// or headers have reached the downstream writer. Unlike the adjusted-size
+// helper above, compact heartbeats count as committed transport even though
+// they remain non-semantic and must not disable account failover.
+func OpenAIStreamTransportCommitted(c *gin.Context) bool {
+	if c == nil || c.Writer == nil {
+		return false
+	}
+	value, ok := c.Get(openAICompactSSEKeepaliveKey)
+	if !ok {
+		return c.Writer.Written()
+	}
+	k, ok := value.(*openAICompactSSEKeepalive)
+	if !ok || k == nil {
+		return c.Writer.Written()
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.started || (k.writer != nil && k.writer.Written())
+}
+
 // openAICompactKeepaliveWriter 包装 gin.ResponseWriter：写侧方法先停拍心跳
 // （互斥锁下建立 happens-before），读侧方法仅加锁不停拍——热路径的状态读取
 // （如 Forward 前的 Size 快照）不能误杀心跳。心跳 goroutine 直接写内层

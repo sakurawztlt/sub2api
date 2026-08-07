@@ -273,6 +273,57 @@ func TestClassifyOpenAIWSCapacityShedAsPreOutputFallback(t *testing.T) {
 	}
 }
 
+func TestOpenAIWSOnlyOuterPathPreservesPreOutputCapacityFailover(t *testing.T) {
+	c, recorder := newCapacityShedTestContext()
+	svc := &OpenAIGatewayService{cfg: &config.Config{}}
+	svc.cfg.Gateway.LogUpstreamErrorBody = true
+	account := &Account{ID: 31, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	headers := http.Header{
+		"X-Request-Id": []string{"req_ws_capacity"},
+		"Cf-Ray":       []string{"ray_ws_capacity"},
+	}
+	raw := []byte(`{"type":"error","error":{"type":"service_unavailable_error",` +
+		`"code":"server_is_overloaded","message":"capacity shed"}}`)
+
+	// This is the exact structured error produced at the forwardOpenAIWSV2
+	// pre-output boundary. The WS-only outer path must return it to Responses
+	// handler for same-account/account failover instead of rendering generic
+	// JSON or silently treating it as a non-retryable reconnect reason.
+	wsErr, handled := svc.openAIWSV2PreOutputFailure(
+		c,
+		account,
+		"upstream_capacity_shed",
+		true,
+		false,
+		raw,
+		"capacity shed",
+		headers,
+	)
+	require.True(t, handled)
+	// Mirror the WS-only outer boundary: structured errors are not renderable
+	// fallback errors and therefore remain untouched for the handler.
+	require.False(t, svc.writeOpenAIWSFallbackErrorResponse(c, account, wsErr))
+	got := error(wsErr)
+
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, got, &failoverErr)
+	require.Same(t, wsErr, failoverErr)
+	require.True(t, failoverErr.RetryableOnSameAccount)
+	require.True(t, failoverErr.RequestScopedTransient)
+	require.Equal(t, "req_ws_capacity", failoverErr.ResponseHeaders.Get("x-request-id"))
+	require.Equal(t, "ray_ws_capacity", failoverErr.ResponseHeaders.Get("cf-ray"))
+	require.NotContains(t, string(failoverErr.ResponseBody), "server_is_overloaded")
+	opsRaw, ok := c.Get(OpsUpstreamErrorsKey)
+	require.True(t, ok)
+	opsEvents, ok := opsRaw.([]*OpsUpstreamErrorEvent)
+	require.True(t, ok)
+	require.Len(t, opsEvents, 1)
+	require.Equal(t, "req_ws_capacity", opsEvents[0].UpstreamRequestID)
+	require.Contains(t, opsEvents[0].Detail, "server_is_overloaded", "raw payload remains available to ops only")
+	require.Empty(t, recorder.Body.String())
+	require.False(t, c.Writer.Written(), "outer WS-only path must not consume handler failover")
+}
+
 func TestOpenAIStreamPendingBufferIsBounded(t *testing.T) {
 	var lines []string
 	total := 0

@@ -51,10 +51,12 @@ func TestStartOpenAICompactSSEKeepalive_NoopWhenUnmarkedOrDisabled(t *testing.T)
 
 func TestOpenAICompactSSEKeepalive_CommitsHeadersAndComments(t *testing.T) {
 	c, rec := newCompactBridgeTestContext(t, true)
+	require.False(t, OpenAIStreamTransportCommitted(c))
 	stop := StartOpenAICompactSSEKeepalive(c, keepaliveTestInterval)
 	defer stop()
 	waitForKeepaliveBeats()
 
+	require.True(t, OpenAIStreamTransportCommitted(c))
 	require.True(t, StopOpenAICompactSSEKeepaliveCommitted(c))
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, "text/event-stream", rec.Header().Get("Content-Type"))
