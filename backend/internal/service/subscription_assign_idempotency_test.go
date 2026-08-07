@@ -8,6 +8,7 @@ import (
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/stretchr/testify/require"
 )
 
@@ -119,7 +120,7 @@ func (userSubRepoNoop) UpdateStatus(context.Context, int64, string) error {
 func (userSubRepoNoop) UpdateNotes(context.Context, int64, string) error {
 	panic("unexpected UpdateNotes call")
 }
-func (userSubRepoNoop) ActivateWindows(context.Context, int64, time.Time) error {
+func (userSubRepoNoop) ActivateWindows(context.Context, int64, time.Time, time.Time) error {
 	panic("unexpected ActivateWindows call")
 }
 func (userSubRepoNoop) ResetDailyUsage(context.Context, int64, time.Time) error {
@@ -312,7 +313,7 @@ func TestAssignSubscriptionRenewsExpiredExistingSubscription(t *testing.T) {
 	require.NotNil(t, sub.AssignedBy)
 	require.Equal(t, int64(9), *sub.AssignedBy)
 	require.Equal(t, renewedAt, sub.AssignedAt)
-	require.Equal(t, renewedAt, *sub.DailyWindowStart)
+	require.Equal(t, timezone.StartOfDay(renewedAt), *sub.DailyWindowStart)
 	require.Equal(t, renewedAt, *sub.WeeklyWindowStart)
 	require.Equal(t, renewedAt, *sub.MonthlyWindowStart)
 	require.Zero(t, sub.DailyUsageUSD)

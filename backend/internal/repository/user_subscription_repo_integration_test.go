@@ -488,7 +488,8 @@ func (s *UserSubscriptionRepoSuite) TestActivateWindows() {
 	sub := s.mustCreateSubscription(user.ID, group.ID, nil)
 
 	activateAt := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
-	err := s.repo.ActivateWindows(s.ctx, sub.ID, activateAt)
+	dailyStart := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	err := s.repo.ActivateWindows(s.ctx, sub.ID, dailyStart, activateAt)
 	s.Require().NoError(err, "ActivateWindows")
 
 	got, err := s.repo.GetByID(s.ctx, sub.ID)
@@ -496,15 +497,17 @@ func (s *UserSubscriptionRepoSuite) TestActivateWindows() {
 	s.Require().NotNil(got.DailyWindowStart)
 	s.Require().NotNil(got.WeeklyWindowStart)
 	s.Require().NotNil(got.MonthlyWindowStart)
-	s.Require().WithinDuration(activateAt, *got.DailyWindowStart, time.Microsecond)
+	s.Require().WithinDuration(dailyStart, *got.DailyWindowStart, time.Microsecond)
+	s.Require().WithinDuration(activateAt, *got.WeeklyWindowStart, time.Microsecond)
+	s.Require().WithinDuration(activateAt, *got.MonthlyWindowStart, time.Microsecond)
 
 	// Activation is first-writer-wins so concurrent maintenance cannot shift
 	// already established quota windows.
 	later := activateAt.Add(time.Hour)
-	s.Require().NoError(s.repo.ActivateWindows(s.ctx, sub.ID, later))
+	s.Require().NoError(s.repo.ActivateWindows(s.ctx, sub.ID, dailyStart.AddDate(0, 0, 1), later))
 	again, err := s.repo.GetByID(s.ctx, sub.ID)
 	s.Require().NoError(err)
-	s.Require().WithinDuration(activateAt, *again.DailyWindowStart, time.Microsecond)
+	s.Require().WithinDuration(dailyStart, *again.DailyWindowStart, time.Microsecond)
 	s.Require().WithinDuration(activateAt, *again.WeeklyWindowStart, time.Microsecond)
 	s.Require().WithinDuration(activateAt, *again.MonthlyWindowStart, time.Microsecond)
 }
@@ -756,7 +759,7 @@ func (s *UserSubscriptionRepoSuite) TestActiveExpiredBoundaries_UsageAndReset_Ba
 	s.Require().Equal(active.ID, got.ID, "expected active subscription")
 
 	activateAt := time.Now().Add(-25 * time.Hour)
-	s.Require().NoError(s.repo.ActivateWindows(s.ctx, active.ID, activateAt), "ActivateWindows")
+	s.Require().NoError(s.repo.ActivateWindows(s.ctx, active.ID, activateAt, activateAt), "ActivateWindows")
 	s.Require().NoError(s.repo.IncrementUsage(s.ctx, active.ID, 1.25), "IncrementUsage")
 
 	after, err := s.repo.GetByID(s.ctx, active.ID)

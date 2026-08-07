@@ -13,6 +13,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/dgraph-io/ristretto"
 	"golang.org/x/sync/singleflight"
 )
@@ -275,10 +276,11 @@ func (s *SubscriptionService) AssignOrExtendSubscription(ctx context.Context, in
 			// instant. Carrying the previous term's windows or usage into the new
 			// term can either reset quota early or consume stale quota.
 			renewed := *existingSub
+			dailyWindowStart := timezone.StartOfDay(now)
 			renewed.StartsAt = now
 			renewed.ExpiresAt = newExpiresAt
 			renewed.Status = SubscriptionStatusActive
-			renewed.DailyWindowStart = &now
+			renewed.DailyWindowStart = &dailyWindowStart
 			renewed.WeeklyWindowStart = &now
 			renewed.MonthlyWindowStart = &now
 			renewed.DailyUsageUSD = 0
@@ -555,7 +557,8 @@ func (s *SubscriptionService) renewExpiredAssignedSubscription(ctx context.Conte
 			updated.StartsAt = now
 			updated.ExpiresAt = expiresAt
 			updated.Status = SubscriptionStatusActive
-			updated.DailyWindowStart = &now
+			dailyWindowStart := timezone.StartOfDay(now)
+			updated.DailyWindowStart = &dailyWindowStart
 			updated.WeeklyWindowStart = &now
 			updated.MonthlyWindowStart = &now
 			updated.DailyUsageUSD = 0
@@ -925,7 +928,7 @@ func (s *SubscriptionService) checkAndActivateWindowAt(ctx context.Context, sub 
 		return nil
 	}
 
-	return s.userSubRepo.ActivateWindows(ctx, sub.ID, now)
+	return s.userSubRepo.ActivateWindows(ctx, sub.ID, timezone.StartOfDay(now), now)
 }
 
 // AdminResetQuota manually resets the daily, weekly, and/or monthly usage windows.
@@ -937,19 +940,21 @@ func (s *SubscriptionService) AdminResetQuota(ctx context.Context, subscriptionI
 	if err != nil {
 		return nil, err
 	}
-	windowStart := s.currentTime()
+	now := s.currentTime()
 	if resetDaily {
-		if err := s.userSubRepo.ResetDailyUsage(ctx, sub.ID, windowStart); err != nil {
+		// Clearing today's usage must not move the recurring refresh away from
+		// midnight in the configured timezone.
+		if err := s.userSubRepo.ResetDailyUsage(ctx, sub.ID, timezone.StartOfDay(now)); err != nil {
 			return nil, err
 		}
 	}
 	if resetWeekly {
-		if err := s.userSubRepo.ResetWeeklyUsage(ctx, sub.ID, windowStart); err != nil {
+		if err := s.userSubRepo.ResetWeeklyUsage(ctx, sub.ID, now); err != nil {
 			return nil, err
 		}
 	}
 	if resetMonthly {
-		if err := s.userSubRepo.ResetMonthlyUsage(ctx, sub.ID, windowStart); err != nil {
+		if err := s.userSubRepo.ResetMonthlyUsage(ctx, sub.ID, now); err != nil {
 			return nil, err
 		}
 	}
@@ -969,8 +974,8 @@ func (s *SubscriptionService) CheckAndResetWindows(ctx context.Context, sub *Use
 	now := s.currentTime()
 	needsInvalidateCache := false
 
-	// 日窗口重置（24小时）
-	if windowStart, ok := sub.automaticWindowStartAt(sub.DailyWindowStart, 24*time.Hour, now); ok {
+	// 日窗口按配置时区的日历日对齐，每天 0 点重置。
+	if windowStart, ok := sub.automaticDailyWindowStartAt(now); ok {
 		if err := s.userSubRepo.ResetDailyUsage(ctx, sub.ID, windowStart); err != nil {
 			return err
 		}
@@ -1172,7 +1177,7 @@ func (s *SubscriptionService) calculateProgress(sub *UserSubscription, group *Gr
 	// 日进度
 	if group.HasDailyLimit() && sub.DailyWindowStart != nil {
 		limit := *group.DailyLimitUSD
-		resetsAt := sub.DailyWindowStart.Add(24 * time.Hour)
+		resetsAt := *sub.DailyResetTime()
 		progress.Daily = &UsageWindowProgress{
 			LimitUSD:        limit,
 			UsedUSD:         sub.DailyUsageUSD,

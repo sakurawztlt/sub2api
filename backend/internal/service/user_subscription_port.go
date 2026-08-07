@@ -29,7 +29,9 @@ type UserSubscriptionRepository interface {
 	UpdateStatus(ctx context.Context, subscriptionID int64, status string) error
 	UpdateNotes(ctx context.Context, subscriptionID int64, notes string) error
 
-	ActivateWindows(ctx context.Context, id int64, start time.Time) error
+	// ActivateWindows keeps daily quotas on calendar-day boundaries while
+	// preserving exact first-use anchors for weekly and monthly windows.
+	ActivateWindows(ctx context.Context, id int64, dailyStart, periodicStart time.Time) error
 	ResetDailyUsage(ctx context.Context, id int64, newWindowStart time.Time) error
 	ResetWeeklyUsage(ctx context.Context, id int64, newWindowStart time.Time) error
 	ResetMonthlyUsage(ctx context.Context, id int64, newWindowStart time.Time) error

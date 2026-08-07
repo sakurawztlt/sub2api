@@ -1,6 +1,10 @@
 package service
 
-import "time"
+import (
+	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
+)
 
 type UserSubscription struct {
 	ID      int64
@@ -51,15 +55,23 @@ func (s *UserSubscription) IsWindowActivated() bool {
 	return s.DailyWindowStart != nil || s.WeeklyWindowStart != nil || s.MonthlyWindowStart != nil
 }
 
+// HasOneTimeDailyQuota reports subscriptions whose whole term is at most one
+// calendar day. Their daily allowance is a one-shot quota and must not be
+// granted again merely because the term crosses midnight.
+func (s *UserSubscription) HasOneTimeDailyQuota() bool {
+	if s == nil || s.StartsAt.IsZero() || s.ExpiresAt.IsZero() {
+		return false
+	}
+	return !s.ExpiresAt.After(s.StartsAt.AddDate(0, 0, 1))
+}
+
 func (s *UserSubscription) NeedsDailyReset() bool {
 	return s.NeedsDailyResetAt(time.Now())
 }
 
 func (s *UserSubscription) NeedsDailyResetAt(now time.Time) bool {
-	if s.DailyWindowStart == nil {
-		return false
-	}
-	return !now.Before(s.DailyWindowStart.Add(24 * time.Hour))
+	_, ok := s.automaticDailyWindowStartAt(now)
+	return ok
 }
 
 func (s *UserSubscription) NeedsWeeklyReset() bool {
@@ -85,8 +97,22 @@ func (s *UserSubscription) NeedsMonthlyResetAt(now time.Time) bool {
 }
 
 func (s *UserSubscription) canAutomaticallyResetDailyAt(now time.Time) bool {
-	_, ok := s.automaticWindowStartAt(s.DailyWindowStart, 24*time.Hour, now)
+	_, ok := s.automaticDailyWindowStartAt(now)
 	return ok
+}
+
+// automaticDailyWindowStartAt aligns recurring daily quotas to the configured
+// timezone's calendar day. A manual reset may clear today's usage, but it must
+// not move the next refresh away from midnight.
+func (s *UserSubscription) automaticDailyWindowStartAt(now time.Time) (time.Time, bool) {
+	if s == nil || s.DailyWindowStart == nil || s.HasOneTimeDailyQuota() {
+		return time.Time{}, false
+	}
+	today := timezone.StartOfDay(now)
+	if !today.After(timezone.StartOfDay(*s.DailyWindowStart)) {
+		return time.Time{}, false
+	}
+	return today, true
 }
 
 func (s *UserSubscription) canAutomaticallyResetWeeklyAt(now time.Time) bool {
@@ -131,7 +157,11 @@ func (s *UserSubscription) DailyResetTime() *time.Time {
 	if s.DailyWindowStart == nil {
 		return nil
 	}
-	t := s.DailyWindowStart.Add(24 * time.Hour)
+	if s.HasOneTimeDailyQuota() {
+		t := s.ExpiresAt
+		return &t
+	}
+	t := timezone.StartOfDay(*s.DailyWindowStart).AddDate(0, 0, 1)
 	return &t
 }
 
