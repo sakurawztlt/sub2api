@@ -125,13 +125,15 @@ export function useGrokOAuth() {
       sub: tokenInfo.sub,
       team_id: tokenInfo.team_id,
       subscription_tier: tokenInfo.subscription_tier,
-      entitlement_status: tokenInfo.entitlement_status,
-      base_url: 'https://cli-chat-proxy.grok.com/v1'
+      entitlement_status: tokenInfo.entitlement_status
     }
     if (tokenInfo.refresh_token) credentials.refresh_token = tokenInfo.refresh_token
     if (tokenInfo.id_token) credentials.id_token = tokenInfo.id_token
+    const blocked = new Set(['sso_token', 'password', 'sso', 'sso-rw'])
     return Object.fromEntries(
-      Object.entries(credentials).filter(([, value]) => value !== undefined && value !== '')
+      Object.entries(credentials).filter(
+        ([key, value]) => !blocked.has(key) && value !== undefined && value !== ''
+      )
     )
   }
 
@@ -141,6 +143,61 @@ export function useGrokOAuth() {
     if (tokenInfo.subscription_tier) extra.subscription_tier = tokenInfo.subscription_tier
     if (tokenInfo.entitlement_status) extra.entitlement_status = tokenInfo.entitlement_status
     return extra
+  }
+
+  const validateSSOToken = async (
+    ssoToken: string,
+    proxyId?: number | null
+  ): Promise<GrokTokenInfo | null> => {
+    if (!ssoToken.trim()) {
+      error.value = t('admin.accounts.oauth.grok.pleaseEnterSSOToken', 'Please enter an SSO token')
+      return null
+    }
+    loading.value = true
+    error.value = ''
+    try {
+      return await adminAPI.grok.validateSSOToken(ssoToken.trim(), proxyId)
+    } catch (err: unknown) {
+      error.value = extractI18nErrorMessage(
+        err,
+        t,
+        'admin.accounts.oauth.grok.errors',
+        t('admin.accounts.oauth.grok.failedToValidateSSO', 'Failed to validate SSO token')
+      )
+      appStore.showError(error.value)
+      return null
+    } finally {
+      loading.value = false
+    }
+  }
+
+  const authorizePassword = async (
+    emailAndPassword: string,
+    proxyId?: number | null
+  ): Promise<GrokTokenInfo | null> => {
+    if (!emailAndPassword.trim()) {
+      error.value = t(
+        'admin.accounts.oauth.grok.pleaseEnterPassword',
+        'Please enter email----password'
+      )
+      return null
+    }
+    loading.value = true
+    error.value = ''
+    try {
+      return await adminAPI.grok.authorizePassword(emailAndPassword, proxyId)
+    } catch (err: unknown) {
+      error.value = extractI18nErrorMessage(
+        err,
+        t,
+        'admin.accounts.oauth.grok.errors',
+        t('admin.accounts.oauth.grok.failedToAuthorizePassword', 'Password authorization failed')
+      )
+      appStore.showError(error.value)
+      return null
+    } finally {
+      loading.value = false
+    }
   }
 
   return {
@@ -153,6 +210,8 @@ export function useGrokOAuth() {
     generateAuthUrl,
     exchangeAuthCode,
     validateRefreshToken,
+    validateSSOToken,
+    authorizePassword,
     buildCredentials,
     buildExtraInfo
   }

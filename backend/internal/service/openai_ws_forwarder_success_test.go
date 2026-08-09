@@ -400,7 +400,8 @@ func TestOpenAIGatewayService_BuildOpenAIWSHeadersPreservesCodexIdentity(t *test
 
 	svc := &OpenAIGatewayService{}
 	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
-	headers, _ := svc.buildOpenAIWSHeaders(
+	headers, _, err := svc.buildOpenAIWSHeaders(
+		context.Background(),
 		c,
 		account,
 		"token",
@@ -409,7 +410,10 @@ func TestOpenAIGatewayService_BuildOpenAIWSHeadersPreservesCodexIdentity(t *test
 		"",
 		"",
 		"",
+		"",
+		"",
 	)
+	require.NoError(t, err)
 
 	require.Equal(t, "window-ws", headers.Get("X-Codex-Window-ID"))
 	require.Equal(t, "installation-ws", headers.Get("X-Codex-Installation-ID"))

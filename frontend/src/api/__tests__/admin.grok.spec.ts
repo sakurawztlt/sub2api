@@ -10,6 +10,7 @@ vi.mock('@/api/client', () => ({
 }))
 
 import {
+  authorizePassword,
   exchangeCode,
   generateAuthUrl,
   queryQuota,
@@ -81,5 +82,21 @@ describe('admin Grok API', () => {
 
     expect(get).toHaveBeenCalledWith('/admin/grok/accounts/42/quota')
     expect(post).toHaveBeenCalledWith('/admin/grok/accounts/42/reset-quota')
+  })
+
+  it('preserves password whitespace and applies the authorization timeout', async () => {
+    post.mockResolvedValueOnce({ data: { access_token: 'access-token' } })
+
+    await authorizePassword(' user@example.com ----  password with spaces  ', 7)
+
+    expect(post).toHaveBeenCalledWith(
+      '/admin/grok/oauth/password',
+      {
+        email: 'user@example.com',
+        password: '  password with spaces  ',
+        proxy_id: 7
+      },
+      { timeout: 120_000 }
+    )
   })
 })

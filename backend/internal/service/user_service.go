@@ -180,6 +180,15 @@ type UserRepository interface {
 	DisableTotp(ctx context.Context, userID int64) error
 }
 
+// RegistrationEmailDomainRepository is the narrow persistence capability used
+// by the non-whitelisted email-domain quota path. Keeping it separate avoids
+// forcing unrelated UserRepository test doubles to implement registration-only
+// operations.
+type RegistrationEmailDomainRepository interface {
+	CountUsersByEmailDomain(ctx context.Context, domain string) (int, error)
+	CreateWithEmailAliasGuardAndDomainLimit(ctx context.Context, user *User, domain string) error
+}
+
 type UserAuthIdentityRecord struct {
 	ProviderType    string
 	ProviderKey     string

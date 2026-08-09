@@ -474,7 +474,7 @@ func applyGrokCLIProxyHeaders(req *http.Request) {
 	if req.Method == http.MethodGet && strings.TrimRight(req.URL.Path, "/") == "/v1/billing" {
 		req.Header.Set(xai.CLITokenAuthHeader, xai.CLITokenAuthValue)
 		req.Header.Set(xai.CLIClientVersionHeader, xai.CLIClientVersion)
-		req.Header.Set("User-Agent", xai.CLIUserAgent)
+		req.Header.Set("User-Agent", xai.CLIBillingUserAgent)
 		return
 	}
 	version := strings.TrimSpace(os.Getenv(grokCLIVersionOverride))

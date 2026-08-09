@@ -36,6 +36,10 @@ type GrokGenerateAuthURLRequest struct {
 	RedirectURI string `json:"redirect_uri"`
 }
 
+func (h *GrokOAuthHandler) GetCapabilities(c *gin.Context) {
+	response.Success(c, h.grokOAuthService.GetCapabilities())
+}
+
 func (h *GrokOAuthHandler) GenerateAuthURL(c *gin.Context) {
 	var req GrokGenerateAuthURLRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -84,6 +88,17 @@ type GrokRefreshTokenRequest struct {
 	ProxyID      *int64 `json:"proxy_id"`
 }
 
+type GrokSSOTokenRequest struct {
+	SSOToken string `json:"sso_token"`
+	ProxyID  *int64 `json:"proxy_id"`
+}
+
+type GrokPasswordAuthorizeRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	ProxyID  *int64 `json:"proxy_id"`
+}
+
 func (h *GrokOAuthHandler) RefreshToken(c *gin.Context) {
 	var req GrokRefreshTokenRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -102,11 +117,49 @@ func (h *GrokOAuthHandler) RefreshToken(c *gin.Context) {
 	var proxyURL string
 	if req.ProxyID != nil {
 		proxy, err := h.adminService.GetProxy(c.Request.Context(), *req.ProxyID)
-		if err == nil && proxy != nil {
-			proxyURL = proxy.URL()
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
 		}
+		if proxy == nil {
+			response.BadRequest(c, "GROK_OAUTH_PROXY_NOT_FOUND: proxy not found")
+			return
+		}
+		proxyURL = proxy.URL()
 	}
 	tokenInfo, err := h.grokOAuthService.RefreshToken(c.Request.Context(), refreshToken, proxyURL, req.ClientID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, tokenInfo)
+}
+
+// ValidateSSOToken converts a Web SSO cookie into Build OAuth tokens.
+// The response contains OAuth token info only and never echoes sso_token.
+func (h *GrokOAuthHandler) ValidateSSOToken(c *gin.Context) {
+	var req GrokSSOTokenRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	tokenInfo, err := h.grokOAuthService.ValidateSSOToken(c.Request.Context(), req.SSOToken, req.ProxyID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, tokenInfo)
+}
+
+// AuthorizePassword exchanges email/password for Build OAuth tokens via SSO
+// conversion. The response never includes the password or raw sso_token.
+func (h *GrokOAuthHandler) AuthorizePassword(c *gin.Context) {
+	var req GrokPasswordAuthorizeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	tokenInfo, err := h.grokOAuthService.AuthorizePassword(c.Request.Context(), req.Email, req.Password, req.ProxyID)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return

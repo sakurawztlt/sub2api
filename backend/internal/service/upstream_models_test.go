@@ -251,13 +251,13 @@ func TestBuildUpstreamModelsRequestSupportsGrokOAuth(t *testing.T) {
 	require.Equal(t, "Bearer oauth-access-token", req.Header.Get("Authorization"))
 	require.Equal(t, grokCLIVersion, req.Header.Get("X-Grok-Client-Version"))
 	require.Equal(t, "interactive", req.Header.Get("X-Grok-Client-Mode"))
-	require.Equal(t, grokUpstreamUserAgent, req.Header.Get("User-Agent"))
+	require.Equal(t, defaultGrokUpstreamUserAgent(), req.Header.Get("User-Agent"))
 	require.Equal(t, "grok-user-id", req.Header.Get("X-UserID"))
 	require.Equal(t, "grok-user@example.com", req.Header.Get("X-Email"))
 	require.NotContains(t, req.Header.Get("Authorization"), "oauth-refresh-token")
 }
 
-func TestBuildUpstreamModelsRequestGrokOAuthCanonicalizesLegacyOfficialBase(t *testing.T) {
+func TestBuildUpstreamModelsRequestGrokOAuthHonorsExplicitOfficialBase(t *testing.T) {
 	t.Parallel()
 
 	svc := &AccountTestService{
@@ -266,9 +266,9 @@ func TestBuildUpstreamModelsRequestGrokOAuthCanonicalizesLegacyOfficialBase(t *t
 	}
 	req, err := svc.buildUpstreamModelsRequest(context.Background(), grokOAuthModelSyncTestAccount(xai.DefaultBaseURL))
 	require.NoError(t, err)
-	require.Equal(t, xai.DefaultCLIBaseURL+"/models", req.URL.String())
-	require.Equal(t, "xai-grok-cli", req.Header.Get("X-XAI-Token-Auth"))
-	require.Equal(t, grokCLIVersion, req.Header.Get("X-Grok-Client-Version"))
+	require.Equal(t, xai.DefaultBaseURL+"/models", req.URL.String())
+	require.Empty(t, req.Header.Get("X-XAI-Token-Auth"))
+	require.Empty(t, req.Header.Get("X-Grok-Client-Version"))
 }
 
 func TestBuildUpstreamModelsRequestGrokOAuthBypassesSchedulingGate(t *testing.T) {

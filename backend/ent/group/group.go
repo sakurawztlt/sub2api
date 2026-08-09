@@ -74,6 +74,16 @@ const (
 	FieldVideoPrice720p = "video_price_720p"
 	// FieldVideoPrice1080p holds the string denoting the video_price_1080p field in the database.
 	FieldVideoPrice1080p = "video_price_1080p"
+	// FieldVideoModelPrices holds the string denoting the video_model_prices field in the database.
+	FieldVideoModelPrices = "video_model_prices"
+	// FieldSearchPricePer1k holds the string denoting the search_price_per_1k field in the database.
+	FieldSearchPricePer1k = "search_price_per_1k"
+	// FieldAudioRealtimePricePerMin holds the string denoting the audio_realtime_price_per_min field in the database.
+	FieldAudioRealtimePricePerMin = "audio_realtime_price_per_min"
+	// FieldAudioTtsPricePerMillionChars holds the string denoting the audio_tts_price_per_million_chars field in the database.
+	FieldAudioTtsPricePerMillionChars = "audio_tts_price_per_million_chars"
+	// FieldAudioSttPricePerHour holds the string denoting the audio_stt_price_per_hour field in the database.
+	FieldAudioSttPricePerHour = "audio_stt_price_per_hour"
 	// FieldClaudeCodeOnly holds the string denoting the claude_code_only field in the database.
 	FieldClaudeCodeOnly = "claude_code_only"
 	// FieldFallbackGroupID holds the string denoting the fallback_group_id field in the database.
@@ -212,6 +222,11 @@ var Columns = []string{
 	FieldVideoPrice480p,
 	FieldVideoPrice720p,
 	FieldVideoPrice1080p,
+	FieldVideoModelPrices,
+	FieldSearchPricePer1k,
+	FieldAudioRealtimePricePerMin,
+	FieldAudioTtsPricePerMillionChars,
+	FieldAudioSttPricePerHour,
 	FieldClaudeCodeOnly,
 	FieldFallbackGroupID,
 	FieldFallbackGroupIDOnInvalidRequest,
@@ -306,6 +321,14 @@ var (
 	DefaultVideoRateIndependent bool
 	// DefaultVideoRateMultiplier holds the default value on creation for the "video_rate_multiplier" field.
 	DefaultVideoRateMultiplier float64
+	// SearchPricePer1kValidator is a validator for the "search_price_per_1k" field. It is called by the builders before save.
+	SearchPricePer1kValidator func(float64) error
+	// AudioRealtimePricePerMinValidator is a validator for the "audio_realtime_price_per_min" field. It is called by the builders before save.
+	AudioRealtimePricePerMinValidator func(float64) error
+	// AudioTtsPricePerMillionCharsValidator is a validator for the "audio_tts_price_per_million_chars" field. It is called by the builders before save.
+	AudioTtsPricePerMillionCharsValidator func(float64) error
+	// AudioSttPricePerHourValidator is a validator for the "audio_stt_price_per_hour" field. It is called by the builders before save.
+	AudioSttPricePerHourValidator func(float64) error
 	// DefaultClaudeCodeOnly holds the default value on creation for the "claude_code_only" field.
 	DefaultClaudeCodeOnly bool
 	// DefaultModelRoutingEnabled holds the default value on creation for the "model_routing_enabled" field.
@@ -491,6 +514,26 @@ func ByVideoPrice720p(opts ...sql.OrderTermOption) OrderOption {
 // ByVideoPrice1080p orders the results by the video_price_1080p field.
 func ByVideoPrice1080p(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldVideoPrice1080p, opts...).ToFunc()
+}
+
+// BySearchPricePer1k orders the results by the search_price_per_1k field.
+func BySearchPricePer1k(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSearchPricePer1k, opts...).ToFunc()
+}
+
+// ByAudioRealtimePricePerMin orders the results by the audio_realtime_price_per_min field.
+func ByAudioRealtimePricePerMin(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAudioRealtimePricePerMin, opts...).ToFunc()
+}
+
+// ByAudioTtsPricePerMillionChars orders the results by the audio_tts_price_per_million_chars field.
+func ByAudioTtsPricePerMillionChars(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAudioTtsPricePerMillionChars, opts...).ToFunc()
+}
+
+// ByAudioSttPricePerHour orders the results by the audio_stt_price_per_hour field.
+func ByAudioSttPricePerHour(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAudioSttPricePerHour, opts...).ToFunc()
 }
 
 // ByClaudeCodeOnly orders the results by the claude_code_only field.

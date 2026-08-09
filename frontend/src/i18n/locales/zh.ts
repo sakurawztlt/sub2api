@@ -426,6 +426,8 @@ export default {
       USER_NOT_ACTIVE: '账号已被禁用',
     },
     registrationFailed: '注册失败，请重试。',
+    emailDomainRegistrationLimit:
+      '该邮箱域名无法注册新账户。请使用主流邮箱注册；如需使用企业邮箱，请联系客服添加域名白名单。',
     emailSuffixNotAllowed: '该邮箱域名不在允许注册范围内。',
     emailSuffixNotAllowedWithAllowed: '该邮箱域名不被允许。可用域名：{suffixes}',
     emailSuffixAllowedMore: '等 {count} 项',
@@ -2410,7 +2412,19 @@ export default {
         videoMultiplier: '视频独立倍率',
         modeHint: '视频按秒计费：费用 = 每秒价格 × 时长（1-15 秒，未指定默认 8 秒）。默认叠加当前分组有效倍率；开启独立倍率后改用视频独立倍率。',
         finalPricePreview: '最终每秒价格预览',
-        notConfigured: '未配置'
+        notConfigured: '未配置',
+        modelOverridesTitle: '按模型覆盖单价',
+        modelOverridesDescription: '可按 Grok 视频模型族和分辨率覆盖基础每秒单价。'
+      },
+      explicitPricing: {
+        title: '搜索与 Voice 定价',
+        description: '可选配置 Grok 搜索和 Voice 的显式价格；留空使用系统默认值。',
+        searchPricePer1k: '搜索每 1000 次价格'
+      },
+      voicePricing: {
+        audioRealtimePerMin: '实时音频每分钟价格',
+        audioTtsPerMillionChars: 'TTS 每百万字符价格',
+        audioSttPerHour: 'STT 每小时价格'
       },
       peakRate: {
         enable: '启用高峰倍率',
@@ -3696,8 +3710,14 @@ export default {
         claude: 'Claude',
         grokRequests: '请求',
         grokTokens: 'Token',
-        grokFreeQuota24hHint: '按 sub2api 近 24 小时本地 Token 用量估算（上限 2M）',
+        grokFreeQuota24hHint: '按 sub2api 近 24 小时本地 Token 用量估算（上限 {limit}）',
         grokWeeklyUsage: '周额度已用 {percent}%',
+        grokUsed: '已用 $',
+        grokBalance: '余额 $',
+        grokPrepaid: '预付余额',
+        grokMonthlyLimit: '月度已用/上限（USD）',
+        grokOverage: '超额 onDemandUsed/onDemandCap',
+        grokOverageShort: '超额 $',
         grokUnknown: 'Grok 配额需等待首次上游响应返回 xAI rate-limit 头后显示。',
         grokRetryAfter: '{time} 后重试',
         grokProbe: '探测',
@@ -4332,6 +4352,23 @@ export default {
           refreshTokenAuth: '手动输入 RT',
           refreshTokenDesc: '输入已有的 xAI refresh token，支持批量输入（每行一个）。',
           refreshTokenPlaceholder: '粘贴您的 xAI refresh token...\n支持多个，每行一个',
+          ssoCookieAuth: 'SSO Cookie 导入',
+          ssoCookieDesc: '粘贴 Grok Web SSO key，系统会走 xAI Device Flow 并转换为 Grok Build OAuth 凭据。',
+          ssoCookieLabel: 'Grok Web SSO Key',
+          ssoCookiePlaceholder: '粘贴 Grok Web SSO key',
+          ssoCookieHint: '若 Grok Web 会话有地区限制，请使用对应地区代理。',
+          emailPasswordAuth: '邮箱密码登录',
+          emailPasswordDesc:
+            '使用 Grok 网页邮箱与密码登录。服务端仅用密码换取临时 SSO，再转换为 Build OAuth；密码与 raw SSO 均不会写入账号凭据。',
+          emailPasswordInputLabel: '邮箱----密码',
+          emailPasswordPlaceholder: "user{'@'}example.com----your-password\n支持多个，每行一组",
+          emailPasswordHint: '格式：email----password（密码可含连字符），需要配置验证码凭据。',
+          pleaseEnterPassword: '请输入 email----password（每行一组）',
+          pleaseEnterSSOToken: '请输入 SSO Token',
+          failedToValidateSSO: '校验 Grok SSO 失败',
+          failedToAuthorizePassword: 'Grok 密码授权失败',
+          convertingSSO: '转换中...',
+          convertSSOAndCreate: '转换并应用凭据',
           validating: '验证中...',
           validateAndCreate: '验证并创建账号',
           pleaseEnterRefreshToken: '请输入 Refresh Token',
@@ -6104,9 +6141,12 @@ export default {
         emailVerificationHint: '新用户注册时需要验证邮箱',
         emailSuffixWhitelist: '邮箱域名白名单',
         emailSuffixWhitelistHint:
-          "仅允许使用指定域名的邮箱注册账号（例如 {'@'}qq.com, {'@'}gmail.com, *.edu.cn）",
+          "仅允许使用指定域名的邮箱注册账号；留空则不限制（例如 {'@'}qq.com, {'@'}gmail.com, *.edu.cn）",
         emailSuffixWhitelistPlaceholder: "{'@'}example.com, *.edu.cn",
         emailSuffixWhitelistInputHint: '留空则不限制。使用 *.edu.cn 可匹配 edu.cn 及其子域名。',
+        emailDomainQuota: '非白名单域名限量注册',
+        emailDomainQuotaHint:
+          '开启后，白名单非空时，其他可注册主域名各限注册一个账户；关闭时非白名单域名直接拒绝注册。白名单为空时本开关无效果',
         promoCode: '优惠码',
         promoCodeHint: '允许用户在注册时使用优惠码',
         invitationCode: '邀请码注册',

@@ -48,17 +48,19 @@ describe('AccountUsageCell Grok OAuth', () => {
     })
   })
 
-  it('renders remaining request/token quota and compatible passive metadata', async () => {
+  it('renders current paid billing, prepaid balance, and retry metadata', async () => {
     getUsage.mockResolvedValue({
-      grok_request_quota: {
-        limit: 100,
-        remaining: 73,
-        reset_at: '2026-08-05T01:00:00Z'
-      },
-      grok_token_quota: {
-        limit: 10_000,
-        remaining: 8_000,
-        reset_at: '2026-08-05T01:00:00Z'
+      grok_billing: {
+        plan: 'SuperGrok',
+        period_type: 'weekly',
+        usage_percent: 25,
+        used_percent: 40,
+        prepaid_balance: 12.5,
+        monthly_used: 8,
+        monthly_limit: 20,
+        monthly_limit_cents: 2000,
+        period_end: '2026-08-12T00:00:00Z',
+        billing_period_end: '2026-09-05T00:00:00Z'
       },
       grok_retry_after_seconds: 120,
       grok_quota_snapshot_state: 'observed',
@@ -87,12 +89,10 @@ describe('AccountUsageCell Grok OAuth', () => {
     await flushPromises()
 
     expect(getUsage).toHaveBeenCalledWith(99)
-    expect(wrapper.text()).toContain('admin.accounts.usageWindow.grokRequests|73')
-    expect(wrapper.text()).toContain('admin.accounts.usageWindow.grokTokens|80')
-    expect(wrapper.text()).toContain('|true')
-    expect(wrapper.text()).toContain('active')
-    expect(wrapper.text()).toContain('3 req')
-    expect(wrapper.text()).toContain('4.2K')
+    expect(wrapper.text()).toContain('7d|25')
+    expect(wrapper.text()).toContain('30d|40')
+    expect(wrapper.text()).toContain('admin.accounts.usageWindow.grokPrepaid $12.5')
+    expect(wrapper.text()).toContain('8.00/20.0')
     expect(wrapper.text()).toContain('admin.accounts.usageWindow.grokRetryAfter')
     expect(wrapper.find('.grok-probe').exists()).toBe(true)
   })

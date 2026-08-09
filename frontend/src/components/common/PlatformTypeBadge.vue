@@ -127,6 +127,8 @@ const planLabel = computed(() => {
       return 'SuperGrok'
     case 'supergrokheavy':
       return 'SuperGrok Heavy'
+    case 'heavy':
+      return 'Heavy'
     case 'abnormal':
       return t('admin.accounts.subscriptionAbnormal')
     default:
@@ -142,7 +144,10 @@ const isGrokFreePlan = computed(
 
 const planIconName = computed<'bolt' | null>(() => {
   if (props.platform !== 'grok') return null
-  return normalizedPlanType.value === 'supergrok' || normalizedPlanType.value === 'supergrokheavy'
+  return normalizedPlanType.value === 'supergrok' ||
+    normalizedPlanType.value === 'supergrokheavy' ||
+    normalizedPlanType.value === 'heavy' ||
+    normalizedPlanType.value.includes('heavy')
     ? 'bolt'
     : null
 })
@@ -182,6 +187,27 @@ const typeClass = computed(() => {
 const planBadgeClass = computed(() => {
   if (normalizedPlanType.value === 'abnormal') {
     return 'bg-red-100 text-red-600 dark:bg-red-900/30 dark:text-red-400'
+  }
+  if (normalizedPlanType.value === 'free' || normalizedPlanType.value === 'basic') {
+    return 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+  }
+  if (props.platform === 'grok' && normalizedPlanType.value) {
+    if (normalizedPlanType.value.includes('heavy')) {
+      return 'bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-300'
+    }
+    if (normalizedPlanType.value.includes('supergrok')) {
+      return 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300'
+    }
+    return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+  }
+  if (normalizedPlanType.value === 'plus') {
+    return 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300'
+  }
+  if (normalizedPlanType.value === 'team') {
+    return 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300'
+  }
+  if (normalizedPlanType.value === 'pro' || normalizedPlanType.value === 'chatgptpro') {
+    return 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300'
   }
   return typeClass.value
 })

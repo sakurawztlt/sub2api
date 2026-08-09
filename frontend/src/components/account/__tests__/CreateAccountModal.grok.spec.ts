@@ -32,4 +32,8 @@ describe('CreateAccountModal Grok account capabilities', () => {
     expect(source).toContain("await adminAPI.accounts.create({\n          name: accountName")
     expect(source).toContain('if (modelMapping) credentials.model_mapping = modelMapping')
   })
+
+  it('keeps Grok password authorization hidden in the create flow', () => {
+    expect(source).toContain(':show-email-password-option="false"')
+  })
 })

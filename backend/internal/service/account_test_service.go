@@ -53,6 +53,12 @@ type TestEvent struct {
 	Error    string `json:"error,omitempty"`
 }
 
+// AccountTestOptions carries optional media for admin connectivity tests.
+type AccountTestOptions struct {
+	ImageDataURL string
+	AudioDataURL string
+}
+
 const (
 	defaultGeminiTextTestPrompt  = "hi"
 	defaultGeminiImageTestPrompt = "Generate a cute orange cat astronaut sticker on a clean pastel background."
@@ -221,7 +227,7 @@ func createTestPayload(modelID string) (map[string]any, error) {
 // All account types use full Claude Code client characteristics, only auth header differs
 // modelID is optional - if empty, defaults to claude.DefaultTestModel
 // mode is optional - "compact" routes OpenAI accounts to the /responses/compact probe path
-func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int64, modelID string, prompt string, mode string) error {
+func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int64, modelID string, prompt string, mode string, opts ...AccountTestOptions) error {
 	ctx := c.Request.Context()
 
 	// Get account
@@ -240,6 +246,7 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 	}
 
 	if account.Platform == PlatformGrok {
+		_ = opts // Grok media options are consumed by the extended probe paths.
 		return s.testGrokAccountConnection(c, account, modelID)
 	}
 

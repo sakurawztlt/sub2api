@@ -41,14 +41,29 @@ describe('UseKeyModal', () => {
       }
     })
 
-    expect(wrapper.text()).toContain('keys.useKeyModal.cliTabs.grokCli')
+    const grokTab = wrapper.findAll('button').find((button) =>
+      button.text().includes('keys.useKeyModal.cliTabs.grokCli')
+    )
+    expect(grokTab).toBeDefined()
+    await grokTab!.trigger('click')
+    await nextTick()
+
     const grokConfig = wrapper.findAll('pre code')
       .map((code) => code.text())
-      .find((content) => content.includes('[model."grok"]'))
+      .find((content) => content.includes('[endpoints]'))
+    expect(grokConfig).toContain('models_base_url = "https://example.com/v1"')
+    expect(grokConfig).toContain('models_list_url = "https://example.com/v1/models"')
+    expect(grokConfig).toContain('preferred_method = "api_key"')
+    expect(grokConfig).toContain('[model."grok-4.5"]')
     expect(grokConfig).toContain('model = "grok-4.5"')
-    expect(grokConfig).toContain('base_url = "https://example.com/v1"')
-    expect(grokConfig).toContain('api_key = "sk-grok-test"')
+    expect(grokConfig).toContain('env_key = "XAI_API_KEY"')
     expect(grokConfig).toContain('api_backend = "responses"')
+    expect(grokConfig).toContain('context_window = 500000')
+    expect(grokConfig).toContain('[model."grok-build-0.1"]')
+    expect(grokConfig).toContain('grok-4.20-multi-agent-0309')
+    expect(grokConfig).toContain('image_gen = true')
+    expect(grokConfig).toContain('video_gen = true')
+    expect(grokConfig).not.toMatch(/^api_key = "sk-grok-test"$/m)
 
     const windowsTab = wrapper.findAll('button').find(
       (button) => button.text().trim() === 'Windows'
@@ -56,7 +71,7 @@ describe('UseKeyModal', () => {
     expect(windowsTab).toBeDefined()
     await windowsTab!.trigger('click')
     await nextTick()
-    expect(wrapper.text()).toContain('%USERPROFILE%\\.grok\\config.toml')
+    expect(wrapper.text().toLowerCase()).toContain('%userprofile%\\.grok\\config.toml')
 
     const opencodeTab = wrapper.findAll('button').find((button) =>
       button.text().includes('keys.useKeyModal.cliTabs.opencode')
@@ -66,13 +81,16 @@ describe('UseKeyModal', () => {
     await nextTick()
 
     const parsed = JSON.parse(wrapper.find('pre code').text())
-    expect(parsed.provider.grok.npm).toBe('@ai-sdk/openai')
+    expect(parsed.provider.grok.npm).toBe('@ai-sdk/openai-compatible')
+    expect(parsed.provider.grok.name).toBe('Grok via Sub2API')
     expect(parsed.provider.grok.options).toEqual({
       baseURL: 'https://example.com/v1',
       apiKey: 'sk-grok-test'
     })
     expect(parsed.provider.grok.models['grok-4.5']).toBeDefined()
+    expect(parsed.provider.grok.models['grok-4.5'].limit.context).toBe(500000)
     expect(parsed.provider.grok.models['grok-build-0.1']).toBeDefined()
+    expect(parsed.provider.grok.models['grok-4.20-multi-agent-0309']).toBeDefined()
     expect(parsed.provider.grok.models['grok-composer-2.5-fast']).toBeDefined()
   })
 
@@ -137,7 +155,7 @@ describe('UseKeyModal', () => {
     )
   })
 
-  it('renders Grok Codex Responses WebSocket setup without OpenAI auth files', async () => {
+  it('renders Grok Codex Responses HTTP setup without OpenAI auth files', async () => {
     const wrapper = mount(UseKeyModal, {
       props: {
         show: true,
@@ -165,16 +183,16 @@ describe('UseKeyModal', () => {
     await nextTick()
 
     const codeBlocks = wrapper.findAll('pre code').map((code) => code.text())
-    const configToml = codeBlocks.find((content) =>
-      content.includes('[model_providers.sub2api_grok]')
-    )
-    expect(configToml).toContain('model_provider = "sub2api_grok"')
+    const configToml = codeBlocks.find((content) => content.includes('[model_providers.sub2api]'))
+    expect(configToml).toContain('model_provider = "sub2api"')
     expect(configToml).toContain('base_url = "https://example.com/v1"')
     expect(configToml).toContain('env_key = "SUB2API_API_KEY"')
-    expect(configToml).toContain('supports_websockets = true')
-    expect(configToml).toContain('[features]\nresponses_websockets_v2 = true')
-    expect(configToml).not.toContain('requires_openai_auth')
-    expect(codeBlocks).toContain('export SUB2API_API_KEY="sk-grok-codex-test"')
+    expect(configToml).toContain('wire_api = "responses"')
+    expect(configToml).toContain('requires_openai_auth = false')
+    expect(configToml).toContain('supports_websockets = false')
+    expect(configToml).toContain('grok-imagine-image')
+    expect(configToml).not.toContain('responses_websockets_v2')
+    expect(codeBlocks.join('\n')).toContain('SUB2API_API_KEY')
     expect(wrapper.text()).not.toContain('auth.json')
   })
 

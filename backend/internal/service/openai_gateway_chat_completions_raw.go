@@ -149,6 +149,11 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 		if stripErr != nil {
 			return nil, fmt.Errorf("remove Responses-only Grok prompt cache key: %w", stripErr)
 		}
+		var reasoningErr error
+		upstreamBody, reasoningErr = normalizeGrokChatReasoningEffort(upstreamBody, upstreamModel)
+		if reasoningErr != nil {
+			return nil, fmt.Errorf("normalize Grok chat reasoning effort: %w", reasoningErr)
+		}
 	}
 
 	logger.L().Debug("openai chat_completions raw: forwarding without protocol conversion",
@@ -307,7 +312,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 
 func (s *OpenAIGatewayService) rawChatCompletionsURL(account *Account) (string, error) {
 	if account.Platform == PlatformGrok {
-		targetURL, err := buildGrokChatCompletionsURL(account, s.cfg)
+		targetURL, err := buildGrokChatCompletionsURL(account, s.cfg, s.settingService)
 		if err != nil {
 			return "", fmt.Errorf("invalid grok base_url: %w", err)
 		}

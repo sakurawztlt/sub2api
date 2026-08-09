@@ -2319,6 +2319,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 						if err == nil && fallbackResp.StatusCode < 400 {
 							_ = resp.Body.Close()
 							resp = fallbackResp
+							billingModel = fallbackModel
 						} else if fallbackResp != nil {
 							_ = fallbackResp.Body.Close()
 						}
@@ -3097,11 +3098,10 @@ func (s *AntigravityGatewayService) observeAntigravityGeminiSSELine(c *gin.Conte
 	if payload == "" || payload == "[DONE]" {
 		return
 	}
-	raw := []byte(payload)
-	if inner, err := s.unwrapV1InternalResponse(raw); err == nil && len(inner) > 0 {
-		raw = inner
-	}
-	observer.ObserveGemini(raw)
+	// The observer understands direct, single-wrapper, and nested-wrapper
+	// Gemini shapes. Keep the original payload so outer model declarations are
+	// not discarded and stream handling does not unwrap the same event twice.
+	observer.ObserveGemini([]byte(payload))
 }
 
 // antigravityClientWriter 封装流式响应的客户端写入，自动检测断开并标记。

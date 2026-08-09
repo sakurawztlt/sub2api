@@ -381,7 +381,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	var upstreamReq *http.Request
 	if account.Platform == PlatformGrok {
-		upstreamReq, err = buildGrokResponsesRequest(upstreamCtx, c, account, responsesBody, token, s.cfg, grokCacheIdentity)
+		upstreamReq, err = buildGrokResponsesRequest(upstreamCtx, c, account, responsesBody, token, grokCacheIdentity, s.cfg, s.settingService)
 	} else {
 		upstreamReq, err = s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, isStream, promptCacheKey, false)
 	}
@@ -767,6 +767,23 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	}
 
 	anthropicResp := apicompat.ResponsesToAnthropicWithUsageOptions(finalResponse, originalModel, usageOpts)
+	// Grok reports authoritative cache counters even for small synthetic/test
+	// turns. Preserve those explicit counters instead of applying Claude's
+	// request-side cache eligibility estimate to provider-observed usage.
+	if account != nil && account.Platform == PlatformGrok && finalResponse.Usage != nil && finalResponse.Usage.InputTokensDetails != nil {
+		total := maxInt(finalResponse.Usage.InputTokens, 0)
+		cached := maxInt(finalResponse.Usage.InputTokensDetails.CachedTokens, 0)
+		if cached > total {
+			cached = total
+		}
+		creation := maxInt(finalResponse.Usage.CacheCreationInputTokens, 0)
+		if creation > total-cached {
+			creation = total - cached
+		}
+		anthropicResp.Usage.InputTokens = total - cached - creation
+		anthropicResp.Usage.CacheCreationInputTokens = creation
+		anthropicResp.Usage.CacheReadInputTokens = cached
+	}
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)

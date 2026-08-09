@@ -115,14 +115,22 @@ func TestGrokOAuthHandlerQueryQuotaProbesUpstream(t *testing.T) {
 	require.Contains(t, rec.Body.String(), `"snapshot":`)
 	require.Contains(t, rec.Body.String(), `"headers_observed":true`)
 	require.NotContains(t, rec.Body.String(), "access-token")
+	require.Eventually(t, func() bool {
+		upstream.mu.Lock()
+		defer upstream.mu.Unlock()
+		return len(upstream.requests) == 4
+	}, time.Second, 10*time.Millisecond)
 	upstream.mu.Lock()
 	requests := append([]*http.Request(nil), upstream.requests...)
 	bodies := append([][]byte(nil), upstream.bodies...)
 	upstream.mu.Unlock()
-	require.Len(t, requests, 3)
+	require.Len(t, requests, 4)
+	responsesProbeSeen := false
+	modelsSyncSeen := false
 	for i, upstreamReq := range requests {
 		require.Equal(t, "Bearer access-token", upstreamReq.Header.Get("Authorization"))
 		if upstreamReq.URL.String() == xai.DefaultCLIBaseURL+"/responses" {
+			responsesProbeSeen = true
 			require.Equal(t, "application/json, text/event-stream", upstreamReq.Header.Get("Accept"))
 			require.Contains(t, string(bodies[i]), `"model":"grok-4.5"`)
 			require.Contains(t, string(bodies[i]), `"input":"hi"`)
@@ -130,7 +138,12 @@ func TestGrokOAuthHandlerQueryQuotaProbesUpstream(t *testing.T) {
 			require.NotContains(t, string(bodies[i]), `"max_output_tokens"`)
 			require.NotContains(t, string(bodies[i]), `"store"`)
 		}
+		if upstreamReq.URL.String() == xai.DefaultCLIBaseURL+"/models" {
+			modelsSyncSeen = true
+		}
 	}
+	require.True(t, responsesProbeSeen)
+	require.True(t, modelsSyncSeen)
 	require.NotNil(t, repo.updates[42])
 }
 

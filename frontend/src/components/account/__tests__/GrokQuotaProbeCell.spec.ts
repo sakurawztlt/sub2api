@@ -24,7 +24,7 @@ const account = { id: 99, platform: 'grok', type: 'oauth' } as Account
 describe('GrokQuotaProbeCell', () => {
   beforeEach(() => queryQuota.mockReset())
 
-  it('renders the active-probe contract and emits the observation', async () => {
+  it('emits the active-probe observation without rendering retired raw quota counters', async () => {
     queryQuota.mockResolvedValue({
       source: 'active_probe',
       snapshot: {
@@ -46,10 +46,8 @@ describe('GrokQuotaProbeCell', () => {
     await flushPromises()
 
     expect(queryQuota).toHaveBeenCalledWith(99)
-    expect(wrapper.text()).toContain('73/100')
-    expect(wrapper.text()).toContain('8000/10000')
-    expect(wrapper.text()).toContain('admin.accounts.usageWindow.grokRetryAfter:2m')
-    expect(wrapper.text()).toContain('active')
+    expect(wrapper.text()).not.toContain('73/100')
+    expect(wrapper.text()).not.toContain('8000/10000')
     expect(wrapper.emitted('probed')?.[0]?.[0]).toMatchObject({ source: 'active_probe' })
   })
 

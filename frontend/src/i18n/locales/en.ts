@@ -426,6 +426,8 @@ export default {
       USER_NOT_ACTIVE: 'Account has been disabled.',
     },
     registrationFailed: 'Registration failed. Please try again.',
+    emailDomainRegistrationLimit:
+      'This email domain cannot register another account. Please use a mainstream email, or contact support to add your enterprise domain to the allowlist.',
     emailSuffixNotAllowed: 'This email domain is not allowed for registration.',
     emailSuffixNotAllowedWithAllowed:
       'This email domain is not allowed. Allowed domains: {suffixes}',
@@ -2327,7 +2329,19 @@ export default {
         videoMultiplier: 'Video multiplier',
         modeHint: 'Videos are billed per second: per-second price × duration (1-15s, default 8s). By default the current effective group multiplier applies; independent mode uses the video multiplier instead.',
         finalPricePreview: 'Final per-second price preview',
-        notConfigured: 'Not configured'
+        notConfigured: 'Not configured',
+        modelOverridesTitle: 'Per-model price overrides',
+        modelOverridesDescription: 'Override the base per-second price by Grok video model family and resolution.'
+      },
+      explicitPricing: {
+        title: 'Search and Voice pricing',
+        description: 'Optional explicit prices for Grok Search and Voice usage. Leave empty to use system defaults.',
+        searchPricePer1k: 'Search price per 1,000 calls'
+      },
+      voicePricing: {
+        audioRealtimePerMin: 'Realtime audio price per minute',
+        audioTtsPerMillionChars: 'TTS price per million characters',
+        audioSttPerHour: 'STT price per hour'
       },
       peakRate: {
         enable: 'Enable peak rate multiplier',
@@ -4193,6 +4207,25 @@ export default {
           refreshTokenAuth: 'Manual RT Input',
           refreshTokenDesc: 'Enter existing xAI refresh token(s). Supports batch input, one per line.',
           refreshTokenPlaceholder: 'Paste your xAI refresh token...\nSupports multiple, one per line',
+          ssoCookieAuth: 'SSO Cookie Import',
+          ssoCookieDesc:
+            'Paste a Grok Web SSO key. The server completes the xAI Device Flow and converts it into Grok Build OAuth credentials.',
+          ssoCookieLabel: 'Grok Web SSO Key',
+          ssoCookiePlaceholder: 'Paste a Grok Web SSO key',
+          ssoCookieHint: 'Use a matching-region proxy if the Grok Web session is region-bound.',
+          emailPasswordAuth: 'Email + password',
+          emailPasswordDesc:
+            'Sign in with a Grok web email and password. The server uses the password only to obtain an ephemeral SSO cookie, then converts it to Build OAuth credentials. Neither the password nor raw SSO is stored.',
+          emailPasswordInputLabel: 'email----password',
+          emailPasswordPlaceholder: "user{'@'}example.com----your-password\nMultiple lines supported",
+          emailPasswordHint:
+            'Format: email----password (the password may contain hyphens). Requires configured captcha credentials.',
+          pleaseEnterPassword: 'Please enter email----password (one per line)',
+          pleaseEnterSSOToken: 'Please enter an SSO token',
+          failedToValidateSSO: 'Failed to validate Grok SSO',
+          failedToAuthorizePassword: 'Grok password authorization failed',
+          convertingSSO: 'Converting...',
+          convertSSOAndCreate: 'Convert & Apply Credentials',
           validating: 'Validating...',
           validateAndCreate: 'Validate & Create Account',
           pleaseEnterRefreshToken: 'Please enter Refresh Token',
@@ -4508,8 +4541,14 @@ export default {
         claude: 'Claude',
         grokRequests: 'Req',
         grokTokens: 'Tok',
-        grokFreeQuota24hHint: 'Estimated from local token usage over the rolling 24-hour window (2M limit)',
+        grokFreeQuota24hHint: 'Estimated from local token usage over the rolling 24-hour window ({limit} limit)',
         grokWeeklyUsage: 'Weekly {percent}%',
+        grokUsed: 'Used $',
+        grokBalance: 'Bal $',
+        grokPrepaid: 'Prepaid balance',
+        grokMonthlyLimit: 'Monthly used / limit (USD)',
+        grokOverage: 'Overage onDemandUsed/onDemandCap',
+        grokOverageShort: 'OD $',
         grokUnknown: 'Grok quota is unknown until the first upstream response includes xAI rate-limit headers.',
         grokRetryAfter: 'Retry after {time}',
         grokProbe: 'Probe',
@@ -5951,9 +5990,12 @@ export default {
         emailVerificationHint: 'Require email verification for new registrations',
         emailSuffixWhitelist: 'Email Domain Whitelist',
         emailSuffixWhitelistHint:
-          "Only email addresses from the specified domains can register (for example, {'@'}qq.com, {'@'}gmail.com, *.edu.cn)",
+          "Only email addresses from the specified domains can register; leave empty for no restriction (for example, {'@'}qq.com, {'@'}gmail.com, *.edu.cn)",
         emailSuffixWhitelistPlaceholder: "{'@'}example.com, *.edu.cn",
         emailSuffixWhitelistInputHint: 'Leave empty for no restriction. Use *.edu.cn to match edu.cn and its subdomains.',
+        emailDomainQuota: 'Non-allowlist Domain Quota',
+        emailDomainQuotaHint:
+          'When enabled and the allowlist is not empty, every other registrable domain can register one account. When disabled, non-allowlist domains are rejected. Has no effect while the allowlist is empty',
         promoCode: 'Promo Code',
         promoCodeHint: 'Allow users to use promo codes during registration',
         invitationCode: 'Invitation Code Registration',

@@ -36,8 +36,28 @@ describe('PlatformTypeBadge Grok plans', () => {
 
     expect(wrapper.text()).toContain('SuperGrok Heavy')
     expect(wrapper.find('[data-testid="grok-plan-icon"]').exists()).toBe(true)
+    expect(wrapper.html()).toContain('bg-purple-100')
 
     await wrapper.setProps({ planType: 'super_grok' })
     expect(wrapper.text()).toContain('SuperGrok')
+  })
+
+  it('colors free gray, SuperGrok cyan, and Heavy purple', () => {
+    const free = mount(PlatformTypeBadge, {
+      props: { platform: 'grok', type: 'oauth', planType: 'free' }
+    })
+    expect(free.html()).toContain('bg-gray-100')
+
+    const superGrok = mount(PlatformTypeBadge, {
+      props: { platform: 'grok', type: 'oauth', planType: 'supergrok' }
+    })
+    expect(superGrok.html()).toContain('bg-cyan-100')
+
+    const heavy = mount(PlatformTypeBadge, {
+      props: { platform: 'grok', type: 'oauth', planType: 'Heavy' }
+    })
+    expect(heavy.text()).toContain('Heavy')
+    expect(heavy.html()).toContain('bg-purple-100')
+    expect(heavy.find('[data-testid="grok-plan-icon"]').exists()).toBe(true)
   })
 })

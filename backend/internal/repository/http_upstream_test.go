@@ -450,7 +450,7 @@ func TestApplyGrokCLIProxyHeaders(t *testing.T) {
 
 		require.Equal(t, xai.CLIClientVersion, req.Header.Get(xai.CLIClientVersionHeader))
 		require.Equal(t, xai.CLITokenAuthValue, req.Header.Get(xai.CLITokenAuthHeader))
-		require.Equal(t, xai.CLIUserAgent, req.Header.Get("User-Agent"))
+		require.Equal(t, xai.CLIBillingUserAgent, req.Header.Get("User-Agent"))
 	})
 }
 

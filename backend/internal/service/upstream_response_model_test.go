@@ -16,6 +16,17 @@ func TestUpstreamResponseModelObserverTerminalWinsAndRecordsConflict(t *testing.
 	require.True(t, observer.Conflict())
 }
 
+func TestUpstreamResponseModelObserverNilIsNoop(t *testing.T) {
+	var observer *upstreamResponseModelObserver
+	require.NotPanics(t, func() {
+		observer.ObserveOpenAI([]byte(`{"type":"response.completed","response":{"model":"gpt-5.4"}}`), "response.completed")
+		observer.ObserveAnthropic([]byte(`{"type":"message_start","message":{"model":"claude-sonnet-4"}}`))
+		observer.ObserveGemini([]byte(`{"modelVersion":"gemini-2.5-pro"}`))
+	})
+	require.Empty(t, observer.Model())
+	require.False(t, observer.Conflict())
+}
+
 func TestUpstreamResponseModelObserverSupportsAnthropicAndGeminiShapes(t *testing.T) {
 	t.Run("anthropic", func(t *testing.T) {
 		observer := &upstreamResponseModelObserver{}

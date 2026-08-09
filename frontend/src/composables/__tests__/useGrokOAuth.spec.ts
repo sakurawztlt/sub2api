@@ -63,30 +63,38 @@ describe('useGrokOAuth', () => {
     })
   })
 
-  it('builds relay-ready credentials without dropping subscription identity fields', () => {
+  it('builds relay-ready credentials without forcing base_url or leaking ephemeral secrets', () => {
     const oauth = useGrokOAuth()
 
-    expect(
-      oauth.buildCredentials({
-        access_token: 'access-token',
-        refresh_token: 'refresh-token',
-        token_type: 'Bearer',
-        expires_at: 1_900_000_000,
-        client_id: 'client-id',
-        scope: 'openid grok-cli:access',
-        email: 'grok@example.com',
-        sub: 'user-1',
-        team_id: 'team-1',
-        subscription_tier: 'SuperGrok'
-      })
-    ).toMatchObject({
+    const credentials = oauth.buildCredentials({
+      access_token: 'access-token',
+      refresh_token: 'refresh-token',
+      token_type: 'Bearer',
+      expires_at: 1_900_000_000,
+      client_id: 'client-id',
+      scope: 'openid grok-cli:access',
+      email: 'grok@example.com',
+      sub: 'user-1',
+      team_id: 'team-1',
+      subscription_tier: 'SuperGrok',
+      password: 'super-secret',
+      sso_token: 'sso-cookie',
+      sso: 'sso-cookie',
+      'sso-rw': 'sso-cookie'
+    } as any)
+
+    expect(credentials).toMatchObject({
       access_token: 'access-token',
       refresh_token: 'refresh-token',
       sub: 'user-1',
       team_id: 'team-1',
-      subscription_tier: 'SuperGrok',
-      base_url: 'https://cli-chat-proxy.grok.com/v1'
+      subscription_tier: 'SuperGrok'
     })
+    expect(credentials.base_url).toBeUndefined()
+    expect(credentials).not.toHaveProperty('password')
+    expect(credentials).not.toHaveProperty('sso_token')
+    expect(credentials).not.toHaveProperty('sso')
+    expect(credentials).not.toHaveProperty('sso-rw')
   })
 
   it('validates manual refresh tokens through the backend route', async () => {

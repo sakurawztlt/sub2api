@@ -104,16 +104,21 @@ type Group struct {
 	VideoRateIndependent bool    `json:"video_rate_independent"`
 	VideoRateMultiplier  float64 `json:"video_rate_multiplier"`
 	// 高峰时段倍率配置
-	PeakRateEnabled    bool     `json:"peak_rate_enabled"`
-	PeakStart          string   `json:"peak_start"`
-	PeakEnd            string   `json:"peak_end"`
-	PeakRateMultiplier float64  `json:"peak_rate_multiplier"`
-	ImagePrice1K       *float64 `json:"image_price_1k"`
-	ImagePrice2K       *float64 `json:"image_price_2k"`
-	ImagePrice4K       *float64 `json:"image_price_4k"`
-	VideoPrice480P     *float64 `json:"video_price_480p"`
-	VideoPrice720P     *float64 `json:"video_price_720p"`
-	VideoPrice1080P    *float64 `json:"video_price_1080p"`
+	PeakRateEnabled              bool                          `json:"peak_rate_enabled"`
+	PeakStart                    string                        `json:"peak_start"`
+	PeakEnd                      string                        `json:"peak_end"`
+	PeakRateMultiplier           float64                       `json:"peak_rate_multiplier"`
+	ImagePrice1K                 *float64                      `json:"image_price_1k"`
+	ImagePrice2K                 *float64                      `json:"image_price_2k"`
+	ImagePrice4K                 *float64                      `json:"image_price_4k"`
+	VideoPrice480P               *float64                      `json:"video_price_480p"`
+	VideoPrice720P               *float64                      `json:"video_price_720p"`
+	VideoPrice1080P              *float64                      `json:"video_price_1080p"`
+	VideoModelPrices             map[string]map[string]float64 `json:"video_model_prices,omitempty"`
+	SearchPricePer1k             *float64                      `json:"search_price_per_1k"`
+	AudioRealtimePricePerMin     *float64                      `json:"audio_realtime_price_per_min"`
+	AudioTtsPricePerMillionChars *float64                      `json:"audio_tts_price_per_million_chars"`
+	AudioSttPricePerHour         *float64                      `json:"audio_stt_price_per_hour"`
 
 	// Claude Code 客户端限制
 	ClaudeCodeOnly  bool   `json:"claude_code_only"`
