@@ -385,6 +385,7 @@ func (s *AuthService) loadOAuthRegistrationInvitation(ctx context.Context, invit
 			UsedAt:       entity.UsedAt,
 			Notes:        oauthEmailFlowStringValue(entity.Notes),
 			CreatedAt:    entity.CreatedAt,
+			ExpiresAt:    entity.ExpiresAt,
 			GroupID:      entity.GroupID,
 			ValidityDays: entity.ValidityDays,
 		}, nil
@@ -395,7 +396,11 @@ func (s *AuthService) loadOAuthRegistrationInvitation(ctx context.Context, invit
 func (s *AuthService) useOAuthRegistrationInvitation(ctx context.Context, invitationID, userID int64) error {
 	if client := s.oauthEmailFlowClient(ctx); client != nil {
 		affected, err := client.RedeemCode.Update().
-			Where(redeemcode.IDEQ(invitationID), redeemcode.StatusEQ(StatusUnused)).
+			Where(
+				redeemcode.IDEQ(invitationID),
+				redeemcode.StatusEQ(StatusUnused),
+				redeemcode.Or(redeemcode.ExpiresAtIsNil(), redeemcode.ExpiresAtGT(time.Now().UTC())),
+			).
 			SetStatus(StatusUsed).
 			SetUsedBy(userID).
 			SetUsedAt(time.Now().UTC()).
@@ -423,6 +428,11 @@ func (s *AuthService) updateOAuthRegistrationInvitation(ctx context.Context, cod
 			SetStatus(code.Status).
 			SetNotes(code.Notes).
 			SetValidityDays(code.ValidityDays)
+		if code.ExpiresAt != nil {
+			update = update.SetExpiresAt(*code.ExpiresAt)
+		} else {
+			update = update.ClearExpiresAt()
+		}
 		if code.UsedBy != nil {
 			update = update.SetUsedBy(*code.UsedBy)
 		} else {

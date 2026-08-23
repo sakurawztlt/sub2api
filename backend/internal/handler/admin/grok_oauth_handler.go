@@ -1,14 +1,24 @@
 package admin
 
 import (
+	"context"
+	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
+)
+
+const (
+	grokSSOImportConcurrency = 3
+	grokSSOImportMaxItems    = 100
 )
 
 type GrokOAuthHandler struct {
@@ -16,18 +26,21 @@ type GrokOAuthHandler struct {
 	adminService     service.AdminService
 	quotaService     *service.GrokQuotaService
 	importProber     grokUsageProber
+	reconciler       service.GrokOAuthReconciler
 }
 
 func NewGrokOAuthHandler(
 	grokOAuthService *service.GrokOAuthService,
 	adminService service.AdminService,
 	quotaService *service.GrokQuotaService,
+	reconciler service.GrokOAuthReconciler,
 ) *GrokOAuthHandler {
 	return &GrokOAuthHandler{
 		grokOAuthService: grokOAuthService,
 		adminService:     adminService,
 		quotaService:     quotaService,
 		importProber:     quotaService,
+		reconciler:       reconciler,
 	}
 }
 
@@ -206,6 +219,50 @@ func (h *GrokOAuthHandler) RefreshAccountToken(c *gin.Context) {
 	response.Success(c, dto.AccountFromService(updatedAccount))
 }
 
+type GrokOAuthReconcileRequest struct {
+	DryRun               *bool `json:"dry_run"`
+	Apply                bool  `json:"apply"`
+	AfterID              int64 `json:"after_id"`
+	Limit                int   `json:"limit"`
+	RefreshWindowSeconds int64 `json:"refresh_window_seconds"`
+}
+
+func (h *GrokOAuthHandler) ReconcileOAuthAccounts(c *gin.Context) {
+	var req GrokOAuthReconcileRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request")
+		return
+	}
+	dryRun := true
+	if req.DryRun != nil {
+		dryRun = *req.DryRun
+	}
+	if req.Apply == dryRun {
+		response.ErrorFrom(c, service.ErrGrokOAuthReconcileMode)
+		return
+	}
+	if req.RefreshWindowSeconds < 0 || req.RefreshWindowSeconds > int64((24*time.Hour)/time.Second) {
+		response.ErrorFrom(c, service.ErrGrokOAuthReconcileWindow)
+		return
+	}
+	if h.reconciler == nil {
+		response.InternalError(c, "Grok OAuth reconciliation service is unavailable")
+		return
+	}
+	result, err := h.reconciler.ReconcileGrokOAuth(c.Request.Context(), service.GrokOAuthReconcileInput{
+		DryRun:        dryRun,
+		Apply:         req.Apply,
+		AfterID:       req.AfterID,
+		Limit:         req.Limit,
+		RefreshWindow: time.Duration(req.RefreshWindowSeconds) * time.Second,
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, result)
+}
+
 func (h *GrokOAuthHandler) CreateAccountFromOAuth(c *gin.Context) {
 	var req struct {
 		SessionID   string  `json:"session_id" binding:"required"`
@@ -259,6 +316,320 @@ func (h *GrokOAuthHandler) CreateAccountFromOAuth(c *gin.Context) {
 	}
 	h.scheduleGrokImportProbe(account)
 	response.Success(c, dto.AccountFromService(account))
+}
+
+type GrokSSOToOAuthRequest struct {
+	SSOTokens          []string       `json:"sso_tokens"`
+	SSOToken           string         `json:"sso_token"`
+	Name               string         `json:"name"`
+	Notes              *string        `json:"notes"`
+	ProxyID            *int64         `json:"proxy_id"`
+	GroupIDs           []int64        `json:"group_ids"`
+	Credentials        map[string]any `json:"credentials"`
+	Extra              map[string]any `json:"extra"`
+	Concurrency        int            `json:"concurrency"`
+	LoadFactor         *int           `json:"load_factor"`
+	Priority           int            `json:"priority"`
+	RateMultiplier     *float64       `json:"rate_multiplier"`
+	ExpiresAt          *int64         `json:"expires_at"`
+	AutoPauseOnExpired *bool          `json:"auto_pause_on_expired"`
+}
+
+type GrokSSOToOAuthItemResult struct {
+	Index   int          `json:"index"`
+	Name    string       `json:"name,omitempty"`
+	Email   string       `json:"email,omitempty"`
+	Account *dto.Account `json:"account,omitempty"`
+	Error   string       `json:"error,omitempty"`
+}
+
+type GrokSSOToOAuthResponse struct {
+	Created []GrokSSOToOAuthItemResult `json:"created"`
+	Failed  []GrokSSOToOAuthItemResult `json:"failed"`
+}
+
+type grokSSOImportJob struct {
+	index int
+	token string
+}
+
+type grokSSOImportWorkerResult struct {
+	created bool
+	item    GrokSSOToOAuthItemResult
+}
+
+// CreateAccountsFromSSO converts Grok Web SSO cookies to Build OAuth tokens
+// and persists only the converted OAuth credentials. The raw SSO values are
+// neither returned nor copied into account credentials.
+func (h *GrokOAuthHandler) CreateAccountsFromSSO(c *gin.Context) {
+	var req GrokSSOToOAuthRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request")
+		return
+	}
+	tokens := normalizeSSOImportTokens(req.SSOTokens, req.SSOToken)
+	if len(tokens) == 0 {
+		response.BadRequest(c, "sso_tokens is required")
+		return
+	}
+	if len(tokens) > grokSSOImportMaxItems {
+		response.BadRequest(c, "sso_tokens exceeds maximum batch size")
+		return
+	}
+
+	ctx := c.Request.Context()
+	workerCount := grokSSOImportConcurrency
+	if len(tokens) < workerCount {
+		workerCount = len(tokens)
+	}
+	jobs := make(chan grokSSOImportJob)
+	items := make([]grokSSOImportWorkerResult, len(tokens))
+	var wg sync.WaitGroup
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				items[job.index] = h.safeCreateAccountFromSSOToken(ctx, req, job.token, job.index+1, len(tokens))
+			}
+		}()
+	}
+	dispatched := true
+	for i, token := range tokens {
+		if ctx.Err() != nil {
+			dispatched = false
+			break
+		}
+		select {
+		case jobs <- grokSSOImportJob{index: i, token: token}:
+		case <-ctx.Done():
+			dispatched = false
+		}
+		if !dispatched {
+			break
+		}
+	}
+	close(jobs)
+	wg.Wait()
+	if !dispatched {
+		return
+	}
+
+	result := GrokSSOToOAuthResponse{
+		Created: make([]GrokSSOToOAuthItemResult, 0, len(tokens)),
+		Failed:  make([]GrokSSOToOAuthItemResult, 0),
+	}
+	for _, item := range items {
+		if item.created {
+			result.Created = append(result.Created, item.item)
+		} else {
+			result.Failed = append(result.Failed, item.item)
+		}
+	}
+	response.Success(c, result)
+}
+
+func (h *GrokOAuthHandler) safeCreateAccountFromSSOToken(ctx context.Context, req GrokSSOToOAuthRequest, token string, index, total int) (result grokSSOImportWorkerResult) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			slog.Error("grok_sso_import_worker_panic", "index", index, "recovery_type", panicType(recovered))
+			result = grokSSOImportWorkerResult{
+				item: GrokSSOToOAuthItemResult{Index: index, Error: "internal worker failure"},
+			}
+		}
+	}()
+	return h.createAccountFromSSOToken(ctx, req, token, index, total)
+}
+
+func (h *GrokOAuthHandler) createAccountFromSSOToken(ctx context.Context, req GrokSSOToOAuthRequest, token string, index, total int) grokSSOImportWorkerResult {
+	tokenInfo, err := h.grokOAuthService.ConvertFromSSO(ctx, token, req.ProxyID)
+	if err != nil {
+		return grokSSOImportWorkerResult{item: GrokSSOToOAuthItemResult{Index: index, Error: grokSSOImportErrorMessage(err)}}
+	}
+
+	credentials := grokSSOImportCredentials(h.grokOAuthService.BuildAccountCredentials(tokenInfo), req.Credentials)
+	name := grokSSOImportAccountName(req.Name, tokenInfo, index, total)
+	expiresAt, autoPauseOnExpired := grokSSOImportExpiry(req.ExpiresAt, req.AutoPauseOnExpired, tokenInfo)
+	account, err := h.adminService.CreateAccount(ctx, &service.CreateAccountInput{
+		Name:               name,
+		Notes:              req.Notes,
+		Platform:           service.PlatformGrok,
+		Type:               service.AccountTypeOAuth,
+		Credentials:        credentials,
+		Extra:              cloneGrokSSOMap(req.Extra),
+		ProxyID:            req.ProxyID,
+		Concurrency:        req.Concurrency,
+		LoadFactor:         req.LoadFactor,
+		Priority:           req.Priority,
+		RateMultiplier:     req.RateMultiplier,
+		GroupIDs:           append([]int64(nil), req.GroupIDs...),
+		ExpiresAt:          expiresAt,
+		AutoPauseOnExpired: autoPauseOnExpired,
+	})
+	if err != nil {
+		return grokSSOImportWorkerResult{item: GrokSSOToOAuthItemResult{
+			Index: index,
+			Name:  name,
+			Email: tokenInfo.Email,
+			Error: grokSSOImportErrorMessage(err),
+		}}
+	}
+	h.scheduleGrokImportProbe(account)
+	return grokSSOImportWorkerResult{
+		created: true,
+		item: GrokSSOToOAuthItemResult{
+			Index:   index,
+			Name:    name,
+			Email:   tokenInfo.Email,
+			Account: dto.AccountFromService(account),
+		},
+	}
+}
+
+// grokSSOImportCredentials accepts only operator configuration from the
+// request. OAuth token fields always come from BuildAccountCredentials.
+func grokSSOImportCredentials(built map[string]any, reqCredentials map[string]any) map[string]any {
+	allowedReqKeys := map[string]struct{}{
+		"base_url": {}, "model_mapping": {},
+		"header_override": {}, "header_overrides": {}, "header_override_enabled": {},
+		"custom_headers":             {},
+		"temp_unschedulable_enabled": {}, "temp_unschedulable_rules": {},
+	}
+	ops := map[string]any{}
+	for key, value := range reqCredentials {
+		if _, ok := allowedReqKeys[key]; !ok || service.IsSensitiveCredentialKey(key) {
+			continue
+		}
+		ops[key] = value
+	}
+	credentials := service.MergeCredentials(ops, built)
+	for key := range credentials {
+		if !service.IsSensitiveCredentialKey(key) {
+			continue
+		}
+		if key == "access_token" || key == "refresh_token" || key == "id_token" {
+			continue
+		}
+		delete(credentials, key)
+	}
+	if reqBaseURL, ok := reqCredentials["base_url"].(string); ok && strings.TrimSpace(reqBaseURL) != "" {
+		credentials["base_url"] = strings.TrimSpace(reqBaseURL)
+	}
+	return service.SanitizeStoredCredentials(service.PlatformGrok, credentials)
+}
+
+func grokSSOImportExpiry(requestExpiresAt *int64, requestAutoPause *bool, tokenInfo *service.GrokTokenInfo) (*int64, *bool) {
+	if tokenInfo == nil || strings.TrimSpace(tokenInfo.RefreshToken) != "" || tokenInfo.ExpiresAt <= 0 {
+		return requestExpiresAt, requestAutoPause
+	}
+	expiresAt := tokenInfo.ExpiresAt
+	if requestExpiresAt != nil && *requestExpiresAt > 0 && *requestExpiresAt < expiresAt {
+		expiresAt = *requestExpiresAt
+	}
+	autoPause := true
+	return &expiresAt, &autoPause
+}
+
+func cloneGrokSSOMap(source map[string]any) map[string]any {
+	if source == nil {
+		return nil
+	}
+	clone := make(map[string]any, len(source))
+	for key, value := range source {
+		if isGrokSSOSecretKey(key) {
+			continue
+		}
+		clone[key] = cloneGrokSSOValue(value)
+	}
+	return clone
+}
+
+func isGrokSSOSecretKey(key string) bool {
+	if service.IsSensitiveCredentialKey(key) {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "access_token", "refresh_token", "id_token", "api_key", "session_key", "cookie",
+		"password", "sso_token", "sso", "sso-rw", "cleartextpassword",
+		"aws_secret_access_key", "aws_session_token", "service_account_json",
+		"service_account", "private_key":
+		return true
+	default:
+		return false
+	}
+}
+
+func cloneGrokSSOValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneGrokSSOMap(typed)
+	case []any:
+		clone := make([]any, len(typed))
+		for i, item := range typed {
+			clone[i] = cloneGrokSSOValue(item)
+		}
+		return clone
+	default:
+		return value
+	}
+}
+
+func normalizeSSOImportTokens(tokens []string, single string) []string {
+	items := make([]string, 0, len(tokens)+1)
+	if strings.TrimSpace(single) != "" {
+		items = append(items, single)
+	}
+	items = append(items, tokens...)
+	seen := make(map[string]struct{}, len(items))
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		parts := strings.Split(strings.NewReplacer(",", "\n", "\r", "\n").Replace(item), "\n")
+		for _, token := range parts {
+			token = xai.NormalizeSSOToken(token)
+			if token == "" {
+				continue
+			}
+			if _, ok := seen[token]; ok {
+				continue
+			}
+			seen[token] = struct{}{}
+			result = append(result, token)
+		}
+	}
+	return result
+}
+
+func grokSSOImportAccountName(base string, tokenInfo *service.GrokTokenInfo, index, total int) string {
+	base = strings.TrimSpace(base)
+	if base == "" && tokenInfo != nil {
+		base = strings.TrimSpace(tokenInfo.Email)
+	}
+	if base == "" {
+		base = "Grok OAuth Account"
+	}
+	if total > 1 {
+		return base + " #" + strconv.Itoa(index)
+	}
+	return base
+}
+
+func grokSSOImportErrorMessage(err error) string {
+	status := infraerrors.FromError(err)
+	if status == nil {
+		return "internal error"
+	}
+	safeMessages := map[string]string{
+		"GROK_OAUTH_NO_SSO_TOKEN":           "Grok SSO token is invalid",
+		"GROK_OAUTH_CLIENT_NOT_CONFIGURED":  "Grok OAuth service is unavailable",
+		"GROK_OAUTH_PROXY_NOT_AVAILABLE":    "selected proxy is unavailable",
+		"GROK_OAUTH_PROXY_NOT_FOUND":        "selected proxy was not found",
+		"GROK_OAUTH_PROXY_LOOKUP_FAILED":    "proxy lookup is temporarily unavailable",
+		"GROK_OAUTH_INVALID_TOKEN_RESPONSE": "Grok SSO conversion returned an invalid token response",
+	}
+	if message, ok := safeMessages[status.Reason]; ok {
+		return status.Reason + ": " + message
+	}
+	return "internal error"
 }
 
 func (h *GrokOAuthHandler) QueryQuota(c *gin.Context) {

@@ -2281,6 +2281,10 @@ export default {
       createGroup: '创建分组',
       editGroup: '编辑分组',
       deleteGroup: '删除分组',
+      duplicate: '复制',
+      duplicating: '复制中',
+      duplicateSuccess: '分组已复制为「{name}」，已默认停用，请确认配置后再启用',
+      duplicateFailed: '复制分组失败',
       sortOrder: '排序',
       columnSettings: '列设置',
       sortOrderHint: '拖拽分组调整显示顺序，排在前面的分组会优先显示',
@@ -3017,6 +3021,7 @@ export default {
       unbanFailed: '解封用户失败',
       inputDetailTitle: '输入摘要详情',
       inputDetailContent: '完整内容',
+      matchedKeyword: '命中关键词',
       queueDelay: '排队 {ms} ms',
       preBlockAPIKeyLoad: '审核 Key 负载',
       preBlockAPIKeyLoadHint: '同步前置拦截直接轮询可用审核 Key。',
@@ -3212,6 +3217,8 @@ export default {
         groupNamePlaceholder: '可选，用于在用户视图中聚合显示',
         intervalSeconds: '检测间隔 (秒)',
         intervalSecondsHint: '范围：15 - 3600 秒',
+        jitterSeconds: '随机抖动 (± 秒)',
+        jitterSecondsHint: '每次检测在间隔基础上正负随机偏移该秒数，0 表示固定间隔；需满足 间隔 - 抖动 ≥ 15 秒',
         enabled: '启用监控',
         kindRequired: '请选择供应商'
       },
@@ -4595,10 +4602,11 @@ export default {
           refreshTokenDesc: '输入已有的 xAI refresh token，支持批量输入（每行一个）。',
           refreshTokenPlaceholder: '粘贴您的 xAI refresh token...\n支持多个，每行一个',
           ssoCookieAuth: 'SSO Cookie 导入',
-          ssoCookieDesc: '粘贴 Grok Web SSO key，系统会走 xAI Device Flow 并转换为 Grok Build OAuth 凭据。',
+          ssoCookieDesc:
+            '每行粘贴一个 Grok Web SSO key，系统会分批转换为 Grok Build OAuth 凭据并创建账号。',
           ssoCookieLabel: 'Grok Web SSO Key',
-          ssoCookiePlaceholder: '粘贴 Grok Web SSO key',
-          ssoCookieHint: '若 Grok Web 会话有地区限制，请使用对应地区代理。',
+          ssoCookiePlaceholder: '每行一个 Grok Web SSO key\n支持批量输入',
+          ssoCookieHint: '最多同时转换 3 个；若 Grok Web 会话有地区限制，请使用对应地区代理。',
           emailPasswordAuth: '邮箱密码登录',
           emailPasswordDesc:
             '使用 Grok 网页邮箱与密码登录。服务端仅用密码换取临时 SSO，再转换为 Build OAuth；密码与 raw SSO 均不会写入账号凭据。',
@@ -4608,9 +4616,10 @@ export default {
           pleaseEnterPassword: '请输入 email----password（每行一组）',
           pleaseEnterSSOToken: '请输入 SSO Token',
           failedToValidateSSO: '校验 Grok SSO 失败',
+          failedToConvertSSO: 'Grok SSO 转换并创建账号失败',
           failedToAuthorizePassword: 'Grok 密码授权失败',
           convertingSSO: '转换中...',
-          convertSSOAndCreate: '转换并应用凭据',
+          convertSSOAndCreate: '转换并创建账号',
           validating: '验证中...',
           validateAndCreate: '验证并创建账号',
           pleaseEnterRefreshToken: '请输入 Refresh Token',
@@ -5507,6 +5516,9 @@ export default {
     ops: {
       title: '运维监控',
       description: '运维监控与排障',
+      systemLogs: {
+        host: 'Host'
+      },
       // Dashboard
       systemHealth: '系统健康',
       overview: '概览',
@@ -7579,6 +7591,10 @@ export default {
     notFoundDesc: '该自定义页面不存在或已被删除。',
     notConfiguredTitle: '页面链接未配置',
     notConfiguredDesc: '该自定义页面的 URL 未正确配置。',
+    tableOfContents: '目录',
+    copyCode: '复制',
+    copiedCode: '已复制',
+    copyCodeFailed: '失败',
   },
 
   // Announcements Page

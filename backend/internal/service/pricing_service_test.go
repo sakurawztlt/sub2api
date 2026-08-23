@@ -155,6 +155,31 @@ func TestGetModelPricing_GPT56DedicatedStaticFallbacks(t *testing.T) {
 	}
 }
 
+func TestPricingService_BareGPT56AliasDeterministicallyUsesSol(t *testing.T) {
+	pricingSvc := &PricingService{pricingData: map[string]*LiteLLMModelPricing{
+		"gpt-5.6-sol":   {InputCostPerToken: 5e-6},
+		"gpt-5.6-terra": {InputCostPerToken: 2e-6},
+		"gpt-5.6-luna":  {InputCostPerToken: 0.2e-6},
+		"gpt-5.4":       {InputCostPerToken: 2.5e-6},
+	}}
+
+	for i := 0; i < 100; i++ {
+		for _, alias := range []string{"gpt-5.6", "openai/gpt-5.6"} {
+			pricing := pricingSvc.GetModelPricing(alias)
+			require.NotNil(t, pricing)
+			require.InDelta(t, 5e-6, pricing.InputCostPerToken, 1e-12, "iteration=%d alias=%s", i, alias)
+		}
+	}
+
+	billingSvc := NewBillingService(&config.Config{}, pricingSvc)
+	for _, alias := range []string{"gpt-5.6", "openai/gpt-5.6"} {
+		pricing, err := billingSvc.GetModelPricing(alias)
+		require.NoError(t, err)
+		require.InDelta(t, 5e-6, pricing.InputPricePerToken, 1e-12)
+		require.InDelta(t, 6.25e-6, pricing.CacheCreationPricePerToken, 1e-12)
+	}
+}
+
 func TestBundledPricingIncludesUpdatedGPT56Rates(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "..", "resources", "model-pricing", "model_prices_and_context_window.json"))
 	require.NoError(t, err)

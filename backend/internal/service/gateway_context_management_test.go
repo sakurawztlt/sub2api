@@ -259,8 +259,10 @@ func TestComputeFinalCountTokensAnthropicBeta_OAuthTransparent_NoClientBetaInjec
 	final, ok := s.computeFinalCountTokensAnthropicBeta("oauth", false, "claude-haiku-4-5", http.Header{}, []byte(`{}`), nil)
 	require.True(t, ok)
 	require.Equal(t, claude.CountTokensBetaHeader, final)
-	// CountTokensBetaHeader 不含 context-management beta
-	require.False(t, anthropicBetaTokensContains(final, claude.BetaContextManagement))
+	// 2.1.119 真实抓包的默认 profile 含 context-management；count_tokens
+	// 兜底必须与该 profile 对齐，并额外携带 token-counting。
+	require.True(t, anthropicBetaTokensContains(final, claude.BetaContextManagement))
+	require.True(t, anthropicBetaTokensContains(final, claude.BetaTokenCounting))
 }
 
 func TestComputeFinalCountTokensAnthropicBeta_OAuthTransparent_AppendsBetaTokenCounting(t *testing.T) {

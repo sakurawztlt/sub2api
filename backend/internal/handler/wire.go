@@ -98,8 +98,9 @@ func ProvideAdminSettingHandler(
 	paymentConfigService *service.PaymentConfigService,
 	paymentService *service.PaymentService,
 	userAttributeService *service.UserAttributeService,
+	notificationEmailService *service.NotificationEmailService,
 ) *admin.SettingHandler {
-	return admin.NewSettingHandler(
+	h := admin.NewSettingHandler(
 		settingService,
 		emailService,
 		turnstileService,
@@ -108,6 +109,8 @@ func ProvideAdminSettingHandler(
 		paymentService,
 		userAttributeService,
 	)
+	h.SetNotificationEmailService(notificationEmailService)
+	return h
 }
 
 // ProvideSystemHandler creates admin.SystemHandler with UpdateService

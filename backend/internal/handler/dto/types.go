@@ -388,6 +388,7 @@ type RedeemCode struct {
 	UsedBy    *int64     `json:"used_by"`
 	UsedAt    *time.Time `json:"used_at"`
 	CreatedAt time.Time  `json:"created_at"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 
 	GroupID      *int64 `json:"group_id"`
 	ValidityDays int    `json:"validity_days"`
@@ -406,6 +407,25 @@ type AdminRedeemCode struct {
 	RedeemCode
 
 	Notes string `json:"notes"`
+}
+
+type NullableTimeField struct {
+	Set   bool
+	Value *time.Time
+}
+
+func (f *NullableTimeField) UnmarshalJSON(data []byte) error {
+	f.Set = true
+	if bytes.Equal(data, []byte("null")) {
+		f.Value = nil
+		return nil
+	}
+	var value time.Time
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	f.Value = &value
+	return nil
 }
 
 type NullableInt64Field struct {
@@ -428,9 +448,10 @@ func (f *NullableInt64Field) UnmarshalJSON(data []byte) error {
 }
 
 type BatchUpdateRedeemCodeFields struct {
-	Status  *string            `json:"status,omitempty"`
-	Notes   *string            `json:"notes,omitempty"`
-	GroupID NullableInt64Field `json:"group_id,omitempty"`
+	Status    *string            `json:"status,omitempty"`
+	ExpiresAt NullableTimeField  `json:"expires_at,omitempty"`
+	Notes     *string            `json:"notes,omitempty"`
+	GroupID   NullableInt64Field `json:"group_id,omitempty"`
 
 	Type  *string  `json:"type,omitempty"`
 	Value *float64 `json:"value,omitempty"`

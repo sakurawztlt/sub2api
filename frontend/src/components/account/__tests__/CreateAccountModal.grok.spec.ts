@@ -37,4 +37,14 @@ describe('CreateAccountModal Grok account capabilities', () => {
   it('keeps Grok password authorization hidden in the create flow', () => {
     expect(source).toContain(':show-email-password-option="false"')
   })
+
+  it('wires Grok SSO batch import through the dedicated safe backend endpoint', () => {
+    expect(source).toContain(':show-sso-option="form.platform === \'grok\'"')
+    expect(source).toContain('@import-sso="handleGrokImportSSO"')
+    expect(source).toContain('const handleGrokImportSSO = async (ssoInput: string) => {')
+    expect(source).toContain('await adminAPI.grok.createFromSSO({')
+    expect(source).toContain('sso_tokens: ssoTokens')
+    expect(source).not.toContain('credentials.sso_token')
+    expect(source).not.toContain('credentials.password')
+  })
 })

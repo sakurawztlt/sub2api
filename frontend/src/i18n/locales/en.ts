@@ -2228,6 +2228,10 @@ export default {
       createGroup: 'Create Group',
       editGroup: 'Edit Group',
       deleteGroup: 'Delete Group',
+      duplicate: 'Duplicate',
+      duplicating: 'Duplicating',
+      duplicateSuccess: 'Group duplicated as "{name}" and disabled. Review its configuration before enabling it.',
+      duplicateFailed: 'Failed to duplicate group',
       sortOrder: 'Sort',
       columnSettings: 'Column Settings',
       sortOrderHint: 'Drag groups to adjust display order, groups at the top will be displayed first',
@@ -2941,6 +2945,7 @@ export default {
       unbanFailed: 'Failed to unban user',
       inputDetailTitle: 'Input Summary Detail',
       inputDetailContent: 'Full Content',
+      matchedKeyword: 'Matched Keyword',
       queueDelay: 'Queued {ms} ms',
       preBlockAPIKeyLoad: 'Audit Key Load',
       preBlockAPIKeyLoadHint: 'Synchronous pre-block checks round-robin usable audit keys directly.',
@@ -3136,6 +3141,8 @@ export default {
         groupNamePlaceholder: 'Optional, used to group rows in user view',
         intervalSeconds: 'Interval (seconds)',
         intervalSecondsHint: 'Range: 15 - 3600 seconds',
+        jitterSeconds: 'Random Jitter (± seconds)',
+        jitterSecondsHint: 'Each check fires at interval ± a random offset within this value; 0 means fixed interval. Interval minus jitter must be ≥ 15s',
         enabled: 'Enable monitor',
         kindRequired: 'Please select a provider'
       },
@@ -4434,10 +4441,11 @@ export default {
           refreshTokenPlaceholder: 'Paste your xAI refresh token...\nSupports multiple, one per line',
           ssoCookieAuth: 'SSO Cookie Import',
           ssoCookieDesc:
-            'Paste a Grok Web SSO key. The server completes the xAI Device Flow and converts it into Grok Build OAuth credentials.',
+            'Paste one Grok Web SSO key per line. The server converts each key into Grok Build OAuth credentials and creates the accounts in bounded batches.',
           ssoCookieLabel: 'Grok Web SSO Key',
-          ssoCookiePlaceholder: 'Paste a Grok Web SSO key',
-          ssoCookieHint: 'Use a matching-region proxy if the Grok Web session is region-bound.',
+          ssoCookiePlaceholder: 'One Grok Web SSO key per line\nSupports multiple keys',
+          ssoCookieHint:
+            'Imports run with up to 3 conversions at a time. Use a matching-region proxy if the Grok Web session is region-bound.',
           emailPasswordAuth: 'Email + password',
           emailPasswordDesc:
             'Sign in with a Grok web email and password. The server uses the password only to obtain an ephemeral SSO cookie, then converts it to Build OAuth credentials. Neither the password nor raw SSO is stored.',
@@ -4448,9 +4456,10 @@ export default {
           pleaseEnterPassword: 'Please enter email----password (one per line)',
           pleaseEnterSSOToken: 'Please enter an SSO token',
           failedToValidateSSO: 'Failed to validate Grok SSO',
+          failedToConvertSSO: 'Failed to convert Grok SSO and create accounts',
           failedToAuthorizePassword: 'Grok password authorization failed',
           convertingSSO: 'Converting...',
-          convertSSOAndCreate: 'Convert & Apply Credentials',
+          convertSSOAndCreate: 'Convert & Create Account',
           validating: 'Validating...',
           validateAndCreate: 'Validate & Create Account',
           pleaseEnterRefreshToken: 'Please enter Refresh Token',
@@ -5369,6 +5378,9 @@ export default {
     ops: {
       title: 'Ops Monitoring',
       description: 'Operational monitoring and troubleshooting',
+      systemLogs: {
+        host: 'Host'
+      },
       // Dashboard
       systemHealth: 'System Health',
       overview: 'Overview',
@@ -7446,6 +7458,10 @@ export default {
     notFoundDesc: 'This custom page does not exist or has been removed.',
     notConfiguredTitle: 'Page URL not configured',
     notConfiguredDesc: 'The URL for this custom page has not been properly configured.',
+    tableOfContents: 'Contents',
+    copyCode: 'Copy',
+    copiedCode: 'Copied',
+    copyCodeFailed: 'Failed',
   },
 
   // Announcements Page

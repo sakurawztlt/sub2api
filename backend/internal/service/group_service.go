@@ -37,6 +37,15 @@ type GroupRepository interface {
 	UpdateSortOrders(ctx context.Context, updates []GroupSortOrderUpdate) error
 }
 
+type GroupDuplicateRepository interface {
+	// FindByDuplicateOperationID performs the read-only recovery lookup used
+	// after an ambiguous idempotency-store failure.
+	FindByDuplicateOperationID(ctx context.Context, operationID string) (*Group, error)
+	// CreateFromSource atomically persists the group, copies the source group's
+	// exact account priorities, and writes the scheduler outbox event.
+	CreateFromSource(ctx context.Context, group *Group, sourceGroupID int64) error
+}
+
 // GroupSortOrderUpdate 分组排序更新
 type GroupSortOrderUpdate struct {
 	ID        int64 `json:"id"`

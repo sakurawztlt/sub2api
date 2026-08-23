@@ -240,6 +240,7 @@ type OpsInsertSystemMetricsInput struct {
 
 type OpsInsertSystemLogInput struct {
 	CreatedAt       time.Time
+	Host            string
 	Level           string
 	Component       string
 	Message         string
@@ -256,6 +257,7 @@ type OpsInsertSystemLogInput struct {
 type OpsSystemLogFilter struct {
 	StartTime *time.Time
 	EndTime   *time.Time
+	Host      string
 
 	Level     string
 	Component string
@@ -276,6 +278,7 @@ type OpsSystemLogFilter struct {
 type OpsSystemLogCleanupFilter struct {
 	StartTime *time.Time
 	EndTime   *time.Time
+	Host      string
 
 	Level     string
 	Component string

@@ -11,8 +11,10 @@ vi.mock('@/api/client', () => ({
 
 import {
   authorizePassword,
+  createFromSSO,
   exchangeCode,
   generateAuthUrl,
+  getGrokSSOImportTimeout,
   queryQuota,
   refreshGrokToken,
   resetQuota
@@ -98,5 +100,25 @@ describe('admin Grok API', () => {
       },
       { timeout: 120_000 }
     )
+  })
+
+  it.each([
+    [1, 180_000],
+    [3, 180_000],
+    [4, 270_000],
+    [7, 360_000]
+  ])('uses a bounded-batch timeout sized for %i SSO keys', async (keyCount, expectedTimeout) => {
+    post.mockResolvedValueOnce({ data: { created: [], failed: [] } })
+    expect(getGrokSSOImportTimeout(keyCount)).toBe(expectedTimeout)
+
+    const payload = {
+      sso_tokens: Array.from({ length: keyCount }, (_, index) => `sso-${index + 1}`),
+      credentials: { base_url: 'https://relay.example.com/v1' }
+    }
+    await createFromSSO(payload)
+
+    expect(post).toHaveBeenCalledWith('/admin/grok/sso-to-oauth', payload, {
+      timeout: expectedTimeout
+    })
   })
 })

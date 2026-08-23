@@ -562,8 +562,6 @@ export interface Group {
   fallback_group_id_on_invalid_request: number | null
   // OpenAI Messages 调度开关（用户侧需要此字段判断是否展示 Claude Code 教程）
   allow_messages_dispatch?: boolean
-  // OpenAI/Composite Live 接口开关
-  allow_live: boolean
   default_mapped_model?: string
   messages_dispatch_model_config?: OpenAIMessagesDispatchModelConfig
   require_oauth_only: boolean
@@ -1745,6 +1743,7 @@ export interface RedeemCode {
   used_by: number | null
   used_at: string | null
   created_at: string
+  expires_at?: string | null
   updated_at?: string
   notes?: string
   group_id?: number | null // 订阅类型专用
@@ -1759,10 +1758,13 @@ export interface GenerateRedeemCodesRequest {
   value: number
   group_id?: number | null // 订阅类型专用
   validity_days?: number // 订阅类型专用
+  expires_at?: string | null
+  expires_in_days?: number
 }
 
 export interface BatchUpdateRedeemCodeFields {
   status?: 'unused' | 'disabled'
+  expires_at?: string | null
   notes?: string
   group_id?: number | null
 }

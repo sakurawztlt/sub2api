@@ -27,6 +27,7 @@ type OpsSystemLogSinkHealth struct {
 
 type OpsSystemLogSink struct {
 	opsRepo OpsRepository
+	host    string
 
 	queue chan *logger.LogEvent
 
@@ -49,6 +50,8 @@ type OpsSystemLogSink struct {
 	lastError atomic.Value
 }
 
+const maxSystemLogHostLength = 255
+
 const (
 	// 首次写入失败后暂停落库的时长，之后逐次翻倍到上限。
 	defaultOpsSystemLogFlushBackoff = 2 * time.Second
@@ -58,8 +61,10 @@ const (
 
 func NewOpsSystemLogSink(opsRepo OpsRepository) *OpsSystemLogSink {
 	ctx, cancel := context.WithCancel(context.Background())
+	rawHost, err := os.Hostname()
 	s := &OpsSystemLogSink{
 		opsRepo:         opsRepo,
+		host:            normalizeSystemLogHost(rawHost, err),
 		queue:           make(chan *logger.LogEvent, 5000),
 		batchSize:       200,
 		flushInterval:   time.Second,
@@ -70,6 +75,18 @@ func NewOpsSystemLogSink(opsRepo OpsRepository) *OpsSystemLogSink {
 	}
 	s.lastError.Store("")
 	return s
+}
+
+func normalizeSystemLogHost(host string, err error) string {
+	host = strings.TrimSpace(host)
+	if err != nil || host == "" {
+		return "unknown"
+	}
+	runes := []rune(host)
+	if len(runes) > maxSystemLogHostLength {
+		return string(runes[:maxSystemLogHostLength])
+	}
+	return host
 }
 
 // flushBackoffFor 返回第 failures 次连续失败后的退避时长（指数退避，封顶）。
@@ -278,6 +295,7 @@ func (s *OpsSystemLogSink) flushBatch(baseCtx context.Context, batch []*logger.L
 
 		inputs = append(inputs, &OpsInsertSystemLogInput{
 			CreatedAt:       createdAt,
+			Host:            s.host,
 			Level:           strings.ToLower(strings.TrimSpace(event.Level)),
 			Component:       component,
 			Message:         message,

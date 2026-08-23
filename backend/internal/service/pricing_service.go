@@ -783,7 +783,17 @@ func normalizeModelNameForPricing(model string) string {
 	}
 
 	model = strings.TrimLeft(model, "/")
-	return normalizeGeminiThinkingTierAlias(model)
+	model = normalizeGeminiThinkingTierAlias(model)
+	if canonical := canonicalizeOpenAIModelAliasSpelling(model); canonical != "" {
+		if canonical == "gpt-5.6" {
+			return "gpt-5.6-sol"
+		}
+		if suffix, ok := strings.CutPrefix(canonical, "gpt-5.6-"); ok && (suffix == "max" || isKnownCodexModelSuffix(suffix)) {
+			return "gpt-5.6-sol"
+		}
+		return canonical
+	}
+	return model
 }
 
 func normalizeGeminiThinkingTierAlias(model string) string {

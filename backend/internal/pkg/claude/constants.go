@@ -59,8 +59,15 @@ const (
 // 这些 token 是客户端特有的，不应透传给上游 API。
 var DroppedBetas = []string{}
 
-// DefaultBetaHeader Claude Code 客户端默认的 anthropic-beta header
-const DefaultBetaHeader = BetaClaudeCode + "," + BetaOAuth + "," + BetaInterleavedThinking + "," + BetaFineGrainedToolStreaming
+// ClaudeCLI2119BetaHeader is the exact beta list captured from a real
+// claude-cli/2.1.119 /v1/messages?beta=true request on 2026-04-24. Keep
+// OAuth separate because the real capture used an API key while relay OAuth
+// requests additionally require oauth-2025-04-20.
+const ClaudeCLI2119BetaHeader = BetaClaudeCode + "," + BetaInterleavedThinking + "," + BetaContextManagement + "," + BetaPromptCachingScope + "," + BetaAdvisorTool + "," + BetaEffort
+
+// DefaultBetaHeader Claude Code OAuth 请求的默认 anthropic-beta header。
+// oauth 紧跟 claude-code，其他 token 保持真实 CLI 抓包顺序。
+const DefaultBetaHeader = BetaClaudeCode + "," + BetaOAuth + "," + BetaInterleavedThinking + "," + BetaContextManagement + "," + BetaPromptCachingScope + "," + BetaAdvisorTool + "," + BetaEffort
 
 // MessageBetaHeaderNoTools /v1/messages 在无工具时的 beta header
 //
@@ -68,19 +75,19 @@ const DefaultBetaHeader = BetaClaudeCode + "," + BetaOAuth + "," + BetaInterleav
 // Claude Code for non-Claude-Code clients, we must include the claude-code beta
 // even if the request doesn't use tools, otherwise upstream may reject the
 // request as a non-Claude-Code API request.
-const MessageBetaHeaderNoTools = BetaClaudeCode + "," + BetaOAuth + "," + BetaInterleavedThinking
+const MessageBetaHeaderNoTools = DefaultBetaHeader
 
 // MessageBetaHeaderWithTools /v1/messages 在有工具时的 beta header
-const MessageBetaHeaderWithTools = BetaClaudeCode + "," + BetaOAuth + "," + BetaInterleavedThinking
+const MessageBetaHeaderWithTools = DefaultBetaHeader
 
 // CountTokensBetaHeader count_tokens 请求使用的 anthropic-beta header
-const CountTokensBetaHeader = BetaClaudeCode + "," + BetaOAuth + "," + BetaInterleavedThinking + "," + BetaTokenCounting
+const CountTokensBetaHeader = DefaultBetaHeader + "," + BetaTokenCounting
 
 // HaikuBetaHeader Haiku 模型使用的 anthropic-beta header（不需要 claude-code beta）
 const HaikuBetaHeader = BetaOAuth + "," + BetaInterleavedThinking
 
 // APIKeyBetaHeader API-key 账号建议使用的 anthropic-beta header（不包含 oauth）
-const APIKeyBetaHeader = BetaClaudeCode + "," + BetaInterleavedThinking + "," + BetaFineGrainedToolStreaming
+const APIKeyBetaHeader = ClaudeCLI2119BetaHeader
 
 // APIKeyHaikuBetaHeader Haiku 模型在 API-key 账号下使用的 anthropic-beta header（不包含 oauth / claude-code）
 const APIKeyHaikuBetaHeader = BetaInterleavedThinking

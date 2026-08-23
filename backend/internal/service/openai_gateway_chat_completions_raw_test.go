@@ -343,6 +343,42 @@ func TestBufferRawChatCompletions_RejectsOversizedResponse(t *testing.T) {
 	require.Equal(t, http.StatusBadGateway, rec.Code)
 }
 
+func TestBufferRawChatCompletions_CapturesCanonicalCacheWriteUsage(t *testing.T) {
+	tests := []struct {
+		name      string
+		usageJSON string
+		wantWrite int
+	}{
+		{name: "positive cache write", usageJSON: `{"prompt_tokens":12,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":4,"cache_write_tokens":6}}`, wantWrite: 6},
+		{name: "nested zero overrides alias", usageJSON: `{"prompt_tokens":12,"completion_tokens":3,"cache_creation_input_tokens":19,"prompt_tokens_details":{"cached_tokens":4,"cache_write_tokens":0}}`, wantWrite: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			resp := &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body: io.NopCloser(strings.NewReader(
+					`{"id":"chatcmpl_cache","model":"gpt-5.6","choices":[],"usage":` + tt.usageJSON + `}`,
+				)),
+			}
+			svc := &OpenAIGatewayService{cfg: rawChatCompletionsTestConfig()}
+
+			result, err := svc.bufferRawChatCompletions(c, resp, rawChatCompletionsTestAccount(), "gpt-5.6", "gpt-5.6", "gpt-5.6", nil, nil, time.Now())
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Equal(t, 12, result.Usage.InputTokens)
+			require.Equal(t, 4, result.Usage.CacheReadInputTokens)
+			require.Equal(t, tt.wantWrite, result.Usage.CacheCreationInputTokens)
+		})
+	}
+}
+
 func rawChatCompletionsTestConfig() *config.Config {
 	return &config.Config{
 		Security: config.SecurityConfig{

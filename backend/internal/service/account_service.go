@@ -18,6 +18,35 @@ var (
 const AccountListGroupUngrouped int64 = -1
 const AccountPrivacyModeUnsetFilter = "__unset__"
 
+// OAuthRefreshPageOptions describes one bounded, cursor-stable scan of OAuth
+// accounts. The narrow pager is shared by the existing refresh pool and the
+// admin reconciliation path without widening AccountRepository.
+type OAuthRefreshPageOptions struct {
+	Platforms            []string
+	AfterID              int64
+	Limit                int
+	ActiveOnly           bool
+	IncludeSetupToken    bool
+	RequireRefreshToken  bool
+	ExcludeRetryCooldown bool
+}
+
+// OAuthRefreshCandidatePage keeps cursor metadata from the raw SQL ID page.
+// Hydration may lose a concurrently deleted row, but callers can still advance
+// past the raw page without truncating or duplicating the scan.
+type OAuthRefreshCandidatePage struct {
+	Accounts    []Account
+	NextAfterID int64
+	HasMore     bool
+}
+
+// OAuthRefreshCandidatePager is intentionally narrower than AccountRepository.
+// Reconciliation fails closed if the production repository does not implement
+// this bounded scan contract.
+type OAuthRefreshCandidatePager interface {
+	ListOAuthRefreshCandidatePage(ctx context.Context, options OAuthRefreshPageOptions) (*OAuthRefreshCandidatePage, error)
+}
+
 type AccountRepository interface {
 	Create(ctx context.Context, account *Account) error
 	GetByID(ctx context.Context, id int64) (*Account, error)

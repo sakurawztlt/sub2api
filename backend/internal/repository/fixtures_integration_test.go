@@ -4,6 +4,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -88,7 +89,15 @@ func mustCreateGroup(t *testing.T, client *dbent.Client, g *service.Group) *serv
 		SetStatus(g.Status).
 		SetSubscriptionType(g.SubscriptionType).
 		SetRateMultiplier(g.RateMultiplier).
-		SetIsExclusive(g.IsExclusive)
+		SetIsExclusive(g.IsExclusive).
+		SetAllowImageGeneration(g.AllowImageGeneration).
+		SetImageRateIndependent(g.ImageRateIndependent).
+		SetImageRateMultiplier(g.ImageRateMultiplier).
+		SetVideoModelPrices(service.NormalizeVideoModelPrices(g.VideoModelPrices)).
+		SetLongContextPricingEnabled(g.LongContextPricingEnabled).
+		SetProfitControlEnabled(g.ProfitControlEnabled).
+		SetProfitMinMargin(g.ProfitMinMargin).
+		SetProfitSafetyBuffer(g.ProfitSafetyBuffer)
 	if g.Description != "" {
 		create.SetDescription(g.Description)
 	}
@@ -100,6 +109,20 @@ func mustCreateGroup(t *testing.T, client *dbent.Client, g *service.Group) *serv
 	}
 	if g.MonthlyLimitUSD != nil {
 		create.SetMonthlyLimitUsd(*g.MonthlyLimitUSD)
+	}
+	if g.ImagePrice1K != nil {
+		create.SetImagePrice1k(*g.ImagePrice1K)
+	}
+	if g.SearchPricePer1k != nil {
+		create.SetSearchPricePer1k(*g.SearchPricePer1k)
+	}
+	if g.AudioRealtimePricePerMin != nil {
+		create.SetAudioRealtimePricePerMin(*g.AudioRealtimePricePerMin)
+	}
+	if g.ModelPricing != nil {
+		modelPricing, err := json.Marshal(g.ModelPricing)
+		require.NoError(t, err, "marshal group model pricing")
+		create.SetModelPricing(modelPricing)
 	}
 	if !g.CreatedAt.IsZero() {
 		create.SetCreatedAt(g.CreatedAt)
