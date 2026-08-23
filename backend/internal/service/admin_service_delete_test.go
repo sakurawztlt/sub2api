@@ -195,6 +195,10 @@ func (s *userRepoStub) BatchAddConcurrency(context.Context, []int64, int) (int, 
 	panic("unexpected BatchAddConcurrency call")
 }
 
+func (s *userRepoStub) BatchUpdateLimits(context.Context, []int64, *int, *int) (int, error) {
+	return 0, nil
+}
+
 func (s *userRepoStub) ExistsByEmail(ctx context.Context, email string) (bool, error) {
 	if s.existsErr != nil {
 		return false, s.existsErr

@@ -3,7 +3,10 @@ package service
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"log"
+	"strconv"
 	"sync"
 	"time"
 
@@ -12,10 +15,12 @@ import (
 )
 
 const (
-	// subscriptionExpiryLeaderLockKey gates the periodic expired-subscription
-	// status sweep so only one instance updates rows per cycle.
-	subscriptionExpiryLeaderLockKey = "subscription:expiry:leader"
-	subscriptionExpiryLeaderLockTTL = 2 * time.Minute
+	subscriptionExpiryReminderSMTPWarningInterval = time.Minute
+	// subscriptionExpiryReminderLeaderLockKey gates the per-cycle reminder scan
+	// so only one instance walks all active subscriptions and sends email.
+	subscriptionExpiryReminderLeaderLockKey = "subscription:expiry:reminder:leader"
+	// Keep crash recovery comfortably above a potentially paginated scan.
+	subscriptionExpiryReminderLeaderLockTTL = 5 * time.Minute
 )
 
 // SubscriptionExpiryService periodically updates expired subscription status.
@@ -32,6 +37,9 @@ type SubscriptionExpiryService struct {
 
 	settingRepo              SettingRepository
 	notificationEmailService *NotificationEmailService
+
+	smtpWarningMu   sync.Mutex
+	lastSMTPWarning time.Time
 }
 
 func NewSubscriptionExpiryService(userSubRepo UserSubscriptionRepository, interval time.Duration) *SubscriptionExpiryService {
@@ -44,8 +52,8 @@ func NewSubscriptionExpiryService(userSubRepo UserSubscriptionRepository, interv
 }
 
 // SetLeaderLock injects the leader-lock cache and DB used to elect a single
-// instance for the periodic expired-subscription sweep. When both are nil it runs
-// ungated (single-instance / test behavior).
+// instance for the periodic expiry-reminder scan. When both are nil the scan
+// runs ungated (single-instance / test behavior).
 func (s *SubscriptionExpiryService) SetLeaderLock(lockCache LeaderLockCache, db *sql.DB) {
 	if s == nil {
 		return
@@ -76,19 +84,92 @@ func (s *SubscriptionExpiryService) expiryReminderEnabled(ctx context.Context) b
 	if err == nil {
 		return !isFalseSettingValue(value)
 	}
-	if err == ErrSettingNotFound {
+	if errors.Is(err, ErrSettingNotFound) {
 		return true
 	}
+	log.Printf("[SubscriptionExpiry] Read expiry reminder switch failed: %v", err)
 	return false
 }
 
 func (s *SubscriptionExpiryService) sendExpiryReminders(ctx context.Context) {
-	if s == nil || !s.expiryReminderEnabled(ctx) || s.userSubRepo == nil || s.notificationEmailService == nil {
+	if s == nil || s.userSubRepo == nil || s.notificationEmailService == nil || !s.expiryReminderEnabled(ctx) {
 		return
 	}
-	_, _, err := s.userSubRepo.List(ctx, pagination.PaginationParams{Page: 1, PageSize: 100}, nil, nil, SubscriptionStatusActive, "", "expires_at", "asc")
-	if err != nil {
-		log.Printf("[SubscriptionExpiry] Scan expiry reminders failed: %v", err)
+	if !s.smtpConfigured(ctx) {
+		return
+	}
+	release, ok := tryAcquireSingletonLeaderLock(
+		ctx,
+		s.lockCache,
+		s.db,
+		subscriptionExpiryReminderLeaderLockKey,
+		s.instanceID,
+		subscriptionExpiryReminderLeaderLockTTL,
+	)
+	if !ok {
+		return
+	}
+	defer release()
+	for page := 1; ; page++ {
+		subs, pag, err := s.userSubRepo.List(ctx, pagination.PaginationParams{Page: page, PageSize: 200}, nil, nil, SubscriptionStatusActive, "", "expires_at", "asc")
+		if err != nil {
+			log.Printf("[SubscriptionExpiry] List active subscriptions for reminder failed: %v", err)
+			return
+		}
+		for i := range subs {
+			s.sendExpiryReminderIfDue(ctx, &subs[i])
+		}
+		if pag == nil || page >= pag.Pages || len(subs) == 0 {
+			return
+		}
+	}
+}
+
+func (s *SubscriptionExpiryService) smtpConfigured(ctx context.Context) bool {
+	if s == nil || s.notificationEmailService == nil || s.notificationEmailService.emailService == nil {
+		return false
+	}
+	_, err := s.notificationEmailService.emailService.GetSMTPConfig(ctx)
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, ErrEmailNotConfigured) {
+		s.smtpWarningMu.Lock()
+		defer s.smtpWarningMu.Unlock()
+		now := time.Now()
+		if s.lastSMTPWarning.IsZero() || now.Sub(s.lastSMTPWarning) >= subscriptionExpiryReminderSMTPWarningInterval {
+			log.Printf("[SubscriptionExpiry] SMTP is not configured; skipping expiry reminders")
+			s.lastSMTPWarning = now
+		}
+		return false
+	}
+	log.Printf("[SubscriptionExpiry] Read SMTP configuration failed; skipping expiry reminders: %v", err)
+	return false
+}
+
+func (s *SubscriptionExpiryService) sendExpiryReminderIfDue(ctx context.Context, sub *UserSubscription) {
+	if sub == nil || sub.User == nil || sub.Group == nil || sub.User.Email == "" {
+		return
+	}
+	daysRemaining := sub.DaysRemaining()
+	if daysRemaining != 7 && daysRemaining != 3 && daysRemaining != 1 {
+		return
+	}
+	if err := s.notificationEmailService.Send(ctx, NotificationEmailSendInput{
+		Event:          NotificationEmailEventSubscriptionExpiryReminder,
+		RecipientEmail: sub.User.Email,
+		RecipientName:  firstNonEmpty(sub.User.Username, sub.User.Email),
+		UserID:         sub.UserID,
+		SourceType:     "user_subscription",
+		SourceID:       strconv.FormatInt(sub.ID, 10),
+		ReminderKey:    fmt.Sprintf("%dd", daysRemaining),
+		Variables: map[string]string{
+			"subscription_group": sub.Group.Name,
+			"expiry_time":        sub.ExpiresAt.Format("2006-01-02 15:04"),
+			"days_remaining":     strconv.Itoa(daysRemaining),
+		},
+	}); err != nil {
+		log.Printf("[SubscriptionExpiry] Send expiry reminder failed: subscription=%d user=%d err=%v", sub.ID, sub.UserID, err)
 	}
 }
 
@@ -125,14 +206,6 @@ func (s *SubscriptionExpiryService) Stop() {
 }
 
 func (s *SubscriptionExpiryService) runOnce() {
-	lockCtx, lockCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	release, ok := tryAcquireSingletonLeaderLock(lockCtx, s.lockCache, s.db, subscriptionExpiryLeaderLockKey, s.instanceID, subscriptionExpiryLeaderLockTTL)
-	lockCancel()
-	if !ok {
-		return
-	}
-	defer release()
-
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -144,4 +217,5 @@ func (s *SubscriptionExpiryService) runOnce() {
 	if updated > 0 {
 		log.Printf("[SubscriptionExpiry] Updated %d expired subscriptions", updated)
 	}
+	s.sendExpiryReminders(ctx)
 }

@@ -4,7 +4,7 @@
 
 # Sub2API
 
-[![Go](https://img.shields.io/badge/Go-1.25.7-00ADD8.svg)](https://golang.org/)
+[![Go](https://img.shields.io/badge/Go-1.26.6-00ADD8.svg)](https://golang.org/)
 [![Vue](https://img.shields.io/badge/Vue-3.4+-4FC08D.svg)](https://vuejs.org/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-336791.svg)](https://www.postgresql.org/)
 [![Redis](https://img.shields.io/badge/Redis-7+-DC382D.svg)](https://redis.io/)
@@ -111,7 +111,7 @@ Community projects that extend or integrate with Sub2API:
 
 | Component | Technology |
 |-----------|------------|
-| Backend | Go 1.25.7, Gin, Ent |
+| Backend | Go 1.26.6, Gin, Ent |
 | Frontend | Vue 3.4+, Vite 5+, TailwindCSS |
 | Database | PostgreSQL 15+ |
 | Cache/Queue | Redis 7+ |
@@ -246,6 +246,7 @@ cd sub2api/deploy
 
 # 2. Copy environment configuration
 cp .env.example .env
+chmod 600 .env
 
 # 3. Edit configuration (generate secure passwords)
 nano .env
@@ -365,7 +366,23 @@ rm -rf data/ postgres_data/ redis_data/
 
 ---
 
-### Method 3: Build from Source
+### Method 3: Apple container (macOS)
+
+Apple-silicon Macs running macOS 26 can run the full Sub2API, PostgreSQL, and Redis stack with Apple `container` 1.1.0 or newer:
+
+```bash
+git clone https://github.com/Wei-Shaw/sub2api.git
+cd sub2api/deploy
+./apple-container.sh init
+./apple-container.sh up
+./apple-container.sh status
+```
+
+This is an operator-managed local workflow; Docker Compose remains the recommended production path. See [deploy/APPLE_CONTAINER.md](deploy/APPLE_CONTAINER.md) for lifecycle commands, persistence, upgrades, and runtime limitations.
+
+---
+
+### Method 4: Build from Source
 
 Build and run from source code for development or customization.
 
@@ -438,11 +455,7 @@ default:
   rate_multiplier: 1.0
 ```
 
-### Sora Status (Temporarily Unavailable)
-
-> ⚠️ Sora-related features are temporarily unavailable due to technical issues in upstream integration and media delivery.
-> Please do not rely on Sora in production at this time.
-> Existing `gateway.sora_*` configuration keys are reserved and may not take effect until these issues are resolved.
+**First-run administrator:** An existing `config.yaml` skips the web setup wizard, and `default.admin_email` / `default.admin_password` do not create an administrator. On a fresh source install, either omit the create/edit configuration steps, start `./sub2api`, and let `http://<host>:8080` create the configuration and administrator, or bootstrap with `./sub2api -setup` / `AUTO_SETUP`. Only pre-create the configuration manually when the target database already has an administrator.
 
 Additional security-related options are available in `config.yaml`:
 
@@ -454,25 +467,28 @@ Additional security-related options are available in `config.yaml`:
 - `security.response_headers.enabled` to enable configurable response header filtering (disabled uses default allowlist)
 - `security.csp` to control Content-Security-Policy headers
 - `billing.circuit_breaker` to fail closed on billing errors
-- `server.trusted_proxies` to enable X-Forwarded-For parsing
+- `server.trusted_proxies` to define the exact proxy IPs/CIDRs trusted by Gin; an empty list disables proxy trust
+- `security.trust_forwarded_ip_for_api_key_acl` to opt API-key IP allow/deny lists into legacy raw forwarded-header extraction instead of the Gin trusted-proxy chain (default `false`)
 - `turnstile.required` to require Turnstile in release mode
+
+API-key ACLs use Gin's trusted-proxy chain by default. Keep the legacy takeover disabled and configure only the reverse proxies that connect directly to Sub2API in `server.trusted_proxies`. If compatibility requires enabling raw `CF-Connecting-IP`, `X-Real-IP`, or `X-Forwarded-For` extraction, firewall the origin to the proxy/CDN and make the edge overwrite those headers.
 
 **⚠️ Security Warning: HTTP URL Configuration**
 
-When `security.url_allowlist.enabled=false`, the system performs minimal URL validation by default, **rejecting HTTP URLs** and only allowing HTTPS. To allow HTTP URLs (e.g., for development or internal testing), you must explicitly set:
+When `security.url_allowlist.enabled=false`, the current default performs minimal validation and **allows HTTP URLs**. This is useful for local or private-network development, but production deployments should explicitly require HTTPS:
 
 ```yaml
 security:
   url_allowlist:
     enabled: false                # Disable allowlist checks
-    allow_insecure_http: true     # Allow HTTP URLs (⚠️ INSECURE)
+    allow_insecure_http: false    # HTTPS only (recommended for production)
 ```
 
 **Or via environment variable:**
 
 ```bash
 SECURITY_URL_ALLOWLIST_ENABLED=false
-SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP=true
+SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP=false
 ```
 
 **Risks of allowing HTTP:**
@@ -486,7 +502,7 @@ SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP=true
 - ✅ Testing account connectivity before obtaining HTTPS
 - ❌ Production environments (use HTTPS only)
 
-**Example error without this setting:**
+**Example error for an HTTP URL when `allow_insecure_http: false` is set:**
 ```
 Invalid base URL: invalid url scheme: http
 ```
@@ -497,10 +513,37 @@ If you disable URL validation or response header filtering, harden your network 
 - Enforce TLS-only outbound traffic
 - Strip sensitive upstream response headers at the proxy
 
+#### OpenAI Responses WebSocket modes and HTTP bridge
+
+Codex-style Responses WebSocket ingress can use the per-account v2 modes `off`, `ctx_pool`, `passthrough`, and `http_bridge`. Enable the v2 mode router before selecting these modes in the account form:
+
+```yaml
+gateway:
+  openai_ws:
+    mode_router_v2_enabled: true
+    ingress_mode_default: ctx_pool
+    http_bridge_enabled: true
+    http_bridge_threshold_bytes: 15728640 # 15 MiB
+```
+
+`off` falls back to HTTP/SSE, `ctx_pool` uses the managed upstream WebSocket pool, and `passthrough` forwards the client session through the upstream WebSocket adapter. `http_bridge` keeps the client-facing WebSocket but runs the upstream turn over HTTP/SSE. With the bridge enabled, oversized request frames can hand off automatically at the configured threshold; Grok WebSocket ingress uses the HTTP bridge because xAI is reached through its HTTP/SSE Responses endpoint. Set `gateway.openai_ws.force_http=true` for an emergency global rollback.
+
 ```bash
-# 6. Run the application
+# 7. Run the application
 ./sub2api
 ```
+
+#### HTTP/2 (h2c) and HTTP/1.1 fallback
+
+The main cleartext listener enables h2c when `server.h2c.enabled=true` (`deploy/config.example.yaml` enables it). HTTP/1.1 remains available for WebSocket upgrades and legacy clients:
+
+```yaml
+server:
+  h2c:
+    enabled: true
+```
+
+For a Caddy hop, advertise both protocols with `versions h2c h1`. Verify the backend with `curl --http2-prior-knowledge -I http://localhost:8080/health` and `curl --http1.1 -I http://localhost:8080/health`.
 
 #### Development Mode
 
@@ -536,21 +579,22 @@ Simple Mode is designed for individual developers or internal teams who want qui
 
 ---
 
-## Grok / xAI OAuth Support
+## Grok / xAI Support
 
-Sub2API supports Grok subscription accounts through xAI OAuth and forwards OpenAI-compatible Responses traffic to xAI.
+Sub2API supports both Grok subscription accounts through xAI OAuth and standard xAI API-key accounts. Both account types forward OpenAI-compatible traffic to their account-specific xAI upstream.
 
 ### Supported Scope
 
 - Platform name: `grok`
-- Account type: OAuth subscription accounts
-- Public Responses targets: `/v1/responses`, `/responses`, and `/backend-api/codex/responses`, forwarded to `${XAI_BASE_URL:-https://api.x.ai/v1}/responses`
+- Account types: OAuth subscription accounts and xAI API-key accounts
+- Public Responses targets: `/v1/responses`, `/responses`, and `/backend-api/codex/responses`, forwarded to the Grok subscription proxy for OAuth accounts or `https://api.x.ai/v1/responses` for API-key accounts
 - Public Claude-compatible target: `/v1/messages`, converted to xAI Responses and returned as Anthropic Messages output for Claude CLI style clients
-- Public Chat Completions targets: `/v1/chat/completions` and `/chat/completions`, forwarded to `${XAI_BASE_URL:-https://api.x.ai/v1}/chat/completions`
+- Public Chat Completions targets: `/v1/chat/completions` and `/chat/completions`, forwarded to the account-type-specific xAI upstream
 - Codex CLI style Responses WebSocket ingress is accepted on the Responses targets and bridged to xAI HTTP/SSE Responses upstream
 - Text models: `grok-4.5`, `grok-4.3`, `grok-build-0.1`, `grok-composer-2.5-fast`, `grok-4.20-0309-reasoning`, `grok-4.20-0309-non-reasoning`, and `grok-4.20-multi-agent-0309`
 - Media targets for Grok groups: `/v1/images/generations`, `/images/generations`, `/v1/images/edits`, `/images/edits`, `/v1/videos/generations`, `/videos/generations`, `/v1/videos/edits`, `/videos/edits`, `/v1/videos/extensions`, `/videos/extensions`, `/v1/videos/{request_id}`, and `/videos/{request_id}`. Generation, editing, and extension requests require the group image-generation permission.
-- Media models: `grok-imagine`, `grok-imagine-image-quality`, `grok-imagine-image`, `grok-imagine-edit`, `grok-imagine-video`, and `grok-imagine-video-1.5`
+- Media models: `grok-imagine`, `grok-imagine-image-quality`, `grok-imagine-image`, `grok-imagine-image-2.0`, `grok-imagine-edit`, `grok-imagine-video`, and `grok-imagine-video-1.5`
+- JSON image-edit and video-generation requests accept image references in `image`, `images`, `reference_images`, and `mask` objects. Use `url` for xAI-compatible payloads; the legacy `image_url` field remains accepted and is normalized to `url` before forwarding.
 - Out of scope for this provider: TTS, transcription, browser automation, cookies, and Grok web scraping
 
 ### OAuth Configuration
@@ -564,9 +608,10 @@ The Grok OAuth flow uses PKCE and does not require committing private secrets. T
 | `XAI_OAUTH_REDIRECT_URI` | `http://127.0.0.1:56121/callback` |
 | `XAI_OAUTH_AUTHORIZE_URL` | `https://auth.x.ai/oauth2/authorize` |
 | `XAI_OAUTH_TOKEN_URL` | `https://auth.x.ai/oauth2/token` |
-| `XAI_BASE_URL` | `https://api.x.ai/v1` |
+| `XAI_BASE_URL` | `https://api.x.ai/v1`; runtime-diagnostics override (account `base_url` controls request forwarding) |
+| `XAI_GROK_CLI_VERSION` | `0.2.114`; optional override for the client identity sent to `cli-chat-proxy.grok.com`. Overrides below this floor are ignored |
 
-Administrators can create or reauthorize Grok accounts from the dashboard, or use the admin API:
+Administrators can create Grok OAuth or API-key accounts from the dashboard. OAuth authorization and reauthorization are also available through the admin API:
 
 | Endpoint | Purpose |
 |----------|---------|
@@ -575,13 +620,40 @@ Administrators can create or reauthorize Grok accounts from the dashboard, or us
 | `POST /api/v1/admin/grok/oauth/refresh-token` | Validate or refresh a Grok refresh token |
 | `POST /api/v1/admin/grok/accounts/:id/refresh` | Refresh an existing Grok account |
 
-Credential storage reuses the existing account JSON fields: `access_token`, `refresh_token`, `token_type`, `expires_at`, optional `email`, optional `subscription_tier`, and `entitlement_status`.
+OAuth credential storage reuses the existing account JSON fields: `access_token`, `refresh_token`, `token_type`, `expires_at`, `base_url`, optional `email`, optional `subscription_tier`, and `entitlement_status`. New OAuth accounts default to `https://cli-chat-proxy.grok.com/v1`; explicitly stored official API, regional API, and custom upstreams remain pinned to their configured endpoint.
+
+For API-key accounts, select **Grok → API Key** in the create-account dialog. The official base URL defaults to `https://api.x.ai/v1`; credentials use the existing `base_url` and `api_key` fields.
+
+### Grok Build CLI Configuration
+
+1. Add a Grok OAuth or API-key account, attach it to a Grok group, and create a Sub2API API key for that group.
+2. On the user API-key page, click **Use Key → Grok CLI** to generate the correct macOS/Linux or Windows configuration (the OpenCode tab is also supported).
+3. For a manual setup, save the following as `~/.grok/config.toml` (Windows: `%USERPROFILE%\.grok\config.toml`):
+
+```toml
+[models]
+default = "grok"
+web_search = "grok"
+
+[model."grok"]
+model = "grok-4.5"
+base_url = "https://your-sub2api.example.com/v1"
+name = "Grok 4.5"
+api_key = "sk-your-sub2api-key"
+api_backend = "responses"
+context_window = 1000000
+supports_backend_search = true
+```
+
+Back up an existing file, restrict its permissions because it contains an API key, then verify it with `grok inspect`. The `base_url` is the public Sub2API URL ending in `/v1`, not an internal xAI URL.
 
 ### Usage And Quota Display
 
 xAI quota is passive. Sub2API does not invent subscription quota values; it records whitelisted xAI rate-limit headers from successful or rate-limited upstream responses when xAI sends them. Before the first usable upstream response, the dashboard shows quota as unknown and still displays local Sub2API usage stats.
 
-`401` responses mark the account as needing reauthorization. `403` responses are treated as entitlement or subscription-tier failures instead of token-refresh loops. `429` responses use `Retry-After` or a short cooldown to temporarily remove the account from scheduling.
+`401` responses temporarily remove accounts with invalid credentials from scheduling. `403` responses are treated as access or entitlement failures instead of token-refresh loops. `429` responses use `Retry-After` or a short cooldown to temporarily remove the account from scheduling.
+
+New Grok image and video generation requests use a media-specific eligibility check. API-key accounts are eligible by default. OAuth accounts require positive paid-entitlement evidence from the xAI billing probe; Free, forbidden, missing, malformed, and inconclusive observations are excluded from new media generation. If no eligible account remains, the endpoint returns HTTP `503` with error type `grok_media_no_eligible_account`. Administrators can override automatic eligibility with account field `extra.grok_media_eligible`; successful image responses must contain actual image output, otherwise failover is attempted.
 
 ---
 
@@ -657,11 +729,11 @@ sub2api/
 
 ## Star History
 
-<a href="https://star-history.com/#Wei-Shaw/sub2api&Date">
+<a href="https://star-history.dera.page/#Wei-Shaw/sub2api&Date">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Wei-Shaw/sub2api&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Wei-Shaw/sub2api&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Wei-Shaw/sub2api&type=Date" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=Wei-Shaw/sub2api&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=Wei-Shaw/sub2api&type=Date" />
+   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=Wei-Shaw/sub2api&type=Date" />
  </picture>
 </a>
 

@@ -30,6 +30,9 @@ type DataPayload struct {
 	ExportedAt string        `json:"exported_at"`
 	Proxies    []DataProxy   `json:"proxies"`
 	Accounts   []DataAccount `json:"accounts"`
+	// Shadow links are intentionally not represented by the generic credential
+	// backup format; report how many were skipped so the operator can recreate them.
+	SkippedShadows int `json:"skipped_shadows,omitempty"`
 }
 
 type DataProxy struct {
@@ -103,6 +106,19 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
+	}
+	skippedShadows := 0
+	exportable := make([]service.Account, 0, len(accounts))
+	for i := range accounts {
+		if accounts[i].IsCredentialShadow() {
+			skippedShadows++
+			continue
+		}
+		exportable = append(exportable, accounts[i])
+	}
+	accounts = exportable
+	if skippedShadows > 0 {
+		slog.Info("export_skipped_spark_shadows", "count", skippedShadows)
 	}
 
 	includeProxies, err := parseIncludeProxies(c)
@@ -191,9 +207,10 @@ func (h *AccountHandler) ExportData(c *gin.Context) {
 	}
 
 	payload := DataPayload{
-		ExportedAt: time.Now().UTC().Format(time.RFC3339),
-		Proxies:    dataProxies,
-		Accounts:   dataAccounts,
+		ExportedAt:     time.Now().UTC().Format(time.RFC3339),
+		Proxies:        dataProxies,
+		Accounts:       dataAccounts,
+		SkippedShadows: skippedShadows,
 	}
 
 	response.Success(c, payload)

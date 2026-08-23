@@ -43,12 +43,17 @@ func TestRound38_FilterThinkingBlocksForRetry_DropsThinkingBlockWithEmptyContent
 	_, hasThinking := req["thinking"]
 	require.False(t, hasThinking, "top-level thinking config should be removed for retry")
 
-	msgs := req["messages"].([]any)
-	assistant := msgs[1].(map[string]any)
-	content := assistant["content"].([]any)
+	msgs, ok := req["messages"].([]any)
+	require.True(t, ok)
+	assistant, ok := msgs[1].(map[string]any)
+	require.True(t, ok)
+	content, ok := assistant["content"].([]any)
+	require.True(t, ok)
 	require.Len(t, content, 1, "empty thinking block should be dropped, only text remains")
-	require.Equal(t, "text", content[0].(map[string]any)["type"])
-	require.Equal(t, "Answer", content[0].(map[string]any)["text"])
+	textBlock, ok := content[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "text", textBlock["type"])
+	require.Equal(t, "Answer", textBlock["text"])
 }
 
 // Direct test on isThinkingBlockSignatureError — the new pattern must

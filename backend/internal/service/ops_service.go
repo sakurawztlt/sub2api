@@ -16,6 +16,9 @@ import (
 var ErrOpsDisabled = infraerrors.NotFound("OPS_DISABLED", "Ops monitoring is disabled")
 
 const (
+	// OpsErrorLogQueueBodyMaxBytes bounds attacker-controlled response data kept
+	// by the asynchronous ops error queue.
+	OpsErrorLogQueueBodyMaxBytes = 8 * 1024
 	opsMaxStoredRequestBodyBytes = 256 * 1024
 	opsMaxStoredErrorBodyBytes   = 20 * 1024
 )
@@ -54,6 +57,7 @@ type OpsService struct {
 	geminiCompatService       *GeminiMessagesCompatService
 	antigravityGatewayService *AntigravityGatewayService
 	systemLogSink             *OpsSystemLogSink
+	ingressRejectAggregator   *OpsIngressRejectAggregator
 
 	// cleanupReloader 由 wire 在 OpsCleanupService 构造完成后通过 SetCleanupReloader 注入。
 	// 解耦避免 OpsService -> OpsCleanupService 的硬依赖（cleanup 也读 settings，会循环）。
@@ -198,17 +202,8 @@ func (s *OpsService) RecordErrorBatch(ctx context.Context, entries []*OpsInsertE
 	}
 
 	if _, err := s.opsRepo.BatchInsertErrorLogs(ctx, prepared); err != nil {
-		log.Printf("[Ops] RecordErrorBatch failed, fallback to single inserts: %v", err)
-		var firstErr error
-		for _, entry := range prepared {
-			if _, insertErr := s.opsRepo.InsertErrorLog(ctx, entry); insertErr != nil {
-				log.Printf("[Ops] RecordErrorBatch fallback insert failed: %v", insertErr)
-				if firstErr == nil {
-					firstErr = insertErr
-				}
-			}
-		}
-		return firstErr
+		log.Printf("[Ops] RecordErrorBatch failed: %v", err)
+		return err
 	}
 	return nil
 }
@@ -361,6 +356,18 @@ func sanitizeOpsUpstreamErrors(entry *OpsInsertErrorLogInput) error {
 	entry.UpstreamErrorsJSON = marshalOpsUpstreamErrors(sanitized)
 	entry.UpstreamErrors = nil
 	return nil
+}
+
+// SanitizeOpsErrorBodyForQueue removes credentials and bounds attacker-
+// controlled response data before it enters the asynchronous queue.
+func SanitizeOpsErrorBodyForQueue(raw string) (string, bool) {
+	return sanitizeErrorBodyForStorage(raw, OpsErrorLogQueueBodyMaxBytes)
+}
+
+// SanitizeOpsUpstreamErrorsForQueue applies the same redaction and size
+// bounds to attempt-level details before queueing them.
+func SanitizeOpsUpstreamErrorsForQueue(entry *OpsInsertErrorLogInput) error {
+	return sanitizeOpsUpstreamErrors(entry)
 }
 
 func (s *OpsService) GetErrorLogs(ctx context.Context, filter *OpsErrorLogFilter) (*OpsErrorLogList, error) {

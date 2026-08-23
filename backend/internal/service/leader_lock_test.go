@@ -86,60 +86,57 @@ func TestTryAcquireSingletonLeaderLock_CacheErrorFallsThrough(t *testing.T) {
 	require.NotPanics(t, release)
 }
 
-type leaderLockSubscriptionExpiryRepoStub struct {
-	userSubRepoNoop
-	batchCalls int
-}
-
-func (s *leaderLockSubscriptionExpiryRepoStub) BatchUpdateExpiredStatus(context.Context) (int64, error) {
-	s.batchCalls++
-	return int64(s.batchCalls), nil
-}
-
-func TestSubscriptionExpiryService_SkipsUpdateWhenNotLeader(t *testing.T) {
+func TestSubscriptionExpiryService_ReminderSkipsScanWhenNotLeader(t *testing.T) {
 	cache := &fakeLeaderLockCache{}
-	// A peer already holds the expiry leader lock.
-	_, _ = cache.TryAcquireLeaderLock(context.Background(), subscriptionExpiryLeaderLockKey, "peer", time.Minute)
+	_, _ = cache.TryAcquireLeaderLock(context.Background(), subscriptionExpiryReminderLeaderLockKey, "peer", time.Minute)
 
-	repo := &leaderLockSubscriptionExpiryRepoStub{}
+	repo := &subscriptionExpiryRepoStub{}
+	settingRepo := &subscriptionExpirySettingRepoStub{values: map[string]string{SettingKeySMTPHost: "smtp.example.com"}}
 	svc := NewSubscriptionExpiryService(repo, time.Minute)
+	svc.SetSettingRepository(settingRepo)
+	svc.SetNotificationEmailService(NewNotificationEmailService(settingRepo, NewEmailService(settingRepo, nil)))
 	svc.SetLeaderLock(cache, nil)
 
-	svc.runOnce()
+	svc.sendExpiryReminders(context.Background())
 
-	require.Zero(t, repo.batchCalls, "non-leader must not update expired subscriptions")
+	require.Zero(t, repo.listCalls, "non-leader must not scan active subscriptions")
 }
 
-func TestSubscriptionExpiryService_UpdatesWhenLeader(t *testing.T) {
-	repo := &leaderLockSubscriptionExpiryRepoStub{}
+func TestSubscriptionExpiryService_ReminderScansWhenLeader(t *testing.T) {
+	repo := &subscriptionExpiryRepoStub{}
+	settingRepo := &subscriptionExpirySettingRepoStub{values: map[string]string{SettingKeySMTPHost: "smtp.example.com"}}
 	svc := NewSubscriptionExpiryService(repo, time.Minute)
+	svc.SetSettingRepository(settingRepo)
+	svc.SetNotificationEmailService(NewNotificationEmailService(settingRepo, NewEmailService(settingRepo, nil)))
 	svc.SetLeaderLock(&fakeLeaderLockCache{}, nil)
 
-	svc.runOnce()
+	svc.sendExpiryReminders(context.Background())
 
-	require.Equal(t, 1, repo.batchCalls, "leader should update expired subscriptions once")
+	require.Equal(t, 1, repo.listCalls, "leader should scan active subscriptions once")
 }
 
 // Single-instance correctness: the lock is released at the end of each cycle, so
 // the same instance must re-acquire it and run on every subsequent cycle (no
 // self-lockout). Covers both the cache-backed path and the no-backend path.
-func TestSubscriptionExpiryService_RunsEveryCycleSingleInstance(t *testing.T) {
+func TestSubscriptionExpiryService_ReminderRunsEveryCycleSingleInstance(t *testing.T) {
 	cases := map[string]LeaderLockCache{
 		"with_cache": &fakeLeaderLockCache{},
 		"no_backend": nil,
 	}
 	for name, cache := range cases {
 		t.Run(name, func(t *testing.T) {
-			repo := &leaderLockSubscriptionExpiryRepoStub{}
+			repo := &subscriptionExpiryRepoStub{}
+			settingRepo := &subscriptionExpirySettingRepoStub{values: map[string]string{SettingKeySMTPHost: "smtp.example.com"}}
 			svc := NewSubscriptionExpiryService(repo, time.Minute)
+			svc.SetSettingRepository(settingRepo)
+			svc.SetNotificationEmailService(NewNotificationEmailService(settingRepo, NewEmailService(settingRepo, nil)))
 			svc.SetLeaderLock(cache, nil)
 
-			// Three consecutive cycles, mimicking the ticker loop.
-			svc.runOnce()
-			svc.runOnce()
-			svc.runOnce()
+			svc.sendExpiryReminders(context.Background())
+			svc.sendExpiryReminders(context.Background())
+			svc.sendExpiryReminders(context.Background())
 
-			require.Equal(t, 3, repo.batchCalls, "single instance must run every cycle")
+			require.Equal(t, 3, repo.listCalls, "single instance must run every cycle")
 		})
 	}
 }

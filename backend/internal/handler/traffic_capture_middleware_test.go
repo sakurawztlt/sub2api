@@ -23,44 +23,12 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 )
 
 func init() {
 	gin.SetMode(gin.TestMode)
 }
-
-// fakeCaptureService — 内存 Submit, 不调 ent. 跟真 service Enabled=true 一致接口.
-type fakeCaptureService struct {
-	*service.TrafficCaptureService
-	submitted []service.TrafficCaptureEntry
-}
-
-func newFakeCapture(maxBytes int) (*service.TrafficCaptureService, *[]service.TrafficCaptureEntry) {
-	// 用真 service.NewTrafficCaptureService 但不传 ent client 让它走 disabled 路径.
-	// 然后我们替换 Submit 行为 — 不直接 enqueue (会 panic 因 nil client persist),
-	// 改用 capture sink 钩子. 简化: enabled=true 但走 inMemorySink.
-	cfg := service.TrafficCaptureConfig{
-		Enabled:  true,
-		MaxBytes: maxBytes,
-		TTL:      24 * time.Hour,
-		Sampling: 1.0,
-	}
-	svc := service.NewTrafficCaptureService(nil, cfg)
-	// 持续 drain svc queue 到本地 slice; consumeLoop 是私的, 用 reflection 不行.
-	// 这里跟 svc 协议: enabled=true 时 Submit 会丢进 channel. 我们另起 goroutine 读.
-	sink := []service.TrafficCaptureEntry{}
-	go func() {
-		// 实际我们不消费, 留 cap=256 内存. 用 Stats() / 直接读私 chan 不行.
-		// fallback: 用 svc.Enabled() 配合 Submit 后 sleep 让 consumeLoop 跑.
-		// 不能用 nil client; 改测策略 — 我们直接调 middleware 拼 entry 看属性, 不
-		// 经过 service.Submit. 见 testCaptureSink.
-	}()
-	return svc, &sink
-}
-
-// testCaptureSink — 模拟 middleware 拼装行为, 不真走 service.Submit.
-// 这样跳过 ent client 依赖直接测 middleware 拼出来的 entry 字段是否正确.
-type capturedEntry = service.TrafficCaptureEntry
 
 func TestTrafficCaptureMiddleware_LargeBodyNotTruncatedForHandler(t *testing.T) {
 	// P1 critical: cap=64 bytes, 但 inbound 是 200 bytes. 业务 handler 必须拿完整 200b.
@@ -186,7 +154,8 @@ func TestTrafficCaptureMiddleware_ResponseTotalBytesAccumulated(t *testing.T) {
 
 	// 写 100b, cap=30. buf 应只 30b, totalBytes=100
 	body := strings.Repeat("Y", 100)
-	w.Write([]byte(body))
+	_, err := w.Write([]byte(body))
+	require.NoError(t, err)
 	if w.totalBytes != 100 {
 		t.Errorf("totalBytes = %d, want 100", w.totalBytes)
 	}
@@ -207,7 +176,7 @@ func min(a, b int) int {
 func TestTrafficCaptureMiddleware_APIKeyIDExtraction(t *testing.T) {
 	cfg := service.TrafficCaptureConfig{Enabled: true, MaxBytes: 1024, TTL: time.Hour, Sampling: 1.0}
 	svc := service.NewTrafficCaptureService(nil, cfg)
-	defer svc.Close(context.Background())
+	t.Cleanup(func() { require.NoError(t, svc.Close(context.Background())) })
 
 	r := gin.New()
 	// 模拟 ApiKeyAuth: set api_key 为 *service.APIKey
@@ -245,7 +214,7 @@ func TestTrafficCaptureMiddleware_APIKeyIDExtraction(t *testing.T) {
 func TestTrafficCaptureMiddleware_OversizeReturns413(t *testing.T) {
 	cfg := service.TrafficCaptureConfig{Enabled: true, MaxBytes: 1024, TTL: time.Hour, Sampling: 1.0}
 	svc := service.NewTrafficCaptureService(nil, cfg)
-	defer svc.Close(context.Background())
+	t.Cleanup(func() { require.NoError(t, svc.Close(context.Background())) })
 
 	r := gin.New()
 	r.Use(TrafficCaptureMiddleware(svc))
@@ -277,7 +246,7 @@ func TestTrafficCaptureMiddleware_CeilingFollowsCaptureMaxBytes(t *testing.T) {
 	bodyLen := defaultInboundBodyCaptureCeiling + 1
 	cfg := service.TrafficCaptureConfig{Enabled: true, MaxBytes: bodyLen + 1024, TTL: time.Hour, Sampling: 1.0}
 	svc := service.NewTrafficCaptureService(nil, cfg)
-	defer svc.Close(context.Background())
+	t.Cleanup(func() { require.NoError(t, svc.Close(context.Background())) })
 
 	r := gin.New()
 	r.Use(TrafficCaptureMiddleware(svc))

@@ -80,7 +80,7 @@ func TestMultimodalSkipWaitCtx_RoundTrip(t *testing.T) {
 }
 
 func TestIsMultimodalSkipWaitCtx_NilCtx(t *testing.T) {
-	if IsMultimodalSkipWaitCtx(nil) {
+	if IsMultimodalSkipWaitCtx(nil) { //nolint:staticcheck // SA1012: deliberately verify that nil is treated as untagged.
 		t.Errorf("nil ctx should not be flagged")
 	}
 }

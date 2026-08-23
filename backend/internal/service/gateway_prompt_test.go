@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestIsClaudeCodeClient(t *testing.T) {
@@ -520,4 +521,29 @@ func TestRewriteSystemForNonClaudeCode(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRewriteSystemForNonClaudeCodeWithPromptBlocks_PreservesPerBlockCacheControl(t *testing.T) {
+	body := []byte(`{"model":"claude-3","system":[{"type":"text","text":"First instruction","cache_control":{"type":"ephemeral","ttl":"5m"}},{"type":"text","text":"Second instruction","cache_control":{"type":"ephemeral","ttl":"1h"}}],"messages":[{"role":"user","content":"hello"}]}`)
+	system := []any{
+		map[string]any{
+			"type":          "text",
+			"text":          "First instruction",
+			"cache_control": map[string]any{"type": "ephemeral", "ttl": "5m"},
+		},
+		map[string]any{
+			"type":          "text",
+			"text":          "Second instruction",
+			"cache_control": map[string]any{"type": "ephemeral", "ttl": "1h"},
+		},
+	}
+
+	result := rewriteSystemForNonClaudeCodeWithPromptBlocks(body, system, "", "")
+
+	require.Len(t, gjson.GetBytes(result, "system").Array(), 3)
+	require.Equal(t, "[System Instructions]", gjson.GetBytes(result, "messages.0.content.0.text").String())
+	require.Equal(t, "First instruction", gjson.GetBytes(result, "messages.0.content.1.text").String())
+	require.Equal(t, "5m", gjson.GetBytes(result, "messages.0.content.1.cache_control.ttl").String())
+	require.Equal(t, "Second instruction", gjson.GetBytes(result, "messages.0.content.2.text").String())
+	require.Equal(t, "1h", gjson.GetBytes(result, "messages.0.content.2.cache_control.ttl").String())
 }

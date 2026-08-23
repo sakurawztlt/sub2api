@@ -500,7 +500,11 @@ func (s *OpenAIGatewayService) validateCurrentGrokCredentialFailure(
 
 func (s *OpenAIGatewayService) grokCredentialMutationLock(accountID int64) *oauthRefreshLocalLock {
 	actual, _ := s.grokCredentialMutationLocks.LoadOrStore(accountID, newOAuthRefreshLocalLock())
-	return actual.(*oauthRefreshLocalLock)
+	lock, ok := actual.(*oauthRefreshLocalLock)
+	if !ok {
+		panic("grok credential mutation lock has unexpected value type")
+	}
+	return lock
 }
 
 func (s *OpenAIGatewayService) grokCredentialMutationCommitted(accountID int64, class grokCredentialFailureClass, until time.Time) bool {

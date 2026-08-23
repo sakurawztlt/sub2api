@@ -22,6 +22,16 @@ func isModelNotFoundError(statusCode int, body []byte) bool {
 	return isUpstreamModelNotFoundError(statusCode, body) || statusCode == http.StatusNotFound
 }
 
+const openAICodexPlanGatedModelPhrase = "model is not supported when using codex"
+
+func isOpenAICodexPlanGatedModelError(statusCode int, body []byte) bool {
+	if statusCode != http.StatusBadRequest {
+		return false
+	}
+	normalized := normalizeModelNotFoundBody(body)
+	return normalized != "" && strings.Contains(normalized, openAICodexPlanGatedModelPhrase)
+}
+
 func containsModelNotFoundKeyword(normalizedBody string) bool {
 	if normalizedBody == "" {
 		return false

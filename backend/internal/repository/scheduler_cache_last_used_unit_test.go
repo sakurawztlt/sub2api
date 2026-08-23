@@ -37,7 +37,9 @@ func TestSchedulerCacheUpdateLastUsedUsesSideKeyWithoutRewritingPayloads(t *test
 		},
 		Extra: map[string]any{"large": strings.Repeat("x", 4096)},
 	}
-	require.NoError(t, cache.SetSnapshot(ctx, bucket, []service.Account{account}))
+	token, err := cache.CaptureBucketWriteToken(ctx, bucket)
+	require.NoError(t, err)
+	require.NoError(t, cache.SetSnapshot(ctx, bucket, token, []service.Account{account}))
 
 	id := strconv.FormatInt(account.ID, 10)
 	fullBefore, err := cache.rdb.Get(ctx, schedulerAccountKey(id)).Bytes()
@@ -54,7 +56,7 @@ func TestSchedulerCacheUpdateLastUsedUsesSideKeyWithoutRewritingPayloads(t *test
 	require.NoError(t, err)
 	require.Equal(t, fullBefore, fullAfter)
 	require.Equal(t, metaBefore, metaAfter)
-	require.Equal(t, strconv.FormatInt(latest.UnixNano(), 10), cache.rdb.Get(ctx, schedulerLastUsedKey(id)).Val())
+	require.Equal(t, strconv.FormatInt(latest.UnixMilli(), 10), cache.rdb.Get(ctx, schedulerLastUsedKey(id)).Val())
 
 	cached, err := cache.GetAccount(ctx, account.ID)
 	require.NoError(t, err)
@@ -82,7 +84,7 @@ func TestSchedulerCacheLastUsedSideKeyIsMonotonicAndRequiresAccount(t *testing.T
 	require.NoError(t, cache.UpdateLastUsed(ctx, map[int64]time.Time{account.ID: older}))
 
 	id := strconv.FormatInt(account.ID, 10)
-	require.Equal(t, strconv.FormatInt(newer.UnixNano(), 10), cache.rdb.Get(ctx, schedulerLastUsedKey(id)).Val())
+	require.Equal(t, strconv.FormatInt(newer.UnixMilli(), 10), cache.rdb.Get(ctx, schedulerLastUsedKey(id)).Val())
 	cached, err := cache.GetAccount(ctx, account.ID)
 	require.NoError(t, err)
 	require.NotNil(t, cached)
@@ -111,7 +113,7 @@ func TestSchedulerCacheLastUsedSideKeyFallsBackToNewerEmbeddedValue(t *testing.T
 	require.NoError(t, cache.SetAccount(ctx, &account))
 
 	id := strconv.FormatInt(account.ID, 10)
-	require.NoError(t, cache.rdb.Set(ctx, schedulerLastUsedKey(id), embedded.Add(-time.Hour).UnixNano(), 0).Err())
+	require.NoError(t, cache.rdb.Set(ctx, schedulerLastUsedKey(id), embedded.Add(-time.Hour).UnixMilli(), 0).Err())
 	cached, err := cache.GetAccount(ctx, account.ID)
 	require.NoError(t, err)
 	require.NotNil(t, cached)
@@ -139,10 +141,12 @@ func TestSchedulerCacheLastUsedSideKeySurvivesStaleAccountAndSnapshotWrites(t *t
 	require.NoError(t, cache.UpdateLastUsed(ctx, map[int64]time.Time{account.ID: latest}))
 
 	require.NoError(t, cache.SetAccount(ctx, &account))
-	require.NoError(t, cache.SetSnapshot(ctx, bucket, []service.Account{account}))
+	token, err := cache.CaptureBucketWriteToken(ctx, bucket)
+	require.NoError(t, err)
+	require.NoError(t, cache.SetSnapshot(ctx, bucket, token, []service.Account{account}))
 
 	id := strconv.FormatInt(account.ID, 10)
-	require.Equal(t, strconv.FormatInt(latest.UnixNano(), 10), cache.rdb.Get(ctx, schedulerLastUsedKey(id)).Val())
+	require.Equal(t, strconv.FormatInt(latest.UnixMilli(), 10), cache.rdb.Get(ctx, schedulerLastUsedKey(id)).Val())
 	cached, err := cache.GetAccount(ctx, account.ID)
 	require.NoError(t, err)
 	require.NotNil(t, cached)
@@ -174,6 +178,6 @@ func TestSchedulerCacheUpdateLastUsedChunksLargeBatches(t *testing.T) {
 
 	for id, usedAt := range updates {
 		key := schedulerLastUsedKey(strconv.FormatInt(id, 10))
-		require.Equal(t, strconv.FormatInt(usedAt.UnixNano(), 10), cache.rdb.Get(ctx, key).Val())
+		require.Equal(t, strconv.FormatInt(usedAt.UnixMilli(), 10), cache.rdb.Get(ctx, key).Val())
 	}
 }

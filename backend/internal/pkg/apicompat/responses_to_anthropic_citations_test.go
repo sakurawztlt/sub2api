@@ -665,7 +665,7 @@ func TestLiteralWebSearchCitationMatches_DeduplicatesAndCapsAt64(t *testing.T) {
 		}
 		fmt.Fprintf(&text, "%s ", rawURL)
 	}
-	text.WriteString("https://example.com/source/0")
+	_, _ = text.WriteString("https://example.com/source/0")
 
 	matches := literalWebSearchCitationMatches(
 		[]rune(text.String()),

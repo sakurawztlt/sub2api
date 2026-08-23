@@ -103,6 +103,28 @@
                 t('admin.accounts.oauth.openai.accessTokenAuth', '手动输入 AT')
               }}</span>
             </label>
+            <label v-if="showCodexSessionImportOption" class="flex cursor-pointer items-center gap-2">
+              <input
+                v-model="inputMethod"
+                type="radio"
+                value="codex_session"
+                class="text-blue-600 focus:ring-blue-500"
+              />
+              <span class="text-sm text-blue-900 dark:text-blue-200">{{
+                t('admin.accounts.oauth.openai.codexSessionAuth')
+              }}</span>
+            </label>
+            <label v-if="showCodexPatOption" class="flex cursor-pointer items-center gap-2">
+              <input
+                v-model="inputMethod"
+                type="radio"
+                value="codex_pat"
+                class="text-blue-600 focus:ring-blue-500"
+              />
+              <span class="text-sm text-blue-900 dark:text-blue-200">{{
+                t('admin.accounts.oauth.openai.codexPatAuth')
+              }}</span>
+            </label>
           </div>
         </div>
 
@@ -185,6 +207,108 @@
                 loading
                   ? t(getOAuthKey('validating'))
                   : t(getOAuthKey('validateAndCreate'))
+              }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Codex auth.json / session credential batch import -->
+        <div v-if="inputMethod === 'codex_session'" class="space-y-4">
+          <div
+            class="rounded-lg border border-blue-300 bg-white/80 p-4 dark:border-blue-600 dark:bg-gray-800/80"
+          >
+            <p class="mb-3 text-sm text-blue-700 dark:text-blue-300">
+              {{ t('admin.accounts.oauth.openai.codexSessionDesc') }}
+            </p>
+            <div class="mb-4">
+              <label
+                class="mb-2 flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-300"
+              >
+                <Icon name="key" size="sm" class="text-blue-500" />
+                {{ t('admin.accounts.oauth.openai.codexSessionInputLabel') }}
+                <span
+                  v-if="parsedCodexSessionCount > 1"
+                  class="rounded-full bg-blue-500 px-2 py-0.5 text-xs text-white"
+                >
+                  {{ t('admin.accounts.oauth.keysCount', { count: parsedCodexSessionCount }) }}
+                </span>
+              </label>
+              <textarea
+                v-model="codexSessionInput"
+                rows="8"
+                class="input w-full resize-y font-mono text-sm"
+                :placeholder="t('admin.accounts.oauth.openai.codexSessionPlaceholder')"
+                spellcheck="false"
+              ></textarea>
+              <p class="mt-1 text-xs text-blue-600 dark:text-blue-400">
+                {{ t('admin.accounts.oauth.openai.codexSessionHint') }}
+              </p>
+            </div>
+            <div
+              v-if="error"
+              class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-700 dark:bg-red-900/30"
+            >
+              <p class="whitespace-pre-line text-sm text-red-600 dark:text-red-400">{{ error }}</p>
+            </div>
+            <button
+              type="button"
+              class="btn btn-primary w-full"
+              :disabled="loading || !codexSessionInput.trim()"
+              @click="handleImportCodexSession"
+            >
+              <Icon name="sparkles" size="sm" class="mr-2" />
+              {{
+                loading
+                  ? t('admin.accounts.oauth.openai.validating')
+                  : t('admin.accounts.oauth.openai.codexSessionImportAndCreate')
+              }}
+            </button>
+          </div>
+        </div>
+
+        <!-- Codex Personal Access Token -->
+        <div v-if="inputMethod === 'codex_pat'" class="space-y-4">
+          <div
+            class="rounded-lg border border-blue-300 bg-white/80 p-4 dark:border-blue-600 dark:bg-gray-800/80"
+          >
+            <p class="mb-3 text-sm text-blue-700 dark:text-blue-300">
+              {{ t('admin.accounts.oauth.openai.codexPatDesc') }}
+            </p>
+            <div class="mb-4">
+              <label
+                class="mb-2 flex items-center gap-2 text-sm font-semibold text-gray-700 dark:text-gray-300"
+              >
+                <Icon name="key" size="sm" class="text-blue-500" />
+                {{ t('admin.accounts.oauth.openai.codexPatInputLabel') }}
+              </label>
+              <textarea
+                v-model="codexPATInput"
+                rows="3"
+                class="input w-full resize-y font-mono text-sm"
+                :placeholder="t('admin.accounts.oauth.openai.codexPatPlaceholder')"
+                spellcheck="false"
+              ></textarea>
+              <p class="mt-1 text-xs text-blue-600 dark:text-blue-400">
+                {{ t('admin.accounts.oauth.openai.codexPatHint') }}
+              </p>
+            </div>
+            <div
+              v-if="error"
+              class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-700 dark:bg-red-900/30"
+            >
+              <p class="whitespace-pre-line text-sm text-red-600 dark:text-red-400">{{ error }}</p>
+            </div>
+            <button
+              type="button"
+              class="btn btn-primary w-full"
+              :disabled="loading || !codexPATInput.trim()"
+              @click="handleImportCodexPAT"
+            >
+              <Icon name="sparkles" size="sm" class="mr-2" />
+              {{
+                loading
+                  ? t('admin.accounts.oauth.openai.validating')
+                  : t('admin.accounts.oauth.openai.codexPatImportAndCreate')
               }}
             </button>
           </div>
@@ -729,6 +853,8 @@ interface Props {
   showMobileRefreshTokenOption?: boolean // Whether to show mobile refresh token option (OpenAI only)
   showSessionTokenOption?: boolean
   showAccessTokenOption?: boolean
+  showCodexSessionImportOption?: boolean
+  showCodexPatOption?: boolean
   showSsoOption?: boolean
   /** Grok email----password login. The backend never persists the password. */
   showEmailPasswordOption?: boolean
@@ -754,6 +880,8 @@ const props = withDefaults(defineProps<Props>(), {
   showMobileRefreshTokenOption: false,
   showSessionTokenOption: false,
   showAccessTokenOption: false,
+  showCodexSessionImportOption: false,
+  showCodexPatOption: false,
   showSsoOption: false,
   showEmailPasswordOption: false,
   showManualOption: true,
@@ -771,6 +899,8 @@ const emit = defineEmits<{
   'validate-mobile-refresh-token': [refreshToken: string]
   'validate-session-token': [sessionToken: string]
   'import-access-token': [accessToken: string]
+  'import-codex-session': [content: string]
+  'import-codex-pat': [accessToken: string]
   'import-sso': [content: string]
   'authorize-password': [emailPasswordInput: string]
   'update:inputMethod': [method: AuthInputMethod]
@@ -820,6 +950,8 @@ const authCodeInput = ref('')
 const sessionKeyInput = ref('')
 const refreshTokenInput = ref('')
 const sessionTokenInput = ref('')
+const codexSessionInput = ref('')
+const codexPATInput = ref('')
 const ssoCookieInput = ref('')
 const emailPasswordInput = ref(props.initialEmailPassword || '')
 const showHelpDialog = ref(false)
@@ -835,6 +967,8 @@ const methodOptionCount = computed(
       props.showMobileRefreshTokenOption,
       props.showSessionTokenOption,
       props.showAccessTokenOption,
+      props.showCodexSessionImportOption,
+      props.showCodexPatOption,
       props.showSsoOption,
       emailPasswordOptionEnabled.value
     ].filter(Boolean).length
@@ -858,6 +992,13 @@ const parsedRefreshTokenCount = computed(() => {
     .split('\n')
     .map((rt) => rt.trim())
     .filter((rt) => rt).length
+})
+
+const parsedCodexSessionCount = computed(() => {
+  return codexSessionInput.value
+    .split('\n')
+    .map((item) => item.trim())
+    .filter(Boolean).length
 })
 
 const parsedSSOCount = computed(() => {
@@ -993,6 +1134,18 @@ const handleAuthorizePassword = () => {
   if (emailPasswordInput.value.trim()) emit('authorize-password', emailPasswordInput.value)
 }
 
+const handleImportCodexSession = () => {
+  if (codexSessionInput.value.trim()) {
+    emit('import-codex-session', codexSessionInput.value.trim())
+  }
+}
+
+const handleImportCodexPAT = () => {
+  if (codexPATInput.value.trim()) {
+    emit('import-codex-pat', codexPATInput.value.trim())
+  }
+}
+
 // Expose methods and state
 defineExpose({
   authCode: authCodeInput,
@@ -1001,6 +1154,8 @@ defineExpose({
   sessionKey: sessionKeyInput,
   refreshToken: refreshTokenInput,
   sessionToken: sessionTokenInput,
+  codexSession: codexSessionInput,
+  codexPAT: codexPATInput,
   ssoCookie: ssoCookieInput,
   emailPassword: emailPasswordInput,
   inputMethod,
@@ -1011,6 +1166,8 @@ defineExpose({
     sessionKeyInput.value = ''
     refreshTokenInput.value = ''
     sessionTokenInput.value = ''
+    codexSessionInput.value = ''
+    codexPATInput.value = ''
     ssoCookieInput.value = ''
     emailPasswordInput.value = ''
     inputMethod.value = props.initialInputMethod

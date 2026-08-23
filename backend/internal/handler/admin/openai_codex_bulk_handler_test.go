@@ -3,7 +3,6 @@ package admin
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -90,7 +89,7 @@ func TestOpenAIOAuthHandler_CodexBulkImportCreatesAccounts(t *testing.T) {
 	oauthSvc := service.NewOpenAIOAuthService(nil, openaiClient)
 	defer oauthSvc.Stop()
 
-	handler := NewOpenAIOAuthHandler(oauthSvc, adminSvc)
+	handler := NewOpenAIOAuthHandler(oauthSvc, adminSvc, nil, nil)
 	router := gin.New()
 	router.POST("/admin/openai/codex/bulk-import", handler.CodexBulkImport)
 
@@ -185,7 +184,7 @@ func TestOpenAIOAuthHandler_CodexBulkImportPreservesExplicitZeroPriority(t *test
 	oauthSvc := service.NewOpenAIOAuthService(nil, openaiClient)
 	defer oauthSvc.Stop()
 
-	handler := NewOpenAIOAuthHandler(oauthSvc, adminSvc)
+	handler := NewOpenAIOAuthHandler(oauthSvc, adminSvc, nil, nil)
 	router := gin.New()
 	router.POST("/admin/openai/codex/bulk-import", handler.CodexBulkImport)
 
@@ -201,23 +200,6 @@ func TestOpenAIOAuthHandler_CodexBulkImportPreservesExplicitZeroPriority(t *test
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Len(t, adminSvc.createdAccounts, 1)
 	require.Equal(t, 0, adminSvc.createdAccounts[0].Priority)
-}
-
-func makeOpenAIIDToken(t *testing.T, email, planType string) string {
-	t.Helper()
-
-	payload := map[string]any{
-		"email": email,
-		"exp":   time.Now().Add(time.Hour).Unix(),
-		"https://api.openai.com/auth": map[string]any{
-			"chatgpt_plan_type": planType,
-		},
-	}
-
-	raw, err := json.Marshal(payload)
-	require.NoError(t, err)
-
-	return "header." + base64.RawURLEncoding.EncodeToString(raw) + ".signature"
 }
 
 func performJSONRequest(t *testing.T, router http.Handler, method, path string, payload any) *httptest.ResponseRecorder {

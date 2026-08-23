@@ -19,6 +19,10 @@ type sessionWindowMockRepo struct {
 	clearRateLimitIDs  []int64
 }
 
+func (m *sessionWindowMockRepo) ListShadowsByParent(context.Context, int64) ([]*Account, error) {
+	return nil, nil
+}
+
 var _ AccountRepository = (*sessionWindowMockRepo)(nil)
 
 type swCall struct {
@@ -138,6 +142,9 @@ func (m *sessionWindowMockRepo) ListSchedulableUngroupedByPlatform(context.Conte
 	panic("unexpected")
 }
 func (m *sessionWindowMockRepo) ListSchedulableUngroupedByPlatforms(context.Context, []string) ([]Account, error) {
+	panic("unexpected")
+}
+func (m *sessionWindowMockRepo) ListModelAvailabilityCandidates(context.Context, *int64, []string, bool) ([]Account, error) {
 	panic("unexpected")
 }
 func (m *sessionWindowMockRepo) SetRateLimited(context.Context, int64, time.Time) error {

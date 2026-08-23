@@ -21,6 +21,50 @@ func resetViperWithJWTSecret(t *testing.T) {
 	t.Setenv("JWT_SECRET", strings.Repeat("x", 32))
 }
 
+func TestLoadInvalidAuthAbuseDefaults(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, 64, cfg.APIKeyAuth.LookupConcurrency)
+	require.True(t, cfg.APIKeyAuth.InvalidAbuse.Enabled)
+	require.Equal(t, 120, cfg.APIKeyAuth.InvalidAbuse.Threshold)
+	require.Equal(t, 60, cfg.APIKeyAuth.InvalidAbuse.WindowSeconds)
+	require.Equal(t, 60, cfg.APIKeyAuth.InvalidAbuse.BlockSeconds)
+	require.Equal(t, 16384, cfg.APIKeyAuth.InvalidAbuse.Capacity)
+}
+
+func TestLoadTimezonePrecedence(t *testing.T) {
+	tests := []struct {
+		name         string
+		fileTimezone string
+		timezoneEnv  string
+		tzEnv        string
+		want         string
+	}{
+		{name: "default", want: "Asia/Shanghai"},
+		{name: "config_file", fileTimezone: "Europe/London", want: "Europe/London"},
+		{name: "timezone_env", fileTimezone: "Europe/London", timezoneEnv: "UTC", want: "UTC"},
+		{name: "tz_env", fileTimezone: "Europe/London", timezoneEnv: "UTC", tzEnv: "America/New_York", want: "America/New_York"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resetViperWithJWTSecret(t)
+			t.Setenv("TIMEZONE", tt.timezoneEnv)
+			t.Setenv("TZ", tt.tzEnv)
+			if tt.fileTimezone != "" {
+				configFile := filepath.Join(t.TempDir(), "config.yaml")
+				require.NoError(t, os.WriteFile(configFile, []byte("timezone: "+tt.fileTimezone+"\n"), 0o600))
+				t.Setenv("CONFIG_FILE", configFile)
+			}
+
+			cfg, err := Load()
+			require.NoError(t, err)
+			require.Equal(t, tt.want, cfg.Timezone)
+		})
+	}
+}
+
 func TestLoadRedisUsernameFromEnvironment(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	t.Setenv("REDIS_USERNAME", "app-user")
@@ -154,6 +198,15 @@ func TestLoadDefaultOpenAIWSConfig(t *testing.T) {
 	if !cfg.Gateway.OpenAIWS.Enabled {
 		t.Fatalf("Gateway.OpenAIWS.Enabled = false, want true")
 	}
+	if cfg.Gateway.OpenAIWS.ClientFirstMessageTimeoutSeconds != DefaultOpenAIWSClientFirstMessageTimeoutSeconds {
+		t.Fatalf("Gateway.OpenAIWS.ClientFirstMessageTimeoutSeconds = %d, want %d", cfg.Gateway.OpenAIWS.ClientFirstMessageTimeoutSeconds, DefaultOpenAIWSClientFirstMessageTimeoutSeconds)
+	}
+	if cfg.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds != 300 {
+		t.Fatalf("Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds = %d, want 300", cfg.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds)
+	}
+	if cfg.Gateway.OpenAIWS.MaxIngressConnectionsPerAPIKey != 64 {
+		t.Fatalf("Gateway.OpenAIWS.MaxIngressConnectionsPerAPIKey = %d, want 64", cfg.Gateway.OpenAIWS.MaxIngressConnectionsPerAPIKey)
+	}
 	if !cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 {
 		t.Fatalf("Gateway.OpenAIWS.ResponsesWebsocketsV2 = false, want true")
 	}
@@ -246,6 +299,13 @@ func TestLoadDefaultOpenAIWSConfig(t *testing.T) {
 	}
 }
 
+func TestLoadDefaultTextMaxBodySize(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, int64(32*1024*1024), cfg.Gateway.TextMaxBodySize)
+}
+
 func TestLoadDefaultGrokFreeQuotaSoftGate(t *testing.T) {
 	resetViperWithJWTSecret(t)
 
@@ -311,6 +371,58 @@ func TestLoadOpenAIResponseHeaderTimeoutFromEnv(t *testing.T) {
 	cfg, err := Load()
 	require.NoError(t, err)
 	require.Equal(t, 1800, cfg.Gateway.OpenAIResponseHeaderTimeout)
+}
+
+func TestLoadImageNonstreamKeepaliveFromEnv(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("GATEWAY_IMAGE_NONSTREAM_KEEPALIVE_INTERVAL", "15")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, 15, cfg.Gateway.ImageNonstreamKeepaliveInterval)
+}
+
+func TestLoadDefaultGatewayImageStreamConfig(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, 900, cfg.Gateway.ImageStreamDataIntervalTimeout)
+	require.Equal(t, 10, cfg.Gateway.ImageStreamKeepaliveInterval)
+	require.Zero(t, cfg.Gateway.ImageNonstreamKeepaliveInterval)
+	require.False(t, cfg.Gateway.ImageConcurrency.Enabled)
+	require.Zero(t, cfg.Gateway.ImageConcurrency.MaxConcurrentRequests)
+	require.Equal(t, ImageConcurrencyOverflowModeReject, cfg.Gateway.ImageConcurrency.OverflowMode)
+	require.Equal(t, 30, cfg.Gateway.ImageConcurrency.WaitTimeoutSeconds)
+	require.Equal(t, 100, cfg.Gateway.ImageConcurrency.MaxWaitingRequests)
+	require.Greater(t, cfg.Gateway.ImageStreamDataIntervalTimeout, cfg.Gateway.StreamDataIntervalTimeout)
+}
+
+func TestLoadDefaultOpenAIFirstOutputTimeoutsDisabled(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Zero(t, cfg.Gateway.OpenAIFirstOutputTimeoutSeconds)
+	require.Zero(t, cfg.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds)
+}
+
+func TestLoadOpenAIFirstOutputTimeoutsFromEnv(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("GATEWAY_OPENAI_FIRST_OUTPUT_TIMEOUT_SECONDS", "90")
+	t.Setenv("GATEWAY_OPENAI_HIGH_EFFORT_FIRST_OUTPUT_TIMEOUT_SECONDS", "240")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, 90, cfg.Gateway.OpenAIFirstOutputTimeoutSeconds)
+	require.Equal(t, 240, cfg.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds)
+}
+
+func TestValidateOpenAIFirstOutputTimeoutMinimum(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	cfg.Gateway.OpenAIFirstOutputTimeoutSeconds = 30
+	require.NoError(t, cfg.Validate())
 }
 
 func TestLoadDefaultOpenAICompactNonstreamKeepaliveDisabled(t *testing.T) {
@@ -527,6 +639,23 @@ func TestLoadDefaultJWTAccessTokenExpireMinutes(t *testing.T) {
 	if cfg.JWT.AccessTokenExpireMinutes != 0 {
 		t.Fatalf("JWT.AccessTokenExpireMinutes = %d, want 0", cfg.JWT.AccessTokenExpireMinutes)
 	}
+}
+
+func TestLoadDefaultOpenAICompactModel(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "gpt-5.4", cfg.Gateway.OpenAICompactModel)
+}
+
+func TestLoadOpenAICompactModelFromEnv(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("GATEWAY_OPENAI_COMPACT_MODEL", "gpt-5.3-codex")
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "gpt-5.3-codex", cfg.Gateway.OpenAICompactModel)
 }
 
 func TestLoadJWTAccessTokenExpireMinutesFromEnv(t *testing.T) {
@@ -1274,6 +1403,26 @@ func TestValidateConfigErrors(t *testing.T) {
 		wantErr string
 	}{
 		{
+			name:    "invalid auth abuse threshold too small",
+			mutate:  func(c *Config) { c.APIKeyAuth.InvalidAbuse.Threshold = 9 },
+			wantErr: "api_key_auth_cache.invalid_abuse.threshold",
+		},
+		{
+			name:    "invalid auth abuse window too small",
+			mutate:  func(c *Config) { c.APIKeyAuth.InvalidAbuse.WindowSeconds = 0 },
+			wantErr: "api_key_auth_cache.invalid_abuse.window_seconds",
+		},
+		{
+			name:    "invalid auth abuse block too large",
+			mutate:  func(c *Config) { c.APIKeyAuth.InvalidAbuse.BlockSeconds = 3601 },
+			wantErr: "api_key_auth_cache.invalid_abuse.block_seconds",
+		},
+		{
+			name:    "invalid auth abuse capacity too small",
+			mutate:  func(c *Config) { c.APIKeyAuth.InvalidAbuse.Capacity = 255 },
+			wantErr: "api_key_auth_cache.invalid_abuse.capacity",
+		},
+		{
 			name:    "jwt secret required",
 			mutate:  func(c *Config) { c.JWT.Secret = "" },
 			wantErr: "jwt.secret is required",
@@ -1475,6 +1624,11 @@ func TestValidateConfigErrors(t *testing.T) {
 			wantErr: "gateway.max_body_size",
 		},
 		{
+			name:    "gateway text max body size",
+			mutate:  func(c *Config) { c.Gateway.TextMaxBodySize = c.Gateway.MaxBodySize + 1 },
+			wantErr: "gateway.text_max_body_size",
+		},
+		{
 			name:    "gateway response header timeout",
 			mutate:  func(c *Config) { c.Gateway.ResponseHeaderTimeout = -1 },
 			wantErr: "gateway.response_header_timeout",
@@ -1483,6 +1637,16 @@ func TestValidateConfigErrors(t *testing.T) {
 			name:    "gateway openai response header timeout",
 			mutate:  func(c *Config) { c.Gateway.OpenAIResponseHeaderTimeout = -1 },
 			wantErr: "gateway.openai_response_header_timeout",
+		},
+		{
+			name:    "gateway openai first output timeout below minimum",
+			mutate:  func(c *Config) { c.Gateway.OpenAIFirstOutputTimeoutSeconds = 29 },
+			wantErr: "gateway.openai_first_output_timeout_seconds",
+		},
+		{
+			name:    "gateway openai high effort first output timeout too large",
+			mutate:  func(c *Config) { c.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds = 1801 },
+			wantErr: "gateway.openai_high_effort_first_output_timeout_seconds",
 		},
 		{
 			name:    "gateway max idle conns",
@@ -1528,6 +1692,36 @@ func TestValidateConfigErrors(t *testing.T) {
 			name:    "gateway stream keepalive range",
 			mutate:  func(c *Config) { c.Gateway.StreamKeepaliveInterval = 4 },
 			wantErr: "gateway.stream_keepalive_interval",
+		},
+		{
+			name:    "gateway image stream keepalive range",
+			mutate:  func(c *Config) { c.Gateway.ImageStreamKeepaliveInterval = 4 },
+			wantErr: "gateway.image_stream_keepalive_interval",
+		},
+		{
+			name:    "gateway image stream keepalive negative",
+			mutate:  func(c *Config) { c.Gateway.ImageStreamKeepaliveInterval = -1 },
+			wantErr: "gateway.image_stream_keepalive_interval must be non-negative",
+		},
+		{
+			name:    "gateway image nonstream keepalive range",
+			mutate:  func(c *Config) { c.Gateway.ImageNonstreamKeepaliveInterval = 4 },
+			wantErr: "gateway.image_nonstream_keepalive_interval",
+		},
+		{
+			name:    "gateway image nonstream keepalive negative",
+			mutate:  func(c *Config) { c.Gateway.ImageNonstreamKeepaliveInterval = -1 },
+			wantErr: "gateway.image_nonstream_keepalive_interval must be non-negative",
+		},
+		{
+			name:    "gateway image stream data interval range",
+			mutate:  func(c *Config) { c.Gateway.ImageStreamDataIntervalTimeout = 30 },
+			wantErr: "gateway.image_stream_data_interval_timeout",
+		},
+		{
+			name:    "gateway image stream data interval negative",
+			mutate:  func(c *Config) { c.Gateway.ImageStreamDataIntervalTimeout = -1 },
+			wantErr: "gateway.image_stream_data_interval_timeout must be non-negative",
 		},
 		{
 			name:    "gateway openai ws oauth max conns factor",
@@ -1778,6 +1972,21 @@ func TestValidateConfig_OpenAIWSRules(t *testing.T) {
 		mutate  func(*Config)
 		wantErr string
 	}{
+		{
+			name:    "client first message timeout 必须为正数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.ClientFirstMessageTimeoutSeconds = 0 },
+			wantErr: "gateway.openai_ws.client_first_message_timeout_seconds",
+		},
+		{
+			name:    "ingress inter turn idle timeout 不能为负数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds = -1 },
+			wantErr: "gateway.openai_ws.ingress_inter_turn_idle_timeout_seconds",
+		},
+		{
+			name:    "max ingress connections per api key 不能为负数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIWS.MaxIngressConnectionsPerAPIKey = -1 },
+			wantErr: "gateway.openai_ws.max_ingress_connections_per_api_key",
+		},
 		{
 			name:    "max_conns_per_account 必须为正数",
 			mutate:  func(c *Config) { c.Gateway.OpenAIWS.MaxConnsPerAccount = 0 },

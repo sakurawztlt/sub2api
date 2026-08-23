@@ -193,7 +193,8 @@ func TestRound40_AppendOpsUpstreamError_CarriesTruncationMarker(t *testing.T) {
 
 	v, ok := c.Get(OpsUpstreamErrorsKey)
 	require.True(t, ok)
-	events := v.([]*OpsUpstreamErrorEvent)
+	events, ok := v.([]*OpsUpstreamErrorEvent)
+	require.True(t, ok)
 	require.Len(t, events, 1)
 
 	ub := events[0].UpstreamRequestBody
@@ -225,8 +226,10 @@ func TestRound40_AppendOpsUpstreamError_SmallBodyNotWrapped(t *testing.T) {
 		Kind:               "http_error",
 	})
 
-	v, _ := c.Get(OpsUpstreamErrorsKey)
-	events := v.([]*OpsUpstreamErrorEvent)
+	v, exists := c.Get(OpsUpstreamErrorsKey)
+	require.True(t, exists)
+	events, ok := v.([]*OpsUpstreamErrorEvent)
+	require.True(t, ok)
 	require.Equal(t, string(body), events[0].UpstreamRequestBody,
 		"small body must reach ops_error_logs verbatim — no envelope wrapping")
 }

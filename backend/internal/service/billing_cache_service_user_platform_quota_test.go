@@ -109,13 +109,6 @@ type fakeFullCache struct {
 }
 
 // getDeleteCalls 线程安全地读取 deleteCalls。
-func (f *fakeFullCache) getDeleteCalls() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.deleteCalls
-}
-
-// getEntry 线程安全地读取 entry。
 func (f *fakeFullCache) getEntry() *UserPlatformQuotaCacheEntry {
 	f.mu.Lock()
 	defer f.mu.Unlock()

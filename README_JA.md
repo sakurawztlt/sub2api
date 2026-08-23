@@ -4,7 +4,7 @@
 
 # Sub2API
 
-[![Go](https://img.shields.io/badge/Go-1.25.7-00ADD8.svg)](https://golang.org/)
+[![Go](https://img.shields.io/badge/Go-1.26.6-00ADD8.svg)](https://golang.org/)
 [![Vue](https://img.shields.io/badge/Vue-3.4+-4FC08D.svg)](https://vuejs.org/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-336791.svg)](https://www.postgresql.org/)
 [![Redis](https://img.shields.io/badge/Redis-7+-DC382D.svg)](https://redis.io/)
@@ -110,7 +110,7 @@ Sub2API を拡張・統合するコミュニティプロジェクト:
 
 | コンポーネント | 技術 |
 |-----------|------------|
-| バックエンド | Go 1.25.7, Gin, Ent |
+| バックエンド | Go 1.26.6, Gin, Ent |
 | フロントエンド | Vue 3.4+, Vite 5+, TailwindCSS |
 | データベース | PostgreSQL 15+ |
 | キャッシュ/キュー | Redis 7+ |
@@ -245,6 +245,7 @@ cd sub2api/deploy
 
 # 2. 環境設定ファイルをコピー
 cp .env.example .env
+chmod 600 .env
 
 # 3. 設定を編集（セキュアなパスワードを生成）
 nano .env
@@ -364,7 +365,23 @@ rm -rf data/ postgres_data/ redis_data/
 
 ---
 
-### 方法3: ソースからビルド
+### 方法3: Apple container（macOS）
+
+Apple シリコン搭載 Mac と macOS 26 では、Apple `container` 1.1.0 以降を使用して Sub2API、PostgreSQL、Redis の完全なスタックを実行できます:
+
+```bash
+git clone https://github.com/Wei-Shaw/sub2api.git
+cd sub2api/deploy
+./apple-container.sh init
+./apple-container.sh up
+./apple-container.sh status
+```
+
+これはオペレーター管理のローカル運用フローです。本番環境では引き続き Docker Compose を推奨します。ライフサイクルコマンド、永続化、アップグレード、実行時の制約については [deploy/APPLE_CONTAINER.md](deploy/APPLE_CONTAINER.md) を参照してください。
+
+---
+
+### 方法4: ソースからビルド
 
 開発やカスタマイズのためにソースコードからビルドして実行します。
 
@@ -436,11 +453,7 @@ default:
   rate_multiplier: 1.0
 ```
 
-### Sora ステータス（一時的に利用不可）
-
-> ⚠️ Sora 関連の機能は、上流統合およびメディア配信の技術的問題により一時的に利用できません。
-> 現時点では本番環境で Sora に依存しないでください。
-> 既存の `gateway.sora_*` 設定キーは予約されていますが、これらの問題が解決されるまで有効にならない場合があります。
+**初回管理者の作成:** `config.yaml` が存在すると Web セットアップウィザードはスキップされ、`default.admin_email` / `default.admin_password` から管理者が作成されることもありません。新規のソースインストールでは「設定の作成/編集」を省略して `./sub2api` を起動し、`http://<host>:8080` で設定と管理者を作成するか、`./sub2api -setup` / `AUTO_SETUP` で初期化してください。設定を手動で事前作成するのは、対象データベースに管理者が既に存在する場合に限ります。
 
 `config.yaml` では追加のセキュリティ関連オプションも利用できます:
 
@@ -452,25 +465,28 @@ default:
 - `security.response_headers.enabled` - 設定可能なレスポンスヘッダーフィルタリングを有効化（無効時はデフォルトの許可リストを使用）
 - `security.csp` - Content-Security-Policy ヘッダーの制御
 - `billing.circuit_breaker` - 課金エラー時にフェイルクローズ
-- `server.trusted_proxies` - X-Forwarded-For パースの有効化
+- `server.trusted_proxies` - Gin が信頼する直結リバースプロキシの IP/CIDR を指定（空ならプロキシを信頼しない）
+- `security.trust_forwarded_ip_for_api_key_acl` - API キーの IP 許可/拒否リストを Gin の信頼済みプロキシチェーンではなく、従来の生転送ヘッダー抽出へ切り替える（デフォルト `false`）
 - `turnstile.required` - リリースモードでの Turnstile 必須化
+
+API キー ACL はデフォルトで Gin の信頼済みプロキシチェーンを使用します。従来の上書きは無効のままにし、Sub2API に直接接続するリバースプロキシだけを `server.trusted_proxies` に設定してください。互換性のため生の `CF-Connecting-IP`、`X-Real-IP`、`X-Forwarded-For` 抽出を有効にする場合は、オリジンをプロキシ/CDN からの接続に制限し、エッジでこれらのヘッダーを必ず上書きしてください。
 
 **⚠️ セキュリティ警告: HTTP URL 設定**
 
-`security.url_allowlist.enabled=false` の場合、システムはデフォルトで最小限の URL バリデーションを行い、**HTTP URL を拒否**して HTTPS のみを許可します。HTTP URL を許可するには（開発環境や内部テスト用など）、以下を明示的に設定する必要があります:
+`security.url_allowlist.enabled=false` の場合、現在のデフォルトは最小限の URL バリデーションのみを行い、**HTTP URL を許可**します。ローカルまたは信頼できる内部ネットワークでは便利ですが、本番環境では HTTPS のみに明示的に制限してください:
 
 ```yaml
 security:
   url_allowlist:
     enabled: false                # 許可リストチェックを無効化
-    allow_insecure_http: true     # HTTP URL を許可（⚠️ セキュリティリスクあり）
+    allow_insecure_http: false    # HTTPS のみ（本番環境推奨）
 ```
 
 **または環境変数で設定:**
 
 ```bash
 SECURITY_URL_ALLOWLIST_ENABLED=false
-SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP=true
+SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP=false
 ```
 
 **HTTP を許可するリスク:**
@@ -484,7 +500,7 @@ SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP=true
 - ✅ HTTPS 取得前のアカウント接続テスト
 - ❌ 本番環境（HTTPS のみを使用）
 
-**この設定なしで表示されるエラー例:**
+**`allow_insecure_http: false` のとき HTTP URL に対して返るエラー例:**
 ```
 Invalid base URL: invalid url scheme: http
 ```
@@ -495,10 +511,37 @@ URL バリデーションまたはレスポンスヘッダーフィルタリン�
 - TLS のみのアウトバウンドトラフィックを強制
 - プロキシで機密性の高い上流レスポンスヘッダーを除去
 
+#### OpenAI Responses WebSocket モードと HTTP bridge
+
+Codex 形式の Responses WebSocket 入口では、アカウントごとに `off`、`ctx_pool`、`passthrough`、`http_bridge` を選択できます。アカウント画面でこれらを選ぶ前に v2 モードルーターを有効にしてください:
+
+```yaml
+gateway:
+  openai_ws:
+    mode_router_v2_enabled: true
+    ingress_mode_default: ctx_pool
+    http_bridge_enabled: true
+    http_bridge_threshold_bytes: 15728640 # 15 MiB
+```
+
+`off` は HTTP/SSE にフォールバックし、`ctx_pool` は管理された上流 WebSocket プールを使用し、`passthrough` は上流 WebSocket アダプター経由でクライアントセッションを転送します。`http_bridge` はクライアント側 WebSocket を維持しながら、上流 turn を HTTP/SSE で実行します。bridge が有効なら、しきい値を超える大きなフレームは自動的に切り替えられます。Grok の WebSocket 入口は xAI の HTTP/SSE Responses 上流へ接続するため HTTP bridge を使用します。緊急時の全体ロールバックには `gateway.openai_ws.force_http=true` を設定します。
+
 ```bash
-# 6. アプリケーションを実行
+# 7. アプリケーションを実行
 ./sub2api
 ```
+
+#### HTTP/2（h2c）と HTTP/1.1 フォールバック
+
+メインの平文リスナーは `server.h2c.enabled=true` のとき h2c を有効にします（`deploy/config.example.yaml` では有効）。WebSocket アップグレードと旧クライアント向けに HTTP/1.1 も引き続き利用できます:
+
+```yaml
+server:
+  h2c:
+    enabled: true
+```
+
+Caddy との間では `versions h2c h1` で両方を指定します。`curl --http2-prior-knowledge -I http://localhost:8080/health` と `curl --http1.1 -I http://localhost:8080/health` でバックエンドを確認できます。
 
 #### 開発モード
 
@@ -531,6 +574,64 @@ go generate ./cmd/server
 - 有効化: 環境変数 `RUN_MODE=simple` を設定
 - 違い: SaaS 関連機能を非表示にし、課金プロセスをスキップ
 - セキュリティに関する注意: 本番環境では `SIMPLE_MODE_CONFIRM=true` も設定する必要があります
+
+---
+
+## Grok / xAI サポート
+
+Sub2API は、xAI OAuth を使用する Grok サブスクリプションアカウントと標準の xAI API キーアカウントの両方をサポートし、アカウント種別に応じた xAI 上流へ転送します。
+
+### 対応範囲
+
+- プラットフォーム名: `grok`。アカウント種別: OAuth サブスクリプション、xAI API キー
+- Responses: `/v1/responses`、`/responses`、`/backend-api/codex/responses`
+- Claude 互換: `/v1/messages`（xAI Responses に変換し、Anthropic Messages 形式で返却）
+- Chat Completions: `/v1/chat/completions`、`/chat/completions`
+- Codex 形式の Responses WebSocket 入口は HTTP bridge で xAI の HTTP/SSE 上流へ接続
+- テキストモデル: `grok-4.5`、`grok-4.3`、`grok-build-0.1`、`grok-composer-2.5-fast`、Grok 4.20 reasoning/non-reasoning/multi-agent 系列
+- Grok グループでは画像の生成/編集と動画の生成/編集/拡張/状態照会をサポート。生成、編集、拡張にはグループの画像生成権限が必要
+- メディアモデル: `grok-imagine`、`grok-imagine-image-quality`、`grok-imagine-image`、`grok-imagine-image-2.0`、`grok-imagine-edit`、`grok-imagine-video`、`grok-imagine-video-1.5`
+- JSON の画像編集・動画生成では `image`、`images`、`reference_images`、`mask` に画像参照を指定可能。xAI 互換の `url` を推奨し、従来の `image_url` は転送前に正規化
+
+### OAuth と API キー設定
+
+OAuth は PKCE を使用し、非公開クライアントシークレットをコミットする必要はありません。主な環境変数:
+
+| 変数 | デフォルト |
+|------|----------|
+| `XAI_OAUTH_SCOPE` | `openid profile email offline_access grok-cli:access api:access` |
+| `XAI_OAUTH_REDIRECT_URI` | `http://127.0.0.1:56121/callback` |
+| `XAI_BASE_URL` | `https://api.x.ai/v1`（実際の転送先はアカウントの `base_url`） |
+| `XAI_GROK_CLI_VERSION` | `0.2.114`。この下限未満の上書き値は無視 |
+
+管理画面では Grok OAuth アカウントの作成・再認証と Grok API キーアカウントの作成ができます。OAuth は既定で `https://cli-chat-proxy.grok.com/v1` を推定し、API キーアカウントは公式の `https://api.x.ai/v1` と既存の `base_url` / `api_key` フィールドを使用します。
+
+### Grok Build CLI 設定
+
+Grok アカウントを Grok グループへ追加し、そのグループ用の Sub2API API キーを作成した後、ユーザー API キー画面の **Use Key → Grok CLI** から設定を生成できます。手動設定は `~/.grok/config.toml`（Windows: `%USERPROFILE%\.grok\config.toml`）に保存します:
+
+```toml
+[models]
+default = "grok"
+web_search = "grok"
+
+[model."grok"]
+model = "grok-4.5"
+base_url = "https://your-sub2api.example.com/v1"
+name = "Grok 4.5"
+api_key = "sk-your-sub2api-key"
+api_backend = "responses"
+context_window = 1000000
+supports_backend_search = true
+```
+
+設定ファイルには API キーが含まれるため権限を制限し、`grok inspect` で確認してください。`base_url` は `/v1` で終わる公開 Sub2API URL であり、xAI の内部上流 URL ではありません。
+
+### 使用量、クォータ、メディア適格性
+
+xAI クォータは受動的に観測します。上流が信頼済み rate-limit ヘッダーを実際に返した場合のみ記録し、最初の有効な観測まではクォータを不明と表示しつつ Sub2API のローカル使用量を表示します。`401`、`403`、`429` はそれぞれ無効な資格情報、アクセス/権限エラー、一時的なレート制限として処理されます。
+
+新しい画像・動画生成にはメディア専用の適格性チェックも適用されます。API キーアカウントはデフォルトで適格ですが、OAuth アカウントには xAI 課金プローブによる有料権限の肯定的な証拠が必要です。Free、禁止、欠落、不正形式、不確定な観測は新規メディア生成から除外され、適格なアカウントがなければ HTTP `503` と `grok_media_no_eligible_account` を返します。管理者はアカウントフィールド `extra.grok_media_eligible` で自動判定を上書きできます。
 
 ---
 
@@ -606,11 +707,11 @@ sub2api/
 
 ## スター履歴
 
-<a href="https://star-history.com/#Wei-Shaw/sub2api&Date">
+<a href="https://star-history.dera.page/#Wei-Shaw/sub2api&Date">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Wei-Shaw/sub2api&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Wei-Shaw/sub2api&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Wei-Shaw/sub2api&type=Date" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=Wei-Shaw/sub2api&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=Wei-Shaw/sub2api&type=Date" />
+   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=Wei-Shaw/sub2api&type=Date" />
  </picture>
 </a>
 

@@ -3,12 +3,13 @@ package service
 import (
 	"context"
 	"strings"
+
+	"github.com/Wei-Shaw/sub2api/internal/config"
 )
 
 // DiagnoseModelAvailabilityForPlatform reports whether the requested model
-// is configured to be served by any OpenAI account in the group. The
-// platform argument is accepted to satisfy ModelAvailabilityDiagnoser but
-// is ignored — OpenAIGatewayService only scans OpenAI accounts.
+// is configured to be served by any account on the normalized OpenAI-compatible
+// platform in the group. Transient cooldown and auto-pause state is ignored.
 //
 // Safe to call on the error path: returns {true,true} on any internal
 // failure or when the inputs preclude meaningful diagnosis (empty model,
@@ -26,8 +27,23 @@ func (s *OpenAIGatewayService) DiagnoseModelAvailabilityForPlatform(
 	if requestedModel == "" {
 		return ModelAvailabilityDiagnosis{HasAccountsInPool: true, HasModelSupport: true}
 	}
+	if s.accountRepo == nil {
+		return ModelAvailabilityDiagnosis{HasAccountsInPool: true, HasModelSupport: true}
+	}
 
-	accounts, err := s.listSchedulableAccounts(ctx, groupID, platform)
+	platform = NormalizeOpenAICompatiblePlatform(platform)
+	queryGroupID := groupID
+	includeGrouped := false
+	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
+		queryGroupID = nil
+		includeGrouped = true
+	}
+	accounts, err := s.accountRepo.ListModelAvailabilityCandidates(
+		ctx,
+		queryGroupID,
+		[]string{platform},
+		includeGrouped,
+	)
 	if err != nil {
 		// Conservative fallback so the caller keeps returning 503; we do not
 		// want a transient lookup failure to flip into 404 model_not_found.

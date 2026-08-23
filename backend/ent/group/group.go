@@ -84,6 +84,10 @@ const (
 	FieldAudioTtsPricePerMillionChars = "audio_tts_price_per_million_chars"
 	// FieldAudioSttPricePerHour holds the string denoting the audio_stt_price_per_hour field in the database.
 	FieldAudioSttPricePerHour = "audio_stt_price_per_hour"
+	// FieldLongContextPricingEnabled holds the string denoting the long_context_pricing_enabled field in the database.
+	FieldLongContextPricingEnabled = "long_context_pricing_enabled"
+	// FieldModelPricing holds the string denoting the model_pricing field in the database.
+	FieldModelPricing = "model_pricing"
 	// FieldClaudeCodeOnly holds the string denoting the claude_code_only field in the database.
 	FieldClaudeCodeOnly = "claude_code_only"
 	// FieldFallbackGroupID holds the string denoting the fallback_group_id field in the database.
@@ -118,6 +122,12 @@ const (
 	FieldMaxReasoningEffort = "max_reasoning_effort"
 	// FieldReasoningEffortMappings holds the string denoting the reasoning_effort_mappings field in the database.
 	FieldReasoningEffortMappings = "reasoning_effort_mappings"
+	// FieldProfitControlEnabled holds the string denoting the profit_control_enabled field in the database.
+	FieldProfitControlEnabled = "profit_control_enabled"
+	// FieldProfitMinMargin holds the string denoting the profit_min_margin field in the database.
+	FieldProfitMinMargin = "profit_min_margin"
+	// FieldProfitSafetyBuffer holds the string denoting the profit_safety_buffer field in the database.
+	FieldProfitSafetyBuffer = "profit_safety_buffer"
 	// EdgeAPIKeys holds the string denoting the api_keys edge name in mutations.
 	EdgeAPIKeys = "api_keys"
 	// EdgeRedeemCodes holds the string denoting the redeem_codes edge name in mutations.
@@ -227,6 +237,8 @@ var Columns = []string{
 	FieldAudioRealtimePricePerMin,
 	FieldAudioTtsPricePerMillionChars,
 	FieldAudioSttPricePerHour,
+	FieldLongContextPricingEnabled,
+	FieldModelPricing,
 	FieldClaudeCodeOnly,
 	FieldFallbackGroupID,
 	FieldFallbackGroupIDOnInvalidRequest,
@@ -244,6 +256,9 @@ var Columns = []string{
 	FieldRpmLimit,
 	FieldMaxReasoningEffort,
 	FieldReasoningEffortMappings,
+	FieldProfitControlEnabled,
+	FieldProfitMinMargin,
+	FieldProfitSafetyBuffer,
 }
 
 var (
@@ -329,6 +344,8 @@ var (
 	AudioTtsPricePerMillionCharsValidator func(float64) error
 	// AudioSttPricePerHourValidator is a validator for the "audio_stt_price_per_hour" field. It is called by the builders before save.
 	AudioSttPricePerHourValidator func(float64) error
+	// DefaultLongContextPricingEnabled holds the default value on creation for the "long_context_pricing_enabled" field.
+	DefaultLongContextPricingEnabled bool
 	// DefaultClaudeCodeOnly holds the default value on creation for the "claude_code_only" field.
 	DefaultClaudeCodeOnly bool
 	// DefaultModelRoutingEnabled holds the default value on creation for the "model_routing_enabled" field.
@@ -361,6 +378,12 @@ var (
 	MaxReasoningEffortValidator func(string) error
 	// DefaultReasoningEffortMappings holds the default value on creation for the "reasoning_effort_mappings" field.
 	DefaultReasoningEffortMappings []domain.ReasoningEffortMapping
+	// DefaultProfitControlEnabled holds the default value on creation for the "profit_control_enabled" field.
+	DefaultProfitControlEnabled bool
+	// DefaultProfitMinMargin holds the default value on creation for the "profit_min_margin" field.
+	DefaultProfitMinMargin float64
+	// DefaultProfitSafetyBuffer holds the default value on creation for the "profit_safety_buffer" field.
+	DefaultProfitSafetyBuffer float64
 )
 
 // OrderOption defines the ordering options for the Group queries.
@@ -536,6 +559,11 @@ func ByAudioSttPricePerHour(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldAudioSttPricePerHour, opts...).ToFunc()
 }
 
+// ByLongContextPricingEnabled orders the results by the long_context_pricing_enabled field.
+func ByLongContextPricingEnabled(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldLongContextPricingEnabled, opts...).ToFunc()
+}
+
 // ByClaudeCodeOnly orders the results by the claude_code_only field.
 func ByClaudeCodeOnly(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldClaudeCodeOnly, opts...).ToFunc()
@@ -594,6 +622,21 @@ func ByRpmLimit(opts ...sql.OrderTermOption) OrderOption {
 // ByMaxReasoningEffort orders the results by the max_reasoning_effort field.
 func ByMaxReasoningEffort(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldMaxReasoningEffort, opts...).ToFunc()
+}
+
+// ByProfitControlEnabled orders the results by the profit_control_enabled field.
+func ByProfitControlEnabled(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldProfitControlEnabled, opts...).ToFunc()
+}
+
+// ByProfitMinMargin orders the results by the profit_min_margin field.
+func ByProfitMinMargin(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldProfitMinMargin, opts...).ToFunc()
+}
+
+// ByProfitSafetyBuffer orders the results by the profit_safety_buffer field.
+func ByProfitSafetyBuffer(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldProfitSafetyBuffer, opts...).ToFunc()
 }
 
 // ByAPIKeysCount orders the results by api_keys count.

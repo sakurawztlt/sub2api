@@ -24,6 +24,12 @@ server:
   # 用于生成邮件中的外部链接（例如：重置密码链接）的前端基础地址
   # Example: "https://example.com"
   frontend_url: ""
+  # Maximum time to receive complete request headers. Does not limit response streams.
+  # 完整读取请求头的最大时间；不限制响应流持续时间。
+  read_header_timeout: 30
+  # Keep-alive idle timeout in seconds.
+  # Keep-Alive 空闲连接超时（秒）。
+  idle_timeout: 120
   # Trusted proxies for X-Forwarded-For parsing (CIDR/IP). Empty disables trusted proxies.
   # 信任的代理地址（CIDR/IP 格式），用于解析 X-Forwarded-For 头。留空则禁用代理信任。
   trusted_proxies: []
@@ -136,6 +142,15 @@ security:
     # Allow skipping TLS verification for proxy probe (debug only)
     # 允许代理探测时跳过 TLS 证书验证（仅用于调试）
     insecure_skip_verify: false
+    # Optional ordered probe targets. Leave empty to use the built-in ip-api/ipify fallback.
+    # parser supports: ip-api, ipify, chatgpt-trace
+    # 可选的有序探测目标。留空时使用内置 ip-api/ipify 回退。
+    urls: []
+    # urls:
+    #   - url: "https://chatgpt.com/cdn-cgi/trace"
+    #     parser: "chatgpt-trace"
+    #   - url: "https://api64.ipify.org?format=json"
+    #     parser: "ipify"
   # Trust forwarded headers (CF-Connecting-IP / X-Real-IP / X-Forwarded-For)
   # when applying API key IP whitelist/blacklist. Keep disabled unless the
   # service is behind a trusted reverse proxy that strips spoofed headers.
@@ -159,9 +174,23 @@ gateway:
   # OpenAI/Codex upstream response header timeout (seconds, 0=disabled)
   # OpenAI/Codex 等待上游响应头超时时间（秒，0=禁用本地响应头超时）
   openai_response_header_timeout: 0
+  # Grok text Responses first-byte timeout (seconds, 0=disabled; default 120)
+  # Grok 文本 Responses 首字节超时时间（秒，0=禁用；默认 120）
+  grok_response_header_timeout: 120
+  # Native OpenAI HTTP Responses first semantic output timeout (seconds, 0=disabled).
+  # OpenAI 原生 HTTP Responses 首个语义输出超时（秒，0=禁用）。
+  # A timed-out attempt may already have incurred upstream usage; failover can duplicate billing.
+  # 超时尝试可能已产生上游用量；切换账号重试可能导致重复计费。
+  openai_first_output_timeout_seconds: 0
+  # Optional high/xhigh/max override (seconds, 0=use the standard timeout).
+  # high/xhigh/max 推理的可选覆盖（秒，0=使用标准超时）。
+  openai_high_effort_first_output_timeout_seconds: 0
   # Max request body size in bytes (default: 256MB)
   # 请求体最大字节数（默认 256MB）
   max_body_size: 268435456
+  # Pure-text endpoint body limit (embeddings and alpha/search), default 32 MiB.
+  # 纯文本端点请求体上限（embeddings、alpha/search），默认 32 MiB。
+  text_max_body_size: 33554432
   # Max bytes to read for non-stream upstream responses (default: 8MB)
   # 非流式上游响应体读取上限（默认 8MB）
   upstream_response_read_max_bytes: 8388608
@@ -171,33 +200,6 @@ gateway:
   # Enable Gemini upstream response header debug logs (default: false)
   # 是否开启 Gemini 上游响应头调试日志（默认 false）
   gemini_debug_response_headers: false
-  # Sora max request body size in bytes (0=use max_body_size)
-  # Sora 请求体最大字节数（0=使用 max_body_size）
-  sora_max_body_size: 268435456
-  # Sora stream timeout (seconds, 0=disable)
-  # Sora 流式请求总超时（秒，0=禁用）
-  sora_stream_timeout_seconds: 900
-  # Sora non-stream timeout (seconds, 0=disable)
-  # Sora 非流式请求超时（秒，0=禁用）
-  sora_request_timeout_seconds: 180
-  # Sora stream enforcement mode: force/error
-  # Sora stream 强制策略：force/error
-  sora_stream_mode: "force"
-  # Sora model filters
-  # Sora 模型过滤配置
-  sora_model_filters:
-    # Hide prompt-enhance models by default
-    # 默认隐藏 prompt-enhance 模型
-    hide_prompt_enhance: true
-  # Require API key for /sora/media proxy (default: false)
-  # /sora/media 是否强制要求 API Key（默认 true）
-  sora_media_require_api_key: true
-  # Sora media temporary signing key (empty disables signed URL)
-  # Sora 媒体临时签名密钥（为空则禁用签名）
-  sora_media_signing_key: ""
-  # Signed URL TTL seconds (<=0 disables)
-  # 临时签名 URL 有效期（秒，<=0 表示禁用）
-  sora_media_signed_url_ttl_seconds: 900
   # Connection pool isolation strategy:
   # 连接池隔离策略：
   # - proxy: Isolate by proxy, same proxy shares connection pool (suitable for few proxies, many accounts)
@@ -212,6 +214,12 @@ gateway:
   #
   # 注意：开启后会影响所有客户端的行为（不仅限于 VS Code / Codex CLI），请谨慎开启。
   force_codex_cli: false
+  # Stop rewriting load-shed Codex originators to the official CLI identity.
+  # 关闭把降载 Codex originator 归一化为官方 CLI 身份；默认 false 保持归一化开启。
+  disable_codex_originator_normalization: false
+  # Whether to inject the Codex image-generation bridge for text-only /responses requests.
+  # 是否为纯文本 Codex /responses 请求自动注入生图桥；默认 false。
+  codex_image_generation_bridge_enabled: false
   # Optional: template file used to build the final top-level Codex `instructions`.
   # 可选：用于构建最终 Codex 顶层 `instructions` 的模板文件路径。
   #
@@ -241,6 +249,9 @@ gateway:
   # OpenAI 透传模式是否放行客户端超时头（如 x-stainless-timeout）
   # 默认 false：过滤超时头，降低上游提前断流风险。
   openai_passthrough_allow_timeout_headers: false
+  # Model used for OpenAI /responses/compact upstream requests.
+  # OpenAI /responses/compact 上游模型。
+  openai_compact_model: "gpt-5.4"
   # OpenAI Responses WebSocket 配置（默认开启，可按需回滚到 HTTP）
   openai_ws:
     # 新版 WS mode 路由（默认关闭）。关闭时保持当前 legacy 实现行为。
@@ -248,6 +259,12 @@ gateway:
     # ingress 默认模式：off|ctx_pool|passthrough（仅 mode_router_v2_enabled=true 生效）
     # 兼容旧值：shared/dedicated 会按 ctx_pool 处理。
     ingress_mode_default: ctx_pool
+    # 完整读取并解压首条客户端消息的总超时（秒）。
+    client_first_message_timeout_seconds: 30
+    # 已完成 turn 之间的客户端空闲超时（秒）；0 表示禁用。
+    ingress_inter_turn_idle_timeout_seconds: 300
+    # 每个 API Key 跨实例的 ingress WebSocket 连接上限；0 表示禁用。
+    max_ingress_connections_per_api_key: 64
     # 全局总开关，默认 true；关闭时所有请求保持原有 HTTP/SSE 路由
     enabled: true
     # 按账号类型细分开关
@@ -319,6 +336,9 @@ gateway:
       queue: 0.7
       error_rate: 0.8
       ttft: 0.5
+      reset: 0.0
+      quota_headroom: 0.0
+      upstream_cost: 0.0
   # OpenAI 高级调度器补充配置
   openai_scheduler:
     # 是否允许 session_hash sticky 在账号健康度恶化时临时逃逸；false 可一键回退旧行为
@@ -358,6 +378,18 @@ gateway:
     # Stats cache for free-tier soft gate. Hot path never waits on DB: misses
     # fail open and refresh in the background. Prefer >= 60s in production.
     free_quota_stats_cache_seconds: 60
+  # Periodic balance/quota probes for Kimi, Zhipu, and DeepSeek accounts.
+  # 国产 OpenAI 兼容供应商的周期余额/额度探测。
+  cn_providers:
+    # Disable to stop background probes without removing provider accounts.
+    # 关闭后停止后台探测，但不影响账号本身的请求转发。
+    balance_check_enabled: true
+    # PAYG accounts below this balance are temporarily unscheduled.
+    # 按量账号余额低于该阈值时临时停调。
+    balance_threshold: 0.5
+    # Probe interval in minutes; the temporary cooldown is twice this interval.
+    # 探测周期（分钟）；临时停调时长为该周期的两倍。
+    balance_check_interval_minutes: 10
   # HTTP upstream connection pool settings (HTTP/2 + multi-proxy scenario defaults)
   # HTTP 上游连接池配置（HTTP/2 + 多代理场景默认值）
   # Max idle connections across all hosts
@@ -389,6 +421,23 @@ gateway:
   # Stream keepalive interval (seconds), 0=disable
   # 流式 keepalive 间隔（秒），0=禁用
   stream_keepalive_interval: 10
+  # Image stream data interval timeout (seconds), 0=disable; independent from text streams.
+  # 图片流数据间隔超时（秒），0=禁用；独立于普通文本流。
+  image_stream_data_interval_timeout: 900
+  # Image stream keepalive interval (seconds), 0=disable.
+  # 图片流式 keepalive 间隔（秒），0=禁用。
+  image_stream_keepalive_interval: 10
+  # Non-streaming Images JSON keepalive interval (seconds), 0=disable.
+  # 图片非流式 JSON keepalive 间隔（秒），0=禁用。
+  image_nonstream_keepalive_interval: 0
+  # Process-local image generation concurrency limiter.
+  # 进程级图片生成独立并发限制。
+  image_concurrency:
+    enabled: false
+    max_concurrent_requests: 0
+    overflow_mode: "reject"
+    wait_timeout_seconds: 30
+    max_waiting_requests: 100
   # SSE max line size in bytes (default: 40MB)
   # SSE 单行最大字节数（默认 40MB）
   max_line_size: 41943040
@@ -419,6 +468,9 @@ gateway:
     # Fallback max waiting queue size
     # 兜底最大排队长度
     fallback_max_waiting: 100
+    # Prefer accounts whose rolling quota resets sooner (use-it-or-lose-it).
+    # 优先使用更早重置滚动额度的账号。
+    prefer_soonest_reset: false
     # Enable batch load calculation for scheduling
     # 启用调度批量负载计算
     load_batch_enabled: true
@@ -521,106 +573,6 @@ log:
     # 之后每 N 条保留 1 条
     thereafter: 100
 
-# =============================================================================
-# Sora Direct Client Configuration
-# Sora 直连配置
-# =============================================================================
-sora:
-  client:
-    # Sora backend base URL
-    # Sora 上游 Base URL
-    base_url: "https://sora.chatgpt.com/backend"
-    # Request timeout (seconds)
-    # 请求超时（秒）
-    timeout_seconds: 120
-    # Max retries for upstream requests
-    # 上游请求最大重试次数
-    max_retries: 3
-    # Account+proxy cooldown window after Cloudflare challenge (seconds, 0 to disable)
-    # Cloudflare challenge 后按账号+代理冷却窗口（秒，0 表示关闭）
-    cloudflare_challenge_cooldown_seconds: 900
-    # Poll interval (seconds)
-    # 轮询间隔（秒）
-    poll_interval_seconds: 2
-    # Max poll attempts
-    # 最大轮询次数
-    max_poll_attempts: 600
-    # Recent task query limit (image)
-    # 最近任务查询数量（图片轮询）
-    recent_task_limit: 50
-    # Recent task query max limit (fallback)
-    # 最近任务查询最大数量（回退）
-    recent_task_limit_max: 200
-    # Enable debug logs for Sora upstream requests
-    # 启用 Sora 直连调试日志
-    # 调试日志会输出上游请求尝试、重试、响应摘要；Authorization/openai-sentinel-token 等敏感头会自动脱敏
-    debug: false
-    # Allow Sora client to fetch token via OpenAI token provider
-    # 是否允许 Sora 客户端通过 OpenAI token provider 取 token（默认 false，避免误走 OpenAI 刷新链路）
-    use_openai_token_provider: false
-    # Optional custom headers (key-value)
-    # 额外请求头（键值对）
-    headers: {}
-    # Default User-Agent for Sora requests
-    # Sora 默认 User-Agent
-    user_agent: "Sora/1.2026.007 (Android 15; 24122RKC7C; build 2600700)"
-    # Disable TLS fingerprint for Sora upstream
-    # 关闭 Sora 上游 TLS 指纹伪装
-    disable_tls_fingerprint: false
-    # curl_cffi sidecar for Sora only (required)
-    # 仅 Sora 链路使用的 curl_cffi sidecar（必需）
-    curl_cffi_sidecar:
-      # Sora 强制通过 sidecar 请求，必须启用
-      # Sora is forced to use sidecar only; keep enabled=true
-      enabled: true
-      # Sidecar base URL (default endpoint: /request)
-      # sidecar 基础地址（默认请求端点：/request）
-      base_url: "http://sora-curl-cffi-sidecar:8080"
-      # curl_cffi impersonate profile, e.g. chrome131/chrome124/safari18_0
-      # curl_cffi 指纹伪装 profile，例如 chrome131/chrome124/safari18_0
-      impersonate: "chrome131"
-      # Sidecar request timeout (seconds)
-      # sidecar 请求超时（秒）
-      timeout_seconds: 60
-      # Reuse session key per account+proxy to let sidecar persist cookies/session
-      # 按账号+代理复用 session key，让 sidecar 持久化 cookies/session
-      session_reuse_enabled: true
-      # Session TTL in sidecar (seconds)
-      # sidecar 会话 TTL（秒）
-      session_ttl_seconds: 3600
-  storage:
-    # Storage type (local only for now)
-    # 存储类型（首发仅支持 local）
-    type: "local"
-    # Local base path; empty uses /app/data/sora
-    # 本地存储基础路径；为空使用 /app/data/sora
-    local_path: ""
-    # Fallback to upstream URL when download fails
-    # 下载失败时回退到上游 URL
-    fallback_to_upstream: true
-    # Max concurrent downloads
-    # 并发下载上限
-    max_concurrent_downloads: 4
-    # Download timeout (seconds)
-    # 下载超时（秒）
-    download_timeout_seconds: 120
-    # Max download bytes
-    # 最大下载字节数
-    max_download_bytes: 209715200
-    # Enable debug logs for media storage
-    # 启用媒体存储调试日志
-    debug: false
-    cleanup:
-      # Enable cleanup task
-      # 启用清理任务
-      enabled: true
-      # Retention days
-      # 保留天数
-      retention_days: 7
-      # Cron schedule
-      # Cron 调度表达式
-      schedule: "0 3 * * *"
-
 # Token refresh behavior
 # token 刷新行为控制
 token_refresh:
@@ -651,6 +603,23 @@ api_key_auth_cache:
   # Enable singleflight for cache misses
   # 缓存未命中时启用 singleflight 合并回源
   singleflight: true
+  # Maximum concurrent database lookups for authentication cache misses
+  # 认证缓存未命中时允许并发回源数据库的最大数量
+  lookup_concurrency: 64
+  # Process-local invalid-auth abuse protection. Counts only missing, malformed,
+  # deprecated-query, and confirmed invalid credentials; valid requests and
+  # Redis/DB failures do not consume the budget.
+  # 本机无效鉴权防护：仅统计缺失、格式错误、废弃 query 及确认无效的凭据。
+  invalid_abuse:
+    enabled: true
+    # Invalid attempts per trusted client IP (IPv6 grouped by /64) per window.
+    # 每个可信客户端 IP（IPv6 按 /64 聚合）在窗口内允许的无效次数。
+    threshold: 120
+    window_seconds: 60
+    block_seconds: 60
+    # Maximum tracked client identities per process; memory remains bounded.
+    # 每进程最多跟踪的客户端身份数量，确保内存有界。
+    capacity: 16384
 
 # =============================================================================
 # Dashboard Cache Configuration

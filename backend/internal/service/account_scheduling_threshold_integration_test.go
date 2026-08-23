@@ -127,7 +127,7 @@ func TestOpenAIGatewayService_ListSchedulableAccounts_FiltersThresholdBlockedAcc
 		rateLimitService: rateLimitService,
 	}
 
-	accounts, err := svc.listSchedulableAccounts(context.Background(), nil, PlatformOpenAI)
+	accounts, err := svc.listSchedulableAccountsByPlatform(context.Background(), nil, PlatformOpenAI)
 
 	require.NoError(t, err)
 	require.Len(t, accounts, 1)

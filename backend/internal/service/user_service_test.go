@@ -225,6 +225,9 @@ func (m *mockUserRepo) BatchSetConcurrency(context.Context, []int64, int) (int, 
 func (m *mockUserRepo) BatchAddConcurrency(context.Context, []int64, int) (int, error) {
 	return 0, nil
 }
+func (m *mockUserRepo) BatchUpdateLimits(context.Context, []int64, *int, *int) (int, error) {
+	return 0, nil
+}
 func (m *mockUserRepo) ExistsByEmail(context.Context, string) (bool, error) { return false, nil }
 func (m *mockUserRepo) ExistsByEmailAlias(context.Context, string) (bool, error) {
 	return false, nil

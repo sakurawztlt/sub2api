@@ -16,7 +16,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent/pendingauthsession"
 	dbuser "github.com/Wei-Shaw/sub2api/ent/user"
 	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/repository"
 	servermiddleware "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -1161,8 +1160,9 @@ func TestCompleteLinuxDoOAuthRegistrationReturnsPendingSessionWhenChoiceStillReq
 
 func TestCompleteLinuxDoOAuthRegistrationSkipsLegacyEmailCompletionForInvitationPendingSession(t *testing.T) {
 	handler, client := newOAuthPendingFlowTestHandler(t, true)
+	require.NotNil(t, handler)
 	ctx := context.Background()
-	redeemRepo := repository.NewRedeemCodeRepository(client)
+	redeemRepo := &oauthPendingFlowRedeemCodeRepo{client: client}
 	require.NoError(t, redeemRepo.Create(ctx, &service.RedeemCode{
 		Code:   "invite-1",
 		Type:   service.RedeemTypeInvitation,

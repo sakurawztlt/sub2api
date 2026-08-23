@@ -14,7 +14,8 @@ describe('CreateAccountModal Grok account capabilities', () => {
     expect(source).toContain('@click="accountCategory = \'apikey\'"')
     expect(source).toContain("newPlatform === 'grok'")
     expect(source).toContain("? 'https://api.x.ai/v1'")
-    expect(source).toContain("? 'xai-...'")
+    expect(source).toContain(':placeholder="apiKeyValuePlaceholder"')
+    expect(source).toContain("return 'xai-...'")
   })
 
   it('exposes endpoint presets and safe header overrides for OAuth creation', () => {

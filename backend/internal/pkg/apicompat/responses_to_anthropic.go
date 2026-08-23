@@ -2200,12 +2200,12 @@ func resToAnthHandleLowLatencyWebSearchCompletion(
 	}
 
 	var textBuilder strings.Builder
-	textBuilder.WriteString("Search completed for: ")
-	textBuilder.WriteString(strings.TrimSpace(query))
-	textBuilder.WriteString("\n\nSources:")
+	_, _ = textBuilder.WriteString("Search completed for: ")
+	_, _ = textBuilder.WriteString(strings.TrimSpace(query))
+	_, _ = textBuilder.WriteString("\n\nSources:")
 	for _, source := range citationSources {
-		textBuilder.WriteString("\n- ")
-		textBuilder.WriteString(source.URL)
+		_, _ = textBuilder.WriteString("\n- ")
+		_, _ = textBuilder.WriteString(source.URL)
 	}
 	text := textBuilder.String()
 

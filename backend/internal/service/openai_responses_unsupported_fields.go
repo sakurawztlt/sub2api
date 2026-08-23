@@ -5,4 +5,5 @@ package service
 var openAIResponsesUnsupportedFields = []string{
 	"prompt_cache_retention",
 	"safety_identifier",
+	"prompt_cache_options",
 }

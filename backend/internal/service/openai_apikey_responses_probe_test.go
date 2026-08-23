@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/stretchr/testify/require"
 )
@@ -46,4 +47,106 @@ func TestProbeOpenAIAPIKeyResponsesSupportUsesCodexProbeHeaders(t *testing.T) {
 	requireOpenAICodexProbeHeaders(t, upstream.lastReq.Header)
 	updates := <-updateCalls
 	require.Equal(t, true, updates[openai_compat.ExtraKeyResponsesSupported])
+}
+
+func TestProbeOpenAIAPIKeyResponsesSupportCNProviders(t *testing.T) {
+	tests := []struct {
+		name        string
+		id          int64
+		platform    string
+		protocol    string
+		wantSupport bool
+		wantMode    string
+	}{
+		{name: "deepseek adaptive supports responses", id: 201, platform: PlatformDeepseek, protocol: APIProtocolAdaptive, wantSupport: true, wantMode: string(openai_compat.ResponsesSupportModeForceResponses)},
+		{name: "deepseek chat clears forced responses", id: 202, platform: PlatformDeepseek, protocol: APIProtocolChatCompletions, wantSupport: false, wantMode: string(openai_compat.ResponsesSupportModeAuto)},
+		{name: "kimi adaptive falls back to chat", id: 203, platform: PlatformKimi, protocol: APIProtocolAdaptive, wantSupport: false, wantMode: string(openai_compat.ResponsesSupportModeAuto)},
+		{name: "zhipu adaptive falls back to chat", id: 204, platform: PlatformZhipu, protocol: APIProtocolAdaptive, wantSupport: false, wantMode: string(openai_compat.ResponsesSupportModeAuto)},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			updateCalls := make(chan map[string]any, 1)
+			account := Account{
+				ID: tc.id, Platform: tc.platform, Type: AccountTypeAPIKey,
+				Credentials: map[string]any{"api_key": "sk-test", "api_protocol": tc.protocol},
+				Extra: map[string]any{
+					openai_compat.ExtraKeyResponsesMode: string(openai_compat.ResponsesSupportModeForceResponses),
+				},
+			}
+			repo := &snapshotUpdateAccountRepo{
+				stubOpenAIAccountRepo: stubOpenAIAccountRepo{accounts: []Account{account}},
+				updateExtraCalls:      updateCalls,
+			}
+			svc := &AccountTestService{accountRepo: repo}
+
+			svc.ProbeOpenAIAPIKeyResponsesSupport(context.Background(), account.ID)
+
+			updates := <-updateCalls
+			require.Equal(t, tc.wantSupport, updates[openai_compat.ExtraKeyResponsesSupported])
+			require.Equal(t, tc.wantMode, updates[openai_compat.ExtraKeyResponsesMode])
+		})
+	}
+}
+
+func TestDecideResponsesProbeSupport(t *testing.T) {
+	fnCall := []byte(`{"output":[{"type":"reasoning"},{"type":"function_call","name":"probe_ping"}]}`)
+	reasoningOnly := []byte(`{"output":[{"type":"reasoning"}]}`)
+
+	cases := []struct {
+		name   string
+		status int
+		body   []byte
+		want   bool
+	}{
+		{"404 endpoint absent", 404, fnCall, false},
+		{"405 method not allowed", 405, fnCall, false},
+		{"200 with function_call", 200, fnCall, true},
+		{"200 reasoning only", 200, reasoningOnly, false},
+		{"200 invalid json", 200, []byte("not-json"), false},
+		{"200 no output field", 200, []byte(`{"status":"completed"}`), false},
+		{"400 conservative true", 400, reasoningOnly, true},
+		{"401 conservative true", 401, nil, true},
+		{"500 conservative true", 500, nil, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, decideResponsesProbeSupport(tc.status, tc.body))
+		})
+	}
+}
+
+func TestResponsesProbeBodyHasFunctionCall(t *testing.T) {
+	require.True(t, responsesProbeBodyHasFunctionCall([]byte(`{"output":[{"type":"function_call"}]}`)))
+	require.True(t, responsesProbeBodyHasFunctionCall([]byte(`{"output":[{"type":"reasoning"},{"type":"function_call"}]}`)))
+	require.False(t, responsesProbeBodyHasFunctionCall([]byte(`{"output":[{"type":"reasoning"}]}`)))
+	require.False(t, responsesProbeBodyHasFunctionCall([]byte(`{"output":[]}`)))
+	require.False(t, responsesProbeBodyHasFunctionCall([]byte(`{}`)))
+	require.False(t, responsesProbeBodyHasFunctionCall([]byte(`garbage`)))
+}
+
+func TestSelectResponsesProbeModel(t *testing.T) {
+	require.Equal(t, openai.DefaultTestModel, selectResponsesProbeModel(&Account{}))
+
+	acct := &Account{Credentials: map[string]any{
+		"model_mapping": map[string]any{
+			"client-b": "zeta-model",
+			"client-a": "alpha-model",
+		},
+	}}
+	require.Equal(t, "alpha-model", selectResponsesProbeModel(acct))
+
+	acctWild := &Account{Credentials: map[string]any{
+		"model_mapping": map[string]any{
+			"a": "*",
+			"b": "  ",
+			"c": "real-model",
+		},
+	}}
+	require.Equal(t, "real-model", selectResponsesProbeModel(acctWild))
+
+	acctAllWild := &Account{Credentials: map[string]any{
+		"model_mapping": map[string]any{"a": "gpt-*"},
+	}}
+	require.Equal(t, openai.DefaultTestModel, selectResponsesProbeModel(acctAllWild))
 }

@@ -32,6 +32,21 @@ func TestNormalizeOpenAICompactRequestBodyPreservesServiceTier(t *testing.T) {
 	require.False(t, gjson.GetBytes(normalized, "stream").Exists())
 }
 
+func TestNormalizeOpenAICompactRequestBodyDropsParallelToolCallsWithoutUsableTools(t *testing.T) {
+	for _, rawTools := range []string{"", `,"tools":[]`, `,"tools":null`, `,"tools":{"type":"function"}`} {
+		body := []byte(`{"model":"gpt-5.4","input":[],"parallel_tool_calls":true` + rawTools + `}`)
+		normalized, changed, err := normalizeOpenAICompactRequestBody(body)
+		require.NoError(t, err)
+		require.True(t, changed)
+		require.False(t, gjson.GetBytes(normalized, "parallel_tool_calls").Exists())
+	}
+
+	body := []byte(`{"model":"gpt-5.4","input":[],"tools":[{"type":"function","name":"lookup"}],"parallel_tool_calls":true}`)
+	normalized, _, err := normalizeOpenAICompactRequestBody(body)
+	require.NoError(t, err)
+	require.True(t, gjson.GetBytes(normalized, "parallel_tool_calls").Bool())
+}
+
 func TestOpenAIOAuthCompactHTTPBuildersUsePreservedServiceTierInRoutingHint(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{

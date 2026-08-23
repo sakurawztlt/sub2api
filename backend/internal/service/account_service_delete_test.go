@@ -159,6 +159,10 @@ func (s *accountRepoStub) ListSchedulableUngroupedByPlatforms(ctx context.Contex
 	panic("unexpected ListSchedulableUngroupedByPlatforms call")
 }
 
+func (s *accountRepoStub) ListModelAvailabilityCandidates(ctx context.Context, groupID *int64, platforms []string, includeGrouped bool) ([]Account, error) {
+	panic("unexpected ListModelAvailabilityCandidates call")
+}
+
 func (s *accountRepoStub) SetRateLimited(ctx context.Context, id int64, resetAt time.Time) error {
 	panic("unexpected SetRateLimited call")
 }
@@ -217,6 +221,10 @@ func (s *accountRepoStub) ResetQuotaUsed(ctx context.Context, id int64) error {
 
 func (s *accountRepoStub) RevertProxyFallback(ctx context.Context, accountID int64) error {
 	panic("unexpected RevertProxyFallback call")
+}
+
+func (s *accountRepoStub) ListShadowsByParent(context.Context, int64) ([]*Account, error) {
+	return nil, nil
 }
 
 // TestAccountService_Delete_NotFound 测试删除不存在的账号时返回正确的错误。

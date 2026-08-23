@@ -4,7 +4,6 @@ package repository
 
 import (
 	"context"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -68,7 +67,9 @@ func TestSchedulerCacheSnapshotUsesSlimMetadataButKeepsFullAccount(t *testing.T)
 		},
 	}
 
-	require.NoError(t, cache.SetSnapshot(ctx, bucket, []service.Account{account}))
+	token, err := cache.CaptureBucketWriteToken(ctx, bucket)
+	require.NoError(t, err)
+	require.NoError(t, cache.SetSnapshot(ctx, bucket, token, []service.Account{account}))
 
 	snapshot, hit, err := cache.GetSnapshot(ctx, bucket)
 	require.NoError(t, err)
@@ -104,72 +105,72 @@ func TestSchedulerCacheSnapshotUsesSlimMetadataButKeepsFullAccount(t *testing.T)
 	require.NotNil(t, full.AccountGroups[0].Group)
 }
 
-func TestSchedulerCacheUpdateLastUsedUsesSideKeyAndKeepsAccountJSON(t *testing.T) {
+func TestSchedulerCacheRetireAndReopenFencesOldEpochIntegration(t *testing.T) {
 	ctx := context.Background()
 	rdb := testRedis(t)
 	cache := NewSchedulerCache(rdb)
+	bucket := service.SchedulerBucket{GroupID: 77, Platform: service.PlatformAntigravity, Mode: service.SchedulerModeForced}
+	account := service.Account{ID: 7701, Platform: service.PlatformAntigravity, Type: service.AccountTypeOAuth}
 
-	initialUsedAt := time.Now().UTC().Truncate(time.Second)
-	account := &service.Account{
-		ID:          202,
-		Name:        "hot-field-account",
-		Platform:    service.PlatformOpenAI,
-		Type:        service.AccountTypeAPIKey,
-		Status:      service.StatusActive,
-		Schedulable: true,
-		Concurrency: 2,
-		LastUsedAt:  &initialUsedAt,
-		Credentials: map[string]any{
-			"api_key":   "k-1",
-			"huge_blob": strings.Repeat("a", 2048),
-		},
-		Extra: map[string]any{
-			"quota_limit": 100,
-			"notes_blob":  strings.Repeat("b", 2048),
-		},
-	}
-	require.NoError(t, cache.SetAccount(ctx, account))
-
-	id := strconv.FormatInt(account.ID, 10)
-	accountBefore, err := rdb.Get(ctx, schedulerAccountKey(id)).Result()
+	oldToken, err := cache.CaptureBucketWriteToken(ctx, bucket)
 	require.NoError(t, err)
-	metaBefore, err := rdb.Get(ctx, schedulerAccountMetaKey(id)).Result()
+	require.NoError(t, cache.SetSnapshot(ctx, bucket, oldToken, []service.Account{account}))
+	require.NoError(t, cache.RetireBucket(ctx, bucket))
+	require.NoError(t, cache.RetireBucket(ctx, bucket))
+
+	_, hit, err := cache.GetSnapshot(ctx, bucket)
 	require.NoError(t, err)
+	require.False(t, hit)
+	_, err = cache.CaptureBucketWriteToken(ctx, bucket)
+	require.ErrorIs(t, err, service.ErrSchedulerBucketRetired)
+	require.ErrorIs(t, cache.SetSnapshot(ctx, bucket, oldToken, []service.Account{account}), service.ErrSchedulerBucketRetired)
 
-	latestUsedAt := initialUsedAt.Add(37 * time.Second)
-	require.NoError(t, cache.UpdateLastUsed(ctx, map[int64]time.Time{
-		account.ID: latestUsedAt,
-	}))
-
-	accountAfter, err := rdb.Get(ctx, schedulerAccountKey(id)).Result()
+	newToken, err := cache.ReopenBucket(ctx, bucket)
 	require.NoError(t, err)
-	metaAfter, err := rdb.Get(ctx, schedulerAccountMetaKey(id)).Result()
-	require.NoError(t, err)
-	require.Equal(t, accountBefore, accountAfter, "更新 LastUsedAt 不应重写完整账号 JSON")
-	require.Equal(t, metaBefore, metaAfter, "更新 LastUsedAt 不应重写快照元数据 JSON")
-
-	lastUsedRaw, err := rdb.Get(ctx, schedulerLastUsedKey(id)).Result()
-	require.NoError(t, err)
-	require.Equal(t, strconv.FormatInt(latestUsedAt.UTC().UnixNano(), 10), lastUsedRaw)
-
-	cached, err := cache.GetAccount(ctx, account.ID)
-	require.NoError(t, err)
-	require.NotNil(t, cached)
-	require.NotNil(t, cached.LastUsedAt)
-	require.WithinDuration(t, latestUsedAt.UTC(), *cached.LastUsedAt, time.Nanosecond)
-
-	bucket := service.SchedulerBucket{GroupID: 9, Platform: service.PlatformOpenAI, Mode: service.SchedulerModeSingle}
-	require.NoError(t, cache.SetSnapshot(ctx, bucket, []service.Account{*account}))
-
-	latestForSnapshot := latestUsedAt.Add(13 * time.Second)
-	require.NoError(t, cache.UpdateLastUsed(ctx, map[int64]time.Time{
-		account.ID: latestForSnapshot,
-	}))
+	require.Greater(t, newToken.Epoch, oldToken.Epoch)
+	require.ErrorIs(t, cache.SetSnapshot(ctx, bucket, oldToken, []service.Account{account}), service.ErrSchedulerBucketWriteFenced)
+	require.NoError(t, cache.SetSnapshot(ctx, bucket, newToken, []service.Account{account}))
 
 	snapshot, hit, err := cache.GetSnapshot(ctx, bucket)
 	require.NoError(t, err)
 	require.True(t, hit)
 	require.Len(t, snapshot, 1)
-	require.NotNil(t, snapshot[0].LastUsedAt)
-	require.WithinDuration(t, latestForSnapshot.UTC(), *snapshot[0].LastUsedAt, time.Nanosecond)
+	require.Equal(t, account.ID, snapshot[0].ID)
+}
+
+func TestSchedulerCacheGroupLifecycleLeaseOwnerAndTTLIntegration(t *testing.T) {
+	ctx := context.Background()
+	rdb := testRedis(t)
+	cache := NewSchedulerCache(rdb)
+	const groupID int64 = 78
+	const ttl = 500 * time.Millisecond
+
+	first, acquired, err := cache.TryAcquireGroupLifecycleLease(ctx, groupID, ttl)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	pttl, err := rdb.PTTL(ctx, schedulerGroupLifecycleLockKey(groupID)).Result()
+	require.NoError(t, err)
+	require.Positive(t, pttl)
+	require.LessOrEqual(t, pttl, ttl)
+
+	var second service.SchedulerGroupLifecycleLease
+	require.Eventually(t, func() bool {
+		var acquireErr error
+		second, acquired, acquireErr = cache.TryAcquireGroupLifecycleLease(ctx, groupID, time.Minute)
+		return acquireErr == nil && acquired
+	}, 5*time.Second, 20*time.Millisecond)
+	require.NotEqual(t, first.OwnerToken, second.OwnerToken)
+
+	require.ErrorIs(t, cache.ReleaseGroupLifecycleLease(ctx, first), service.ErrSchedulerGroupLifecycleLeaseLost)
+	_, acquired, err = cache.TryAcquireGroupLifecycleLease(ctx, groupID, time.Minute)
+	require.NoError(t, err)
+	require.False(t, acquired, "a stale release must not delete the successor lease")
+
+	require.NoError(t, cache.ReleaseGroupLifecycleLease(ctx, second))
+	require.ErrorIs(t, cache.ReleaseGroupLifecycleLease(ctx, second), service.ErrSchedulerGroupLifecycleLeaseLost)
+	third, acquired, err := cache.TryAcquireGroupLifecycleLease(ctx, groupID, time.Minute)
+	require.NoError(t, err)
+	require.True(t, acquired)
+	require.True(t, third.ValidFor(groupID))
+	require.NoError(t, cache.ReleaseGroupLifecycleLease(ctx, third))
 }

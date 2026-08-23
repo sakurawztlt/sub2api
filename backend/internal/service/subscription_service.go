@@ -505,10 +505,6 @@ func (s *SubscriptionService) assignSubscriptionWithReuse(ctx context.Context, i
 	return sub, false, nil
 }
 
-func isAssignableExistingSubscriptionExpired(sub *UserSubscription) bool {
-	return isAssignableExistingSubscriptionExpiredAt(sub, time.Now())
-}
-
 func isAssignableExistingSubscriptionExpiredAt(sub *UserSubscription, now time.Time) bool {
 	if sub == nil {
 		return false
@@ -876,9 +872,6 @@ func (s *SubscriptionService) List(ctx context.Context, page, pageSize int, user
 
 // normalizeExpiredWindows 将已过期窗口的数据清零（仅影响返回数据，不影响数据库）
 // 这确保前端显示正确的当前窗口状态，而不是过期窗口的历史数据
-func normalizeExpiredWindows(subs []UserSubscription) {
-	normalizeExpiredWindowsAt(subs, time.Now())
-}
 
 func normalizeExpiredWindowsAt(subs []UserSubscription, now time.Time) {
 	for i := range subs {

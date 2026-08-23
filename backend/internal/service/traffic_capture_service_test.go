@@ -51,11 +51,11 @@ func TestTruncateForCapture_Empty(t *testing.T) {
 
 func TestRedactSensitiveHeaders(t *testing.T) {
 	h := map[string]string{
-		"Authorization":       "Bearer oat01-very-long-secret-token-here-shouldnt-leak",
-		"x-api-key":           "sk-ant-api03-secret",
-		"Content-Type":        "application/json",
-		"User-Agent":          "claude-cli/2.1.0",
-		"Cookie":              "session=abc123",
+		"Authorization": "Bearer oat01-very-long-secret-token-here-shouldnt-leak",
+		"x-api-key":     "sk-ant-api03-secret",
+		"Content-Type":  "application/json",
+		"User-Agent":    "claude-cli/2.1.0",
+		"Cookie":        "session=abc123",
 	}
 	out := redactSensitiveHeaders(h)
 

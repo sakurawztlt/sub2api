@@ -50,8 +50,18 @@ const (
 	// OpenAIImageGenerationIntent 标识 OpenAI 请求会触发生图能力（用于图片能力维度限流）
 	OpenAIImageGenerationIntent Key = "ctx_openai_image_generation_intent"
 
+	// OpenAIImagesEndpoint 标识请求是从 /v1/images/* 入站的。
+	// 与 OpenAIImageGenerationIntent 的区别：后者只表示"这次请求会生图"，
+	// /v1/responses 带图片模型时也会置位；本 key 只在专用生图端点置位，
+	// 用于区分"用错端点"与"端点用对了但账号没能力"。
+	OpenAIImagesEndpoint Key = "ctx_openai_images_endpoint"
+
 	// Group 认证后的分组信息，由 API Key 认证中间件设置
 	Group Key = "ctx_group"
+
+	// UserID 认证后的 Sub2API 用户 ID，由 API Key 认证中间件设置。
+	// 供 service 层执行用户级策略，不能使用客户端请求体中的 user 标识替代。
+	UserID Key = "ctx_user_id"
 
 	// IsMaxTokensOneHaikuRequest 标识当前请求是否为 max_tokens=1 + haiku 模型的探测请求
 	// 用于 ClaudeCodeOnly 验证绕过（绕过 system prompt 检查，但仍需验证 User-Agent）

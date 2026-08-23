@@ -20,16 +20,16 @@ var messageIDAlphabetSize = big.NewInt(int64(len(messageIDAlphabet)))
 func GenerateMessageID() string {
 	var b strings.Builder
 	b.Grow(len(messageIDPrefix) + messageIDBodyLen)
-	b.WriteString(messageIDPrefix)
+	_, _ = b.WriteString(messageIDPrefix)
 	for i := 0; i < messageIDBodyLen; i++ {
 		n, err := rand.Int(rand.Reader, messageIDAlphabetSize)
 		if err != nil {
 			// Entropy failure is practically unrecoverable, but a syntactically
 			// valid ID is safer on the response hot path than a panic or a tell.
-			b.WriteByte(messageIDAlphabet[0])
+			_ = b.WriteByte(messageIDAlphabet[0])
 			continue
 		}
-		b.WriteByte(messageIDAlphabet[n.Int64()])
+		_ = b.WriteByte(messageIDAlphabet[n.Int64()])
 	}
 	return b.String()
 }

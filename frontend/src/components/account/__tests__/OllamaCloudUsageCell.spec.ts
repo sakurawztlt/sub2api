@@ -1,17 +1,26 @@
-import { mount } from '@vue/test-utils'
-import { describe, expect, it, vi } from 'vitest'
+import { flushPromises, mount } from '@vue/test-utils'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import OllamaCloudUsageCell from '../OllamaCloudUsageCell.vue'
 import UsageProgressBar from '../UsageProgressBar.vue'
 import type { Account, OllamaCloudUsageState } from '@/types'
 
-vi.hoisted(() => {
+const { refreshOllamaCloudUsage } = vi.hoisted(() => {
   vi.stubGlobal('localStorage', {
     getItem: vi.fn(() => null),
     setItem: vi.fn(),
     removeItem: vi.fn(),
     clear: vi.fn()
   })
+  return { refreshOllamaCloudUsage: vi.fn() }
 })
+
+vi.mock('@/api/admin', () => ({
+  adminAPI: {
+    accounts: {
+      refreshOllamaCloudUsage
+    }
+  }
+}))
 
 vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
@@ -73,7 +82,11 @@ const account = (state = usageState()): Account => ({
 })
 
 describe('OllamaCloudUsageCell', () => {
-  it('renders only native 5h and 7d windows in a shrinkable mobile-safe cell', () => {
+  beforeEach(() => {
+    refreshOllamaCloudUsage.mockReset()
+  })
+
+  it('renders native 5h and 7d windows with the configured-account query action', () => {
     const wrapper = mount(OllamaCloudUsageCell, { props: { account: account() } })
     const cell = wrapper.get('[data-testid="ollama-cloud-usage-cell"]')
     expect(cell.classes()).toEqual(expect.arrayContaining(['min-w-0', 'max-w-full']))
@@ -93,14 +106,15 @@ describe('OllamaCloudUsageCell', () => {
     })
 
     expect(wrapper.find('[data-testid="ollama-cloud-usage-details"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="ollama-cloud-usage-refresh"]').exists()).toBe(false)
-    expect(wrapper.findAll('button')).toHaveLength(0)
+    const query = wrapper.get('[data-testid="ollama-cloud-usage-query"]')
+    expect(query.classes()).toEqual(expect.arrayContaining(['text-blue-600', 'hover:bg-blue-50']))
+    expect(query.text()).toContain('admin.accounts.usageWindow.activeQuery')
     expect(wrapper.text()).not.toContain('max')
     expect(wrapper.text()).not.toContain('$0')
     expect(wrapper.text()).not.toContain('gpt-oss:120b-cloud')
   })
 
-  it('reacts to an account snapshot update without a list-cell refresh action', async () => {
+  it('reacts to an account snapshot update', async () => {
     const wrapper = mount(OllamaCloudUsageCell, { props: { account: account() } })
     const next = usageState()
     next.snapshot!.data!.five_hour!.used_percent = 43
@@ -108,6 +122,28 @@ describe('OllamaCloudUsageCell', () => {
     await wrapper.setProps({ account: account(next) })
 
     expect(wrapper.findAllComponents(UsageProgressBar)[0].props('utilization')).toBe(43)
-    expect(wrapper.findAll('button')).toHaveLength(0)
+  })
+
+  it('queries through the edit-page refresh endpoint and emits the updated state', async () => {
+    const next = usageState()
+    next.snapshot!.data!.five_hour!.used_percent = 43
+    refreshOllamaCloudUsage.mockResolvedValueOnce(next)
+    const wrapper = mount(OllamaCloudUsageCell, { props: { account: account() } })
+
+    await wrapper.get('[data-testid="ollama-cloud-usage-query"]').trigger('click')
+    await flushPromises()
+
+    expect(refreshOllamaCloudUsage).toHaveBeenCalledWith(7)
+    expect(wrapper.findAllComponents(UsageProgressBar)[0].props('utilization')).toBe(43)
+    expect(wrapper.emitted<OllamaCloudUsageState[]>('updated')?.[0]?.[0]).toEqual(next)
+  })
+
+  it('hides the query action until a browser session is configured', () => {
+    const state = usageState()
+    state.configured = false
+
+    const wrapper = mount(OllamaCloudUsageCell, { props: { account: account(state) } })
+
+    expect(wrapper.find('[data-testid="ollama-cloud-usage-query"]').exists()).toBe(false)
   })
 })

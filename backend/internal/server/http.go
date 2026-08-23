@@ -18,7 +18,7 @@ import (
 	"github.com/google/wire"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
+	"golang.org/x/net/http2/h2c" //nolint:staticcheck // SA1019: retain the configured wrapper until protocol migration is validated end to end.
 )
 
 // ProviderSet 提供服务器层的依赖
@@ -117,7 +117,7 @@ func ProvideHTTPServer(cfg *config.Config, router *gin.Engine) *http.Server {
 	// 根据配置决定是否启用 H2C
 	if cfg.Server.H2C.Enabled {
 		h2cConfig := cfg.Server.H2C
-		httpHandler = h2c.NewHandler(router, &http2.Server{
+		httpHandler = h2c.NewHandler(router, &http2.Server{ //nolint:staticcheck // SA1019: preserve custom h2c HTTP/2 limits.
 			MaxConcurrentStreams:         h2cConfig.MaxConcurrentStreams,
 			IdleTimeout:                  time.Duration(h2cConfig.IdleTimeout) * time.Second,
 			MaxReadFrameSize:             uint32(h2cConfig.MaxReadFrameSize),

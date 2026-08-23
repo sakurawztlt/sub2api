@@ -157,7 +157,7 @@ func TestEstimateAnthropicCacheUsage(t *testing.T) {
 			if tt.total < 0 {
 				upperBound = 0
 			}
-			if input+creation+read > upperBound && !(tt.total == 100 && tt.cached == 150) {
+			if input+creation+read > upperBound && (tt.total != 100 || tt.cached != 150) {
 				t.Errorf("input+creation+read = %d, must not exceed total=%d",
 					input+creation+read, upperBound)
 			}

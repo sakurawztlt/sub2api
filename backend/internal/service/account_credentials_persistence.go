@@ -1,6 +1,9 @@
 package service
 
-import "context"
+import (
+	"context"
+	"log/slog"
+)
 
 type accountCredentialsUpdater interface {
 	UpdateCredentials(ctx context.Context, id int64, credentials map[string]any) error
@@ -10,12 +13,44 @@ func persistAccountCredentials(ctx context.Context, repo AccountRepository, acco
 	if repo == nil || account == nil {
 		return nil
 	}
+	if account.IsCredentialShadow() {
+		slog.Warn("skip persisting credentials to spark shadow account",
+			"account_id", account.ID, "parent_id", *account.ParentAccountID)
+		return nil
+	}
 
 	account.Credentials = cloneCredentials(credentials)
 	if updater, ok := any(repo).(accountCredentialsUpdater); ok {
 		return updater.UpdateCredentials(ctx, account.ID, account.Credentials)
 	}
 	return repo.Update(ctx, account)
+}
+
+var sparkShadowAllowedCredentialKeys = map[string]struct{}{
+	"model_mapping":         {},
+	"compact_model_mapping": {},
+}
+
+func isAllowedSparkShadowCredentialsUpdate(credentials map[string]any) bool {
+	if credentials == nil {
+		return true
+	}
+	for key := range credentials {
+		if _, ok := sparkShadowAllowedCredentialKeys[key]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func sanitizeSparkShadowCredentials(credentials map[string]any) map[string]any {
+	out := make(map[string]any, len(sparkShadowAllowedCredentialKeys))
+	for key := range sparkShadowAllowedCredentialKeys {
+		if value, ok := credentials[key]; ok && value != nil {
+			out[key] = value
+		}
+	}
+	return out
 }
 
 func cloneCredentials(in map[string]any) map[string]any {

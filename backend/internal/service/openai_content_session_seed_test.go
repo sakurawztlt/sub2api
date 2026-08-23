@@ -41,6 +41,65 @@ func TestDeriveOpenAIContentSessionSeed_ChatCompletions_StableAcrossTurns(t *tes
 	require.NotEmpty(t, s1)
 }
 
+func TestDeriveOpenAIContentSessionSeed_ChatCompletions_IgnoresLaterSystemMessages(t *testing.T) {
+	turn1 := []byte(`{
+		"model": "gpt-5.4",
+		"messages": [
+			{"role": "system", "content": "You are helpful."},
+			{"role": "user", "content": "Hello"},
+			{"role": "assistant", "content": "Hi there!"},
+			{"role": "user", "content": "How are you?"}
+		]
+	}`)
+	turn2 := []byte(`{
+		"model": "gpt-5.4",
+		"messages": [
+			{"role": "system", "content": "You are helpful."},
+			{"role": "user", "content": "Hello"},
+			{"role": "assistant", "content": "Hi there!"},
+			{"role": "system", "content": "Return JSON for this turn."},
+			{"role": "user", "content": "How are you?"}
+		]
+	}`)
+
+	require.Equal(t, deriveOpenAIContentSessionSeed(turn1), deriveOpenAIContentSessionSeed(turn2))
+}
+
+func TestDeriveOpenAIContentSessionSeed_ChatCompletions_UsesLeadingSystemDeveloperPrefix(t *testing.T) {
+	firstSystem := []byte(`{
+		"model": "gpt-5.4",
+		"messages": [
+			{"role": "system", "content": "System A"},
+			{"role": "developer", "content": "Developer B"},
+			{"role": "user", "content": "Hello"}
+		]
+	}`)
+	changedLaterSystem := []byte(`{
+		"model": "gpt-5.4",
+		"messages": [
+			{"role": "system", "content": "System A"},
+			{"role": "developer", "content": "Developer C"},
+			{"role": "user", "content": "Hello"}
+		]
+	}`)
+
+	seed := deriveOpenAIContentSessionSeed(firstSystem)
+	require.Contains(t, seed, "System A")
+	require.Contains(t, seed, "Developer B")
+	require.NotEqual(t, seed, deriveOpenAIContentSessionSeed(changedLaterSystem))
+
+	withLaterSystem := []byte(`{
+		"model": "gpt-5.4",
+		"messages": [
+			{"role": "system", "content": "System A"},
+			{"role": "developer", "content": "Developer B"},
+			{"role": "user", "content": "Hello"},
+			{"role": "system", "content": "Dynamic system"}
+		]
+	}`)
+	require.Equal(t, seed, deriveOpenAIContentSessionSeed(withLaterSystem))
+}
+
 func TestDeriveOpenAIContentSessionSeed_ChatCompletions_DifferentFirstUserDiffers(t *testing.T) {
 	req1 := []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"Question A"}]}`)
 	req2 := []byte(`{"model":"gpt-5.4","messages":[{"role":"user","content":"Question B"}]}`)

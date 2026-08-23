@@ -1,6 +1,7 @@
 package service
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -108,7 +109,6 @@ func TestApplyToolNameRewriteToBody_RenamesToolsAndToolChoice(t *testing.T) {
 	require.Equal(t, "tool", gjson.GetBytes(out, "tool_choice.type").String())
 }
 
-
 func TestApplyToolNameRewriteToBody_RenamesToolUseInMessages(t *testing.T) {
 	// 2026-05-13 PR #2340 cherry-pick: tools.name 改名后 messages tool_use.name
 	// 必须同步改, 否则上游 Anthropic 找不到 tool 报 400.
@@ -150,6 +150,34 @@ func TestApplyToolsLastCacheBreakpoint_PassesThroughClientTTL(t *testing.T) {
 	out := applyToolsLastCacheBreakpoint(body)
 	// User-provided ttl must be preserved.
 	require.Equal(t, "1h", gjson.GetBytes(out, "tools.0.cache_control.ttl").String())
+}
+
+func TestApplyToolsLastCacheBreakpoint_StripsDeferredToolCacheControl(t *testing.T) {
+	body := []byte(`{"tools":[{"name":"a","custom":{"defer_loading":true},"cache_control":{"type":"ephemeral","ttl":"1h"}},{"name":"b","custom":{"defer_loading":true}}]}`)
+	out := applyToolsLastCacheBreakpoint(body)
+
+	require.False(t, gjson.GetBytes(out, "tools.0.cache_control").Exists())
+	require.False(t, gjson.GetBytes(out, "tools.1.cache_control").Exists())
+}
+
+func TestApplyToolsLastCacheBreakpoint_SkipsDeferredFinalTool(t *testing.T) {
+	body := []byte(`{"tools":[{"name":"a","input_schema":{}},{"name":"b","defer_loading":true}]}`)
+	out := applyToolsLastCacheBreakpoint(body)
+
+	require.Equal(t, "ephemeral", gjson.GetBytes(out, "tools.0.cache_control.type").String())
+	require.Equal(t, "5m", gjson.GetBytes(out, "tools.0.cache_control.ttl").String())
+	require.False(t, gjson.GetBytes(out, "tools.1.cache_control").Exists())
+}
+
+func TestApplyToolsLastCacheBreakpoint_OnlyLiteralTrueIsDeferred(t *testing.T) {
+	body := []byte(`{"tools":[{"name":"custom-true","custom":{"defer_loading":true},"cache_control":{"type":"ephemeral"}},{"name":"top-level-true","defer_loading":true,"cache_control":{"type":"ephemeral"}},{"name":"false","defer_loading":false,"cache_control":{"type":"ephemeral"}},{"name":"string","defer_loading":"true","cache_control":{"type":"ephemeral"}},{"name":"number","defer_loading":1,"cache_control":{"type":"ephemeral"}},{"name":"object","defer_loading":{},"cache_control":{"type":"ephemeral"}}]}`)
+	out := stripDeferredToolCacheControl(body)
+
+	require.False(t, gjson.GetBytes(out, "tools.0.cache_control").Exists())
+	require.False(t, gjson.GetBytes(out, "tools.1.cache_control").Exists())
+	for idx := 2; idx < 6; idx++ {
+		require.Equal(t, "ephemeral", gjson.GetBytes(out, fmt.Sprintf("tools.%d.cache_control.type", idx)).String())
+	}
 }
 
 func TestStripMessageCacheControl(t *testing.T) {

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -24,6 +25,33 @@ func TestOpenAIRequestView_ExtractsRawScalars(t *testing.T) {
 	require.Equal(t, "resp-1", view.PreviousResponseID)
 	require.Equal(t, "fast", view.ServiceTier)
 	require.Equal(t, "medium", view.ReasoningEffort)
+}
+
+func TestOpenAIRequestView_ExtractsFieldsAfterLargeInput(t *testing.T) {
+	body := []byte(`{"model":"gpt-5","input":[{"content":"` + strings.Repeat("payload", 1024) + `"}],"stream":true,"prompt_cache_key":"session-1","previous_response_id":"resp-1","service_tier":"flex","reasoning":{"effort":"high"}}`)
+
+	view := newOpenAIRequestView(body)
+
+	require.Equal(t, "gpt-5", view.Model)
+	require.True(t, view.Stream)
+	require.Equal(t, "session-1", view.PromptCacheKey)
+	require.Equal(t, "resp-1", view.PreviousResponseID)
+	require.Equal(t, "flex", view.ServiceTier)
+	require.Equal(t, "high", view.ReasoningEffort)
+}
+
+func TestOpenAIRequestView_KeepsFirstDuplicateField(t *testing.T) {
+	view := newOpenAIRequestView([]byte(`{"model":"gpt-5","model":"gpt-5.1","reasoning":{"effort":"low"},"reasoning":{"effort":"high"}}`))
+
+	require.Equal(t, "gpt-5", view.Model)
+	require.Equal(t, "low", view.ReasoningEffort)
+}
+
+func TestOpenAIRequestView_KeepsLenientPrefixExtraction(t *testing.T) {
+	view := newOpenAIRequestView([]byte(`{"model":"gpt-5","stream":true,"input":[`))
+
+	require.Equal(t, "gpt-5", view.Model)
+	require.True(t, view.Stream)
 }
 
 func TestOpenAIRequestView_DecodeKeepsFullMapBehavior(t *testing.T) {
@@ -111,7 +139,9 @@ func TestOpenAIGatewayService_Forward_HTTPPatchPathKeepsLargeInputRaw(t *testing
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotNil(t, upstream.lastReq)
-	require.JSONEq(t, `{"model":"gpt-5","stream":false,"reasoning":{"effort":"none"},"instructions":"You are a helpful coding assistant.","input":[{"type":"message","content":[{"type":"input_text","text":"hi","nonce":9007199254740993}]}]}`, string(upstream.lastBody))
+	encodedInstructions, _ := json.Marshal(defaultCodexSynthInstructions("gpt-5"))
+	expectedBody := fmt.Sprintf(`{"model":"gpt-5","stream":false,"reasoning":{"effort":"none"},"instructions":%s,"input":[{"type":"message","content":[{"type":"input_text","text":"hi","nonce":9007199254740993}]}]}`, string(encodedInstructions))
+	require.JSONEq(t, expectedBody, string(upstream.lastBody))
 	require.Equal(t, "9007199254740993", gjson.GetBytes(upstream.lastBody, "input.0.content.0.nonce").Raw)
 }
 
@@ -151,6 +181,49 @@ func TestOpenAIGatewayService_Forward_DecodedMutationKeepsLaterFieldDeletes(t *t
 	require.False(t, gjson.GetBytes(upstream.lastBody, "max_completion_tokens").Exists())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "tools.0.format").Exists())
 	require.Equal(t, "png", gjson.GetBytes(upstream.lastBody, "tools.0.output_format").String())
+}
+
+func TestOpenAIGatewayService_Forward_NormalizesMaxTokensAndStripsPromptCacheOptions(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	runForward := func(t *testing.T, body []byte) []byte {
+		t.Helper()
+		upstream := &httpUpstreamRecorder{resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"usage":{"input_tokens":1,"output_tokens":2}}`)),
+		}}
+		cfg := &config.Config{}
+		cfg.Security.URLAllowlist.Enabled = false
+		svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream}
+		account := &Account{
+			ID: 4, Name: "openai-apikey", Platform: PlatformOpenAI,
+			Type: AccountTypeAPIKey, Concurrency: 1,
+			Credentials: map[string]any{"api_key": "sk-test", "base_url": "https://example.com"},
+			Extra:       map[string]any{"openai_responses_supported": true},
+		}
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+		SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+
+		result, err := svc.Forward(context.Background(), c, account, body)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		return upstream.lastBody
+	}
+
+	t.Run("normalizes max_tokens and strips prompt_cache_options", func(t *testing.T) {
+		out := runForward(t, []byte(`{"model":"gpt-5.4","stream":false,"max_tokens":256,"prompt_cache_options":{"enabled":true},"input":[{"type":"message","content":"hi"}]}`))
+		require.Equal(t, int64(256), gjson.GetBytes(out, "max_output_tokens").Int())
+		require.False(t, gjson.GetBytes(out, "max_tokens").Exists())
+		require.False(t, gjson.GetBytes(out, "prompt_cache_options").Exists())
+	})
+
+	t.Run("keeps explicit max_output_tokens", func(t *testing.T) {
+		out := runForward(t, []byte(`{"model":"gpt-5.4","stream":false,"max_tokens":256,"max_output_tokens":512,"input":[{"type":"message","content":"hi"}]}`))
+		require.Equal(t, int64(512), gjson.GetBytes(out, "max_output_tokens").Int())
+		require.False(t, gjson.GetBytes(out, "max_tokens").Exists())
+	})
 }
 
 func TestOpenAIGatewayService_Forward_MappedImageModelUsesImageGate(t *testing.T) {
@@ -616,7 +689,7 @@ func TestOpenAIGatewayService_Forward_CodexBridgeInjectionSetsImageBilling(t *te
 	require.Equal(t, "gpt-image-2", result.BillingModel)
 }
 
-func TestOpenAIGatewayService_Forward_HTTPDeletesPreviousResponseIDWhenPresent(t *testing.T) {
+func TestOpenAIGatewayService_Forward_HTTPPreservesPreviousResponseIDForAPIKey(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{}
 	cfg.Security.URLAllowlist.Enabled = false
@@ -653,7 +726,7 @@ func TestOpenAIGatewayService_Forward_HTTPDeletesPreviousResponseIDWhenPresent(t
 		result, err := svc.Forward(context.Background(), c, account, body)
 		require.NoError(t, err)
 		require.NotNil(t, result)
-		require.False(t, gjson.GetBytes(upstream.lastBody, "previous_response_id").Exists())
+		require.True(t, gjson.GetBytes(upstream.lastBody, "previous_response_id").Exists())
 	}
 }
 
@@ -817,9 +890,16 @@ func TestExtractOpenAIReasoningEffortFromBody(t *testing.T) {
 			wantValue: "xhigh",
 		},
 		{
-			name:      "DeepSeek max 归一化为 xhigh",
+			name:      "DeepSeek V4 保留 max",
 			body:      []byte(`{"reasoning_effort":"max"}`),
 			model:     "deepseek-v4-pro",
+			wantNil:   false,
+			wantValue: "max",
+		},
+		{
+			name:      "旧模型仍将 max 归一化为 xhigh",
+			body:      []byte(`{"reasoning_effort":"max"}`),
+			model:     "gpt-5.5",
 			wantNil:   false,
 			wantValue: "xhigh",
 		},

@@ -652,45 +652,6 @@ func (h *AuthHandler) getLinuxDoOAuthConfig(ctx context.Context) (config.LinuxDo
 	return h.cfg.LinuxDo, nil
 }
 
-func (h *AuthHandler) ensureLinuxDoRuntimeIdentityBinding(
-	ctx context.Context,
-	userID int64,
-	identity service.PendingAuthIdentityKey,
-	upstreamClaims map[string]any,
-) error {
-	client := h.entClient()
-	if client == nil {
-		return infraerrors.ServiceUnavailable("PENDING_AUTH_NOT_READY", "pending auth service is not ready")
-	}
-
-	tx, err := client.Tx(ctx)
-	if err != nil {
-		return infraerrors.InternalServer("AUTH_IDENTITY_BIND_FAILED", "failed to begin linuxdo identity repair transaction").WithCause(err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	if err := applyPendingOAuthBindingTx(
-		dbent.NewTxContext(ctx, tx),
-		tx,
-		h.authService,
-		h.userService,
-		&dbent.PendingAuthSession{
-			Intent:                 oauthIntentLogin,
-			ProviderType:           strings.TrimSpace(identity.ProviderType),
-			ProviderKey:            strings.TrimSpace(identity.ProviderKey),
-			ProviderSubject:        strings.TrimSpace(identity.ProviderSubject),
-			UpstreamIdentityClaims: cloneOAuthMetadata(upstreamClaims),
-		},
-		nil,
-		&userID,
-		true,
-		false,
-	); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
 func linuxDoExchangeCode(
 	ctx context.Context,
 	cfg config.LinuxDoConnectConfig,

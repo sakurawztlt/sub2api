@@ -2677,8 +2677,23 @@ type oauthPendingFlowRedeemCodeRepo struct {
 	client *dbent.Client
 }
 
-func (r *oauthPendingFlowRedeemCodeRepo) Create(context.Context, *service.RedeemCode) error {
-	panic("unexpected Create call")
+func (r *oauthPendingFlowRedeemCodeRepo) Create(ctx context.Context, code *service.RedeemCode) error {
+	created, err := r.client.RedeemCode.Create().
+		SetCode(code.Code).
+		SetType(code.Type).
+		SetValue(code.Value).
+		SetStatus(code.Status).
+		SetNotes(code.Notes).
+		SetValidityDays(code.ValidityDays).
+		SetNillableUsedBy(code.UsedBy).
+		SetNillableUsedAt(code.UsedAt).
+		SetNillableGroupID(code.GroupID).
+		Save(ctx)
+	if err == nil {
+		code.ID = created.ID
+		code.CreatedAt = created.CreatedAt
+	}
+	return err
 }
 
 func (r *oauthPendingFlowRedeemCodeRepo) CreateBatch(context.Context, []service.RedeemCode) error {
@@ -3103,6 +3118,10 @@ func (r *oauthPendingFlowUserRepo) BatchSetConcurrency(context.Context, []int64,
 
 func (r *oauthPendingFlowUserRepo) BatchAddConcurrency(context.Context, []int64, int) (int, error) {
 	panic("unexpected BatchAddConcurrency call")
+}
+
+func (r *oauthPendingFlowUserRepo) BatchUpdateLimits(context.Context, []int64, *int, *int) (int, error) {
+	panic("unexpected BatchUpdateLimits call")
 }
 
 func (r *oauthPendingFlowUserRepo) GetLatestUsedAtByUserIDs(context.Context, []int64) (map[int64]*time.Time, error) {

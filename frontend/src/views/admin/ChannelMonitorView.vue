@@ -78,6 +78,10 @@
             <span class="inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium" :class="providerBadgeClass(row.provider)">
               {{ providerLabel(row.provider) }}
             </span>
+            <!-- 三种检测模式并列展示，quota 系配额数据源与纯探活一眼可分 -->
+            <span class="ml-1 inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium" :class="checkModeBadgeClass(row.check_mode)">
+              {{ checkModeLabel(row.check_mode) }}
+            </span>
           </template>
 
           <template #cell-primary_model="{ row }">
@@ -100,7 +104,9 @@
             <MonitorActionsCell
               :row="row"
               :running="runningId === row.id"
+              :duplicating="duplicatingIds.has(row.id)"
               @run="handleRunNow"
+              @duplicate="handleDuplicate"
               @edit="openEditDialog"
               @delete="handleDelete"
             />
@@ -202,6 +208,8 @@ const adminMonitorTab = ref<'v2' | 'legacy'>(isChannelMonitorV1Mode() ? 'legacy'
 const {
   providerLabel,
   providerBadgeClass,
+  checkModeLabel,
+  checkModeBadgeClass,
   formatLatency,
   formatAvailability,
 } = useChannelMonitorFormat()
@@ -221,6 +229,7 @@ const showDeleteDialog = ref(false)
 const deleting = ref<ChannelMonitor | null>(null)
 const showRunResult = ref(false)
 const runResults = ref<CheckResult[]>([])
+const duplicatingIds = reactive(new Set<number>())
 
 let abortController: AbortController | null = null
 let searchTimeout: ReturnType<typeof setTimeout> | null = null
@@ -333,6 +342,25 @@ async function handleRunNow(row: ChannelMonitor) {
     appStore.showError(extractApiErrorMessage(err, t('admin.channelMonitor.runFailed')))
   } finally {
     runningId.value = null
+  }
+}
+
+async function handleDuplicate(row: ChannelMonitor) {
+  if (row.api_key_decrypt_failed) {
+    appStore.showError(t('admin.channelMonitor.duplicateKeyUnavailable'))
+    return
+  }
+  if (duplicatingIds.has(row.id)) return
+
+  duplicatingIds.add(row.id)
+  try {
+    const duplicate = await adminAPI.channelMonitor.duplicate(row.id)
+    appStore.showSuccess(t('admin.channelMonitor.duplicateSuccess', { name: duplicate.name }))
+    await reload()
+  } catch (err: unknown) {
+    appStore.showError(extractApiErrorMessage(err, t('admin.channelMonitor.duplicateFailed')))
+  } finally {
+    duplicatingIds.delete(row.id)
   }
 }
 

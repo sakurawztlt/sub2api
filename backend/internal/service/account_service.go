@@ -62,6 +62,13 @@ type AccountRepository interface {
 	ListSchedulableByGroupIDAndPlatforms(ctx context.Context, groupID int64, platforms []string) ([]Account, error)
 	ListSchedulableUngroupedByPlatform(ctx context.Context, platform string) ([]Account, error)
 	ListSchedulableUngroupedByPlatforms(ctx context.Context, platforms []string) ([]Account, error)
+	// ListModelAvailabilityCandidates returns accounts enabled by persistent
+	// configuration (active + schedulable) for model-support diagnosis. It
+	// deliberately ignores transient runtime state such as rate-limit,
+	// overload, temporary-unschedulable, and expiry windows. When groupID is
+	// nil, includeGrouped controls whether all matching accounts or only
+	// ungrouped accounts are returned.
+	ListModelAvailabilityCandidates(ctx context.Context, groupID *int64, platforms []string, includeGrouped bool) ([]Account, error)
 
 	SetRateLimited(ctx context.Context, id int64, resetAt time.Time) error
 	SetModelRateLimit(ctx context.Context, id int64, scope string, resetAt time.Time, reason ...string) error
@@ -84,6 +91,8 @@ type AccountRepository interface {
 	// RevertProxyFallback 将账号的 proxy_id 切回 proxy_fallback_origin_id，并清空 origin 字段。
 	// 仅当 proxy_fallback_origin_id IS NOT NULL 时更新，否则视为账号不存在（返回 ErrAccountNotFound）。
 	RevertProxyFallback(ctx context.Context, accountID int64) error
+	// ListShadowsByParent 返回指定父账号的 spark 影子账号。
+	ListShadowsByParent(ctx context.Context, parentID int64) ([]*Account, error)
 }
 
 // AccountBillingSettingsRepository applies an admin edit without overwriting a
@@ -97,6 +106,12 @@ type AccountBillingSettingsRepository interface {
 		rateSyncEnabled *bool,
 		rateMultiplier *float64,
 	) error
+}
+
+// AccountDuplicateRepository atomically creates an account and preserves the
+// exact priority of each copied group binding.
+type AccountDuplicateRepository interface {
+	CreateWithAccountGroups(ctx context.Context, account *Account, groups []AccountGroup) error
 }
 
 // AccountBulkUpdate describes the fields that can be updated in a bulk operation.
@@ -113,6 +128,9 @@ type AccountBulkUpdate struct {
 	Credentials    map[string]any
 	Extra          map[string]any
 	ProbeEnabled   *bool
+	// EnsureCodexFingerprintSeed asks the repository to atomically preserve an
+	// existing valid Codex fingerprint seed or create one for eligible rows.
+	EnsureCodexFingerprintSeed bool
 }
 
 // CreateAccountRequest 创建账号请求
@@ -180,7 +198,7 @@ func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (
 		Platform:    req.Platform,
 		Type:        req.Type,
 		Credentials: SanitizeStoredCredentials(req.Platform, req.Credentials),
-		Extra:       cloneWithoutOllamaCloudUsageManagedExtra(req.Extra),
+		Extra:       prepareCodexFingerprintExtraForCreate(req.Platform, req.Type, cloneWithoutOllamaCloudUsageManagedExtra(req.Extra)),
 		ProxyID:     req.ProxyID,
 		Concurrency: req.Concurrency,
 		Priority:    req.Priority,
@@ -204,7 +222,7 @@ func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (
 			if err != nil {
 				return nil, err
 			}
-			if g.RequireOAuthOnly && (g.Platform == PlatformOpenAI || g.Platform == PlatformAntigravity || g.Platform == PlatformAnthropic || g.Platform == PlatformGemini) {
+			if g.RequireOAuthOnly && (g.Platform == PlatformOpenAI || g.Platform == PlatformAntigravity || g.Platform == PlatformAnthropic || g.Platform == PlatformGemini || g.Platform == PlatformGrok) {
 				return nil, fmt.Errorf("分组 [%s] 仅允许 OAuth 账号，apikey 类型账号无法加入", g.Name)
 			}
 		}
@@ -276,7 +294,9 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 	}
 
 	if req.Extra != nil {
-		account.Extra = cloneWithoutOllamaCloudUsageManagedExtra(*req.Extra)
+		account.Extra = prepareCodexFingerprintExtraForUpdate(account, cloneWithoutOllamaCloudUsageManagedExtra(*req.Extra))
+	} else {
+		account.Extra = prepareCodexFingerprintExtraForUpdate(account, account.Extra)
 	}
 
 	if req.ProxyID != nil {
@@ -320,7 +340,7 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 			if err != nil {
 				return nil, err
 			}
-			if g.RequireOAuthOnly && (g.Platform == PlatformOpenAI || g.Platform == PlatformAntigravity || g.Platform == PlatformAnthropic || g.Platform == PlatformGemini) {
+			if g.RequireOAuthOnly && (g.Platform == PlatformOpenAI || g.Platform == PlatformAntigravity || g.Platform == PlatformAnthropic || g.Platform == PlatformGemini || g.Platform == PlatformGrok) {
 				return nil, fmt.Errorf("分组 [%s] 仅允许 OAuth 账号，apikey 类型账号无法加入", g.Name)
 			}
 		}
@@ -442,6 +462,12 @@ func (s *AccountService) TestCredentials(ctx context.Context, id int64) error {
 		return nil
 	case PlatformGemini:
 		// TODO: 测试Gemini API凭证
+		return nil
+	case PlatformGrok:
+		// Grok credentials are validated via token exchange and request-path probes.
+		return nil
+	case PlatformKimi, PlatformZhipu, PlatformDeepseek:
+		// CN OpenAI-compatible credentials are validated by balance/quota probes and forwarding.
 		return nil
 	default:
 		return fmt.Errorf("unsupported platform: %s", account.Platform)

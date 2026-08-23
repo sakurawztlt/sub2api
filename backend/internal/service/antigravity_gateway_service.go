@@ -176,7 +176,7 @@ type antigravityRetryLoopResult struct {
 // daily/sandbox 端点只用于内部联调，需显式设置
 // GATEWAY_ANTIGRAVITY_FORWARD_BASE_URL=daily（或 sandbox）才启用。不能默认
 // 走 daily，否则生产 OAuth token 会被 sandbox 拒绝，表现为网关 401/502。
-func resolveAntigravityForwardBaseURL() string {
+func resolveAntigravityForwardBaseURL(accounts ...*Account) string {
 	baseURLs := antigravity.BaseURLs
 	if len(baseURLs) == 0 {
 		return ""
@@ -185,7 +185,30 @@ func resolveAntigravityForwardBaseURL() string {
 	if (mode == "daily" || mode == "sandbox") && len(baseURLs) > 1 {
 		return baseURLs[1]
 	}
+	var account *Account
+	if len(accounts) > 0 {
+		account = accounts[0]
+	}
+	if mode == "" && accountHasAntigravityPaidTier(account) && len(baseURLs) > 1 {
+		return baseURLs[1]
+	}
 	return baseURLs[0]
+}
+
+func accountHasAntigravityPaidTier(account *Account) bool {
+	if account == nil || account.Credentials == nil {
+		return false
+	}
+	planType, ok := account.Credentials["plan_type"].(string)
+	if !ok {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(planType)) {
+	case "pro", "ultra":
+		return true
+	default:
+		return false
+	}
 }
 
 // smartRetryAction 智能重试的处理结果
@@ -606,7 +629,7 @@ func (s *AntigravityGatewayService) antigravityRetryLoop(p antigravityRetryLoopP
 		}
 	}
 
-	baseURL := resolveAntigravityForwardBaseURL()
+	baseURL := resolveAntigravityForwardBaseURL(p.account)
 	if baseURL == "" {
 		return nil, errors.New("no antigravity forward base url configured")
 	}

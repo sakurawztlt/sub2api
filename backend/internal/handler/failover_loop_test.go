@@ -29,6 +29,89 @@ func (m *mockTempUnscheduler) TempUnscheduleRetryableError(_ context.Context, ac
 	m.calls = append(m.calls, tempUnscheduleCall{accountID: accountID, failoverErr: failoverErr})
 }
 
+func TestSameAccountRetryDelayFor(t *testing.T) {
+	capacityErr := &service.UpstreamFailoverError{RequestScopedTransient: true}
+
+	for _, tc := range []struct {
+		name       string
+		retryCount int
+		want       time.Duration
+	}{
+		{name: "first retry", retryCount: 1, want: 500 * time.Millisecond},
+		{name: "second retry", retryCount: 2, want: time.Second},
+		{name: "third retry", retryCount: 3, want: 2 * time.Second},
+		{name: "fourth retry", retryCount: 4, want: 4 * time.Second},
+		{name: "fifth retry", retryCount: 5, want: 8 * time.Second},
+		{name: "capped retry", retryCount: 10, want: 8 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, sameAccountRetryDelayFor(capacityErr, tc.retryCount))
+		})
+	}
+
+	t.Run("non request scoped errors keep fixed delay", func(t *testing.T) {
+		require.Equal(t, 500*time.Millisecond, sameAccountRetryDelayFor(&service.UpstreamFailoverError{}, 10))
+	})
+
+	t.Run("nil error keeps fixed delay", func(t *testing.T) {
+		require.Equal(t, 500*time.Millisecond, sameAccountRetryDelayFor(nil, 10))
+	})
+
+	t.Run("explicit oauth delay wins", func(t *testing.T) {
+		err := &service.UpstreamFailoverError{SameAccountRetryDelay: 3 * time.Second}
+		require.Equal(t, 3*time.Second, sameAccountRetryDelayFor(err, 1))
+	})
+}
+
+func TestSameAccountRetryAllowedUsesDeadlineInsteadOfPoolCount(t *testing.T) {
+	err := &service.UpstreamFailoverError{
+		RetryableOnSameAccount:   true,
+		SameAccountRetryDeadline: time.Now().Add(time.Minute),
+	}
+	require.True(t, sameAccountRetryAllowed(err, 100, 0))
+	require.True(t, sameAccountRetryAllowed(err, 100, maxSameAccountRetries))
+	err.SameAccountRetryDeadline = time.Now().Add(-time.Second)
+	require.False(t, sameAccountRetryAllowed(err, 0, 100))
+}
+
+func TestSameAccountRetryAllowedRequiresOptInAndDefaultsToCountLimit(t *testing.T) {
+	err := &service.UpstreamFailoverError{SameAccountRetryDeadline: time.Now().Add(time.Minute)}
+	require.False(t, sameAccountRetryAllowed(err, 0, maxSameAccountRetries))
+
+	err.RetryableOnSameAccount = true
+	err.SameAccountRetryDeadline = time.Time{}
+	require.True(t, sameAccountRetryAllowed(err, maxSameAccountRetries-1, maxSameAccountRetries))
+	require.False(t, sameAccountRetryAllowed(err, maxSameAccountRetries, maxSameAccountRetries))
+}
+
+func TestSameAccountRetryAllowedHonorsErrorMaxBeforeDeadline(t *testing.T) {
+	err := &service.UpstreamFailoverError{
+		RetryableOnSameAccount:   true,
+		SameAccountRetryDeadline: time.Now().Add(time.Minute),
+		SameAccountRetryMax:      1,
+	}
+	require.True(t, sameAccountRetryAllowed(err, 0, maxSameAccountRetries))
+	require.False(t, sameAccountRetryAllowed(err, 1, maxSameAccountRetries))
+	require.False(t, sameAccountRetryAllowed(err, 0, 0), "an explicit zero retry budget remains disabled")
+}
+
+func TestSameAccountRetryDeadlineAllows(t *testing.T) {
+	require.True(t, sameAccountRetryDeadlineAllows(&service.UpstreamFailoverError{}))
+	require.True(t, sameAccountRetryDeadlineAllows(&service.UpstreamFailoverError{
+		SameAccountRetryDeadline: time.Now().Add(time.Second),
+	}))
+	require.False(t, sameAccountRetryDeadlineAllows(&service.UpstreamFailoverError{
+		SameAccountRetryDeadline: time.Now().Add(-time.Second),
+	}))
+}
+
+func TestEffectiveSameAccountRetryLimitHonorsErrorCapAndDisabledAccount(t *testing.T) {
+	account := &service.Account{Type: service.AccountTypeAPIKey, Credentials: map[string]any{"pool_mode": true, "pool_mode_retry_count": float64(3)}}
+	require.Equal(t, 1, effectiveSameAccountRetryLimit(&service.UpstreamFailoverError{SameAccountRetryMax: 1}, account))
+	account.Credentials["pool_mode_retry_count"] = float64(0)
+	require.Equal(t, 0, effectiveSameAccountRetryLimit(&service.UpstreamFailoverError{SameAccountRetryMax: 1}, account))
+}
+
 // ---------------------------------------------------------------------------
 // Helper
 // ---------------------------------------------------------------------------
@@ -864,4 +947,21 @@ func TestHandleFailoverError_PerReasonCap_EmptyReasonNotCapped(t *testing.T) {
 	action := fs.HandleFailoverError(context.Background(), mock, 100, "openai", err)
 	require.Equal(t, FailoverContinue, action,
 		"空 reason 走 maxSwitches 默认 (不应 exhausted)")
+}
+
+func TestFailoverStateProfitVetoIsBoundedAndSurvivesSelectionReset(t *testing.T) {
+	state := NewFailoverState(10, false)
+	for i := 0; i < maxProfitVetoAttempts-1; i++ {
+		require.Equal(t, FailoverContinue, state.RecordProfitVeto(int64(i+1)))
+	}
+	require.Equal(t, maxProfitVetoAttempts-1, state.ProfitVetoCount())
+	state.LastFailoverErr = &service.UpstreamFailoverError{StatusCode: http.StatusServiceUnavailable}
+	start := time.Now()
+	require.Equal(t, FailoverExhausted, state.HandleSelectionExhausted(context.Background()))
+	require.Less(t, time.Since(start), 500*time.Millisecond, "profit-only exclusions must not enter the 503 backoff loop")
+
+	require.Equal(t, FailoverExhausted, state.RecordProfitVeto(99))
+	require.Equal(t, maxProfitVetoAttempts, state.ProfitVetoCount())
+	_, excluded := state.FailedAccountIDs[99]
+	require.True(t, excluded)
 }

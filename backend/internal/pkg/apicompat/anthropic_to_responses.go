@@ -804,9 +804,9 @@ func extractAnthropicThinkingFromBlocks(blocks []AnthropicContentBlock) string {
 		}
 		if b.Thinking != "" {
 			if buf.Len() > 0 {
-				buf.WriteString("\n\n")
+				_, _ = buf.WriteString("\n\n")
 			}
-			buf.WriteString(b.Thinking)
+			_, _ = buf.WriteString(b.Thinking)
 		}
 	}
 	return buf.String()
@@ -832,9 +832,9 @@ func sanitizeOpenAIName(name string) string {
 			break
 		}
 		if isAllowedOpenAINameRune(r) {
-			b.WriteRune(r)
+			_, _ = b.WriteRune(r)
 		} else {
-			b.WriteByte('_')
+			_ = b.WriteByte('_')
 		}
 	}
 
@@ -974,7 +974,7 @@ func normalizeBase64Payload(data string) string {
 		case ' ', '\n', '\r', '\t':
 			continue
 		default:
-			sb.WriteRune(r)
+			_, _ = sb.WriteRune(r)
 		}
 	}
 	return sb.String()
@@ -1314,16 +1314,16 @@ func convertAnthropicDocumentBlock(b AnthropicContentBlock) []ResponsesContentPa
 // both empty.
 func documentHeader(title, context string) string {
 	var sb strings.Builder
-	sb.WriteString("[Document")
+	_, _ = sb.WriteString("[Document")
 	if title != "" {
-		sb.WriteString(": ")
-		sb.WriteString(title)
+		_, _ = sb.WriteString(": ")
+		_, _ = sb.WriteString(title)
 	}
 	if context != "" {
-		sb.WriteString(" — ")
-		sb.WriteString(context)
+		_, _ = sb.WriteString(" — ")
+		_, _ = sb.WriteString(context)
 	}
-	sb.WriteString("]\n\n")
+	_, _ = sb.WriteString("]\n\n")
 	return sb.String()
 }
 

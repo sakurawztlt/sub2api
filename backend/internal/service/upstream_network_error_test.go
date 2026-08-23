@@ -104,8 +104,8 @@ func TestIsUpstreamNetworkError_NoFalsePositives(t *testing.T) {
 	notNetwork := []string{
 		"openai: invalid_request_error: max_tokens too high",
 		"upstream returned 429 rate_limit",
-		"timeout while validating prompt cache key",                   // 单词 timeout 不该匹配
-		"context deadline exceeded by 5s waiting for a response",      // 描述性, 不是真 ctx.DeadlineExceeded
+		"timeout while validating prompt cache key",              // 单词 timeout 不该匹配
+		"context deadline exceeded by 5s waiting for a response", // 描述性, 不是真 ctx.DeadlineExceeded
 		"this account is rate limited until ...",
 		"failed to parse openai response",
 	}

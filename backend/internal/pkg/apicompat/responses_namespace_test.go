@@ -6,6 +6,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func requireAnySlice(t *testing.T, value any) []any {
+	t.Helper()
+	items, ok := value.([]any)
+	require.True(t, ok)
+	return items
+}
+
+func requireAnyMap(t *testing.T, value any) map[string]any {
+	t.Helper()
+	item, ok := value.(map[string]any)
+	require.True(t, ok)
+	return item
+}
+
 func TestFlattenResponsesNamespaces_RewritesDeclarationHistoryAndChoice(t *testing.T) {
 	req := map[string]any{
 		"model": "gpt-5.5",
@@ -31,20 +45,21 @@ func TestFlattenResponsesNamespaces_RewritesDeclarationHistoryAndChoice(t *testi
 	require.True(t, changed)
 	require.Equal(t, ResponsesNamespaceName{Namespace: "collaboration", Name: "spawn_agent"}, names["collaboration__spawn_agent"])
 
-	tools := req["tools"].([]any)
+	tools := requireAnySlice(t, req["tools"])
 	require.Len(t, tools, 2)
-	require.Equal(t, "plain", tools[0].(map[string]any)["name"])
-	require.Equal(t, "collaboration__spawn_agent", tools[1].(map[string]any)["name"])
-	require.Equal(t, "spawn", tools[1].(map[string]any)["description"])
+	require.Equal(t, "plain", requireAnyMap(t, tools[0])["name"])
+	require.Equal(t, "collaboration__spawn_agent", requireAnyMap(t, tools[1])["name"])
+	require.Equal(t, "spawn", requireAnyMap(t, tools[1])["description"])
 
-	choice := req["tool_choice"].(map[string]any)
+	choice := requireAnyMap(t, req["tool_choice"])
 	require.Equal(t, "collaboration__spawn_agent", choice["name"])
 	require.NotContains(t, choice, "namespace")
 
-	call := req["input"].([]any)[0].(map[string]any)
+	input := requireAnySlice(t, req["input"])
+	call := requireAnyMap(t, input[0])
 	require.Equal(t, "collaboration__spawn_agent", call["name"])
 	require.NotContains(t, call, "namespace")
-	message := req["input"].([]any)[1].(map[string]any)
+	message := requireAnyMap(t, input[1])
 	require.Equal(t, "spawn_agent", message["name"])
 	require.Equal(t, "collaboration", message["namespace"])
 	require.Equal(t, "gpt-5.5", req["model"])
@@ -96,11 +111,11 @@ func TestFlattenResponsesNamespacesExcept_PreservesBuiltInNamespaceAndChoice(t *
 	require.NoError(t, err)
 	require.True(t, changed)
 	require.Contains(t, names, "collaboration__spawn_agent")
-	tools := req["tools"].([]any)
-	require.Equal(t, "namespace", tools[0].(map[string]any)["type"])
-	require.Equal(t, "image_gen", tools[0].(map[string]any)["name"])
-	require.Equal(t, "function", tools[1].(map[string]any)["type"])
-	require.Equal(t, "collaboration__spawn_agent", tools[1].(map[string]any)["name"])
+	tools := requireAnySlice(t, req["tools"])
+	require.Equal(t, "namespace", requireAnyMap(t, tools[0])["type"])
+	require.Equal(t, "image_gen", requireAnyMap(t, tools[0])["name"])
+	require.Equal(t, "function", requireAnyMap(t, tools[1])["type"])
+	require.Equal(t, "collaboration__spawn_agent", requireAnyMap(t, tools[1])["name"])
 	require.Equal(t, map[string]any{"type": "namespace", "name": "image_gen"}, req["tool_choice"])
 }
 

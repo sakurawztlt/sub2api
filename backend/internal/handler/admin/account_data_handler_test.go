@@ -18,10 +18,11 @@ type dataResponse struct {
 }
 
 type dataPayload struct {
-	Type     string        `json:"type"`
-	Version  int           `json:"version"`
-	Proxies  []dataProxy   `json:"proxies"`
-	Accounts []dataAccount `json:"accounts"`
+	Type           string        `json:"type"`
+	Version        int           `json:"version"`
+	Proxies        []dataProxy   `json:"proxies"`
+	Accounts       []dataAccount `json:"accounts"`
+	SkippedShadows int           `json:"skipped_shadows"`
 }
 
 type dataProxy struct {
@@ -274,4 +275,42 @@ func TestImportDataReusesProxyAndSkipsDefaultGroup(t *testing.T) {
 	require.Len(t, adminSvc.createdProxies, 0)
 	require.Len(t, adminSvc.createdAccounts, 1)
 	require.True(t, adminSvc.createdAccounts[0].SkipDefaultGroupBind)
+}
+
+func TestExportDataExcludesSparkShadow(t *testing.T) {
+	router, adminSvc := setupAccountDataRouter()
+
+	parentID := int64(21)
+	adminSvc.accounts = []service.Account{
+		{
+			ID:          parentID,
+			Name:        "mother",
+			Platform:    service.PlatformOpenAI,
+			Type:        service.AccountTypeOAuth,
+			Credentials: map[string]any{"token": "secret"},
+			Status:      service.StatusActive,
+		},
+		{
+			ID:              22,
+			Name:            "mother (Spark)",
+			Platform:        service.PlatformOpenAI,
+			Type:            service.AccountTypeOAuth,
+			Credentials:     map[string]any{}, // 影子恒空凭据
+			ParentAccountID: &parentID,        // 影子标记
+			QuotaDimension:  service.QuotaDimensionSpark,
+			Status:          service.StatusActive,
+		},
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/data?include_proxies=false", nil)
+	router.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp dataResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	require.Equal(t, 0, resp.Code)
+	require.Len(t, resp.Data.Accounts, 1, "影子应被排除,仅导出母账号")
+	require.Equal(t, "mother", resp.Data.Accounts[0].Name)
+	require.Equal(t, 1, resp.Data.SkippedShadows, "跳过的影子数量应透出")
 }

@@ -19,6 +19,71 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 )
 
+func parseSSEUsagePassthrough(data string, usage *ClaudeUsage) {
+	if usage == nil || data == "" || data == "[DONE]" {
+		return
+	}
+	parsed := gjson.Parse(data)
+	switch parsed.Get("type").String() {
+	case "message_start":
+		msgUsage := parsed.Get("message.usage")
+		if msgUsage.Exists() {
+			usage.InputTokens = int(msgUsage.Get("input_tokens").Int())
+			usage.CacheCreationInputTokens = int(msgUsage.Get("cache_creation_input_tokens").Int())
+			usage.CacheReadInputTokens = int(msgUsage.Get("cache_read_input_tokens").Int())
+			cc5m := msgUsage.Get("cache_creation.ephemeral_5m_input_tokens")
+			cc1h := msgUsage.Get("cache_creation.ephemeral_1h_input_tokens")
+			if cc5m.Exists() || cc1h.Exists() {
+				usage.CacheCreation5mTokens = int(cc5m.Int())
+				usage.CacheCreation1hTokens = int(cc1h.Int())
+			}
+		}
+	case "message_delta":
+		deltaUsage := parsed.Get("usage")
+		if deltaUsage.Exists() {
+			if v := deltaUsage.Get("input_tokens").Int(); v > 0 {
+				usage.InputTokens = int(v)
+			}
+			if v := deltaUsage.Get("output_tokens").Int(); v > 0 {
+				usage.OutputTokens = int(v)
+			}
+			if v := deltaUsage.Get("cache_creation_input_tokens").Int(); v > 0 {
+				usage.CacheCreationInputTokens = int(v)
+			}
+			if v := deltaUsage.Get("cache_read_input_tokens").Int(); v > 0 {
+				usage.CacheReadInputTokens = int(v)
+			}
+			cc5m := deltaUsage.Get("cache_creation.ephemeral_5m_input_tokens")
+			cc1h := deltaUsage.Get("cache_creation.ephemeral_1h_input_tokens")
+			if cc5m.Exists() && cc5m.Int() > 0 {
+				usage.CacheCreation5mTokens = int(cc5m.Int())
+			}
+			if cc1h.Exists() && cc1h.Int() > 0 {
+				usage.CacheCreation1hTokens = int(cc1h.Int())
+			}
+		}
+	}
+	if usage.CacheReadInputTokens == 0 {
+		if cached := parsed.Get("message.usage.cached_tokens").Int(); cached > 0 {
+			usage.CacheReadInputTokens = int(cached)
+		}
+		if cached := parsed.Get("usage.cached_tokens").Int(); usage.CacheReadInputTokens == 0 && cached > 0 {
+			usage.CacheReadInputTokens = int(cached)
+		}
+	}
+	if usage.CacheCreationInputTokens == 0 {
+		cc5m := parsed.Get("message.usage.cache_creation.ephemeral_5m_input_tokens").Int()
+		cc1h := parsed.Get("message.usage.cache_creation.ephemeral_1h_input_tokens").Int()
+		if cc5m == 0 && cc1h == 0 {
+			cc5m = parsed.Get("usage.cache_creation.ephemeral_5m_input_tokens").Int()
+			cc1h = parsed.Get("usage.cache_creation.ephemeral_1h_input_tokens").Int()
+		}
+		if total := cc5m + cc1h; total > 0 {
+			usage.CacheCreationInputTokens = int(total)
+		}
+	}
+}
+
 // handleBedrockStreamingResponse 处理 Bedrock InvokeModelWithResponseStream 的 EventStream 响应
 // Bedrock 返回 AWS EventStream 二进制格式，每个事件的 payload 中 chunk.bytes 是 base64 编码的
 // Claude SSE 事件 JSON。本方法解码后转换为标准 SSE 格式写入客户端。
@@ -139,7 +204,7 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 			sseData = transformBedrockInvocationMetrics(sseData)
 
 			// 解析 SSE 事件数据提取 usage
-			s.parseSSEUsagePassthrough(string(sseData), usage)
+			parseSSEUsagePassthrough(string(sseData), usage)
 
 			// 确定 SSE event type
 			eventType := gjson.GetBytes(sseData, "type").String()

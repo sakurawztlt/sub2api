@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
@@ -14,44 +15,261 @@ import (
 
 const (
 	grokConversationIDHeader         = "X-Grok-Conv-Id"
+	claudeCodeSessionHeader          = "X-Claude-Code-Session-Id"
 	grokClientToolCacheOptInHeader   = "X-Sub2API-Grok-Client-Tool-Cache"
 	grokFreeCacheNativeToolsJSON     = `[{"type":"web_search"},{"type":"x_search"}]`
 	grokFreeCacheDisabledToolChoice  = "none"
 	grokClientToolCacheOptInExtraKey = "grok_client_tool_cache_enabled"
+	grokStablePrefixSeedPrefix       = "compat_csp_"
 )
 
-// resolveGrokCacheIdentity derives one stable, tenant-isolated routing
-// identity for xAI's server-side prompt cache. It never exposes the client's
-// raw session identifier and fails closed without a downstream API key.
-func resolveGrokCacheIdentity(c *gin.Context, body []byte, explicitKey, upstreamModel string) string {
-	apiKeyID := getAPIKeyIDFromContext(c)
-	if apiKeyID <= 0 || isOpenAIResponsesCompactPath(c) {
+// Claude Code metadata.user_id often ends with _session_<uuid>.
+var claudeCodeSessionSuffixPattern = regexp.MustCompile(`_session_([a-f0-9-]+)$`)
+
+// extractClaudeCodeSessionID resolves the Claude Code conversation id from
+// headers or Anthropic/OpenAI-compatible payload metadata.
+func extractClaudeCodeSessionID(c *gin.Context, body []byte) string {
+	if c != nil {
+		if seed := strings.TrimSpace(c.GetHeader(claudeCodeSessionHeader)); seed != "" {
+			return seed
+		}
+	}
+	return extractClaudeCodeSessionIDFromPayload(body)
+}
+
+func extractClaudeCodeSessionIDFromPayload(body []byte) string {
+	if len(body) == 0 {
 		return ""
 	}
+	userID := strings.TrimSpace(gjson.GetBytes(body, "metadata.user_id").String())
+	if userID == "" {
+		return ""
+	}
+	if matches := claudeCodeSessionSuffixPattern.FindStringSubmatch(userID); len(matches) >= 2 {
+		return matches[1]
+	}
+	// Claude Code may embed JSON: {"session_id":"..."}
+	if len(userID) > 0 && userID[0] == '{' {
+		if sid := strings.TrimSpace(gjson.Get(userID, "session_id").String()); sid != "" {
+			return sid
+		}
+	}
+	return ""
+}
+
+// resolveGrokCacheIdentity derives one stable, tenant-isolated routing identity
+// for xAI's server-side prompt cache. The returned value is safe to expose to
+// the upstream: it never contains the client's raw session identifier.
+//
+// A valid downstream API key is required. This intentionally fails closed on
+// internal probes and incomplete request contexts instead of creating a cache
+// identity that could be shared by unrelated tenants.
+func resolveGrokCacheIdentity(c *gin.Context, body []byte, explicitKey, upstreamModel string) string {
+	apiKeyID := getAPIKeyIDFromContext(c)
+	if apiKeyID <= 0 {
+		return ""
+	}
+	// /responses/compact rejects tool_choice and does not represent a normal
+	// conversation turn. Keep both cache identity and Free-tier routing
+	// augmentation out of this path.
+	if isOpenAIResponsesCompactPath(c) {
+		return ""
+	}
+
 	model := strings.ToLower(strings.TrimSpace(upstreamModel))
 	if model == "" {
 		return ""
 	}
+
 	seed := explicitGrokCacheSeed(c, body, explicitKey)
 	if seed == "" {
-		seed = deriveOpenAIContentSessionSeed(body)
+		seed = deriveGrokStablePrefixSessionSeed(body)
+		if seed == "" {
+			// Keep the relay's established content-derived fallback, but require
+			// a user/input anchor so a model-only body cannot become one
+			// tenant-wide xAI cache identity.
+			seed = deriveGrokAnchoredContentSessionSeed(body)
+		}
 	}
 	if seed == "" {
 		return ""
 	}
-	return generateSessionUUID(fmt.Sprintf("grok-prompt-cache:v1:%d:%s:%s", apiKeyID, model, seed))
+
+	// generateSessionUUID hashes the whole seed before formatting it as a UUID.
+	// Include a versioned namespace so this identity cannot collide with other
+	// upstream session identifiers derived by sub2api.
+	isolatedSeed := fmt.Sprintf("grok-prompt-cache:v1:%d:%s:%s", apiKeyID, model, seed)
+	return generateSessionUUID(isolatedSeed)
+}
+
+const openCodeSessionAffinityHeader = "X-Session-Affinity"
+
+// explicitOpenAIHeaderSessionID mirrors the upstream explicit-header order
+// without changing the relay's shared sticky-session implementation.
+func explicitOpenAIHeaderSessionID(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	for _, header := range []string{
+		"session_id",
+		"conversation_id",
+		openCodeSessionAffinityHeader,
+		openCodeSessionIDHeader,
+		openCodeNativeSessionHeader,
+		codeBuddyConversationHeader,
+	} {
+		if seed := strings.TrimSpace(c.GetHeader(header)); seed != "" {
+			return seed
+		}
+	}
+	return ""
+}
+
+// deriveGrokAnchoredContentSessionSeed keeps the relay's content seed while
+// applying upstream's fail-closed anchor requirement to Grok cache routing.
+func deriveGrokAnchoredContentSessionSeed(body []byte) string {
+	if !hasGrokContentSessionUserAnchor(body) {
+		return ""
+	}
+	return deriveOpenAIContentSessionSeed(body)
+}
+
+func hasGrokContentSessionUserAnchor(body []byte) bool {
+	if len(body) == 0 {
+		return false
+	}
+	if messages := gjson.GetBytes(body, "messages"); messages.Exists() && messages.IsArray() {
+		anchored := false
+		messages.ForEach(func(_, message gjson.Result) bool {
+			if strings.TrimSpace(message.Get("role").String()) != "user" {
+				return true
+			}
+			anchored = hasMeaningfulGrokCacheContent(message.Get("content"))
+			return false
+		})
+		return anchored
+	}
+	input := gjson.GetBytes(body, "input")
+	if !input.Exists() {
+		return false
+	}
+	if input.Type == gjson.String {
+		return strings.TrimSpace(input.String()) != ""
+	}
+	if !input.IsArray() {
+		return false
+	}
+	anchored := false
+	input.ForEach(func(_, item gjson.Result) bool {
+		if strings.TrimSpace(item.Get("role").String()) == "user" {
+			anchored = hasMeaningfulGrokCacheContent(item.Get("content"))
+			return false
+		}
+		if strings.TrimSpace(item.Get("type").String()) == "input_text" {
+			anchored = strings.TrimSpace(item.Get("text").String()) != ""
+			return false
+		}
+		return true
+	})
+	return anchored
+}
+
+func hasMeaningfulGrokCacheContent(content gjson.Result) bool {
+	if !content.Exists() || content.Type == gjson.Null {
+		return false
+	}
+	if content.Type == gjson.String {
+		return strings.TrimSpace(content.String()) != ""
+	}
+	if !content.IsArray() {
+		normalized, ok := normalizeNonEmptyGrokCacheSeedJSON(content)
+		return ok && strings.TrimSpace(normalized) != ""
+	}
+	meaningful := false
+	content.ForEach(func(_, item gjson.Result) bool {
+		if item.Type == gjson.String {
+			meaningful = strings.TrimSpace(item.String()) != ""
+		} else if text := item.Get("text"); text.Exists() {
+			meaningful = strings.TrimSpace(text.String()) != ""
+		} else {
+			_, meaningful = normalizeNonEmptyGrokCacheSeedJSON(item)
+		}
+		return !meaningful
+	})
+	return meaningful
+}
+
+// deriveGrokStablePrefixSessionSeed follows d451's reusable-prefix contract
+// without changing the relay's shared OpenAI sticky-session implementation.
+func deriveGrokStablePrefixSessionSeed(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	hasStablePrefix := false
+	appendJSON := func(label string, value gjson.Result) {
+		normalized, ok := normalizeNonEmptyGrokCacheSeedJSON(value)
+		if !ok {
+			return
+		}
+		_, _ = b.WriteString("|")
+		_, _ = b.WriteString(label)
+		_, _ = b.WriteString("=")
+		_, _ = b.WriteString(normalized)
+		hasStablePrefix = true
+	}
+	if tools := gjson.GetBytes(body, "tools"); tools.Exists() && tools.IsArray() {
+		appendJSON("tools", tools)
+	}
+	if functions := gjson.GetBytes(body, "functions"); functions.Exists() && functions.IsArray() {
+		appendJSON("functions", functions)
+	}
+	if instructions := gjson.GetBytes(body, "instructions"); strings.TrimSpace(instructions.String()) != "" {
+		appendJSON("instructions", instructions)
+	}
+	appendSystemMessages := func(items gjson.Result) {
+		items.ForEach(func(_, item gjson.Result) bool {
+			switch strings.TrimSpace(item.Get("role").String()) {
+			case "system", "developer":
+				appendJSON(strings.TrimSpace(item.Get("role").String()), item.Get("content"))
+			}
+			return true
+		})
+	}
+	if messages := gjson.GetBytes(body, "messages"); messages.Exists() && messages.IsArray() {
+		appendSystemMessages(messages)
+	} else if input := gjson.GetBytes(body, "input"); input.Exists() && input.IsArray() {
+		appendSystemMessages(input)
+	}
+	if !hasStablePrefix {
+		return ""
+	}
+	return grokStablePrefixSeedPrefix + b.String()
+}
+
+func normalizeNonEmptyGrokCacheSeedJSON(value gjson.Result) (string, bool) {
+	if !value.Exists() || value.Type == gjson.Null {
+		return "", false
+	}
+	normalized := normalizeCompatSeedJSON(json.RawMessage(value.Raw))
+	switch normalized {
+	case "", `""`, "[]", "{}", "null":
+		return "", false
+	default:
+		return normalized, true
+	}
 }
 
 func explicitGrokCacheSeed(c *gin.Context, body []byte, explicitKey string) string {
-	seed := ""
-	if c != nil {
-		seed = strings.TrimSpace(c.GetHeader("session_id"))
-		if seed == "" {
-			seed = strings.TrimSpace(c.GetHeader("conversation_id"))
-		}
-		if seed == "" {
-			seed = strings.TrimSpace(c.GetHeader(grokConversationIDHeader))
-		}
+	// Claude Code session is the most stable multi-turn identity for
+	// /v1/messages → Grok bridges. Prefer it over generic session headers so
+	// prompt cache routing follows the gateway's existing cache affinity rules.
+	seed := extractClaudeCodeSessionID(c, body)
+	if seed == "" {
+		seed = explicitOpenAIHeaderSessionID(c)
+	}
+	if seed == "" && c != nil {
+		seed = strings.TrimSpace(c.GetHeader(grokConversationIDHeader))
 	}
 	if seed == "" && len(body) > 0 {
 		seed = strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String())
@@ -69,7 +287,8 @@ func explicitGrokCacheSeed(c *gin.Context, body []byte, explicitKey string) stri
 }
 
 // grokPreviousResponseSessionSeed accepts only Responses ids so message ids
-// and unknown values cannot pin sticky routing or prompt-cache identity.
+// and unknown values cannot pin sticky routing or prompt-cache identity. The
+// local scheduling monolith shares this helper with the cache path.
 func grokPreviousResponseSessionSeed(body []byte) string {
 	id := strings.TrimSpace(gjson.GetBytes(body, "previous_response_id").String())
 	if id == "" || ClassifyOpenAIPreviousResponseIDKind(id) != OpenAIPreviousResponseIDKindResponseID {
@@ -82,6 +301,11 @@ func isGrokRequestContext(c *gin.Context) bool {
 	if c == nil {
 		return false
 	}
+	if c.Request != nil {
+		if platform, ok := ResolvedTargetPlatformFromContext(c.Request.Context()); ok {
+			return platform == PlatformGrok
+		}
+	}
 	v, exists := c.Get("api_key")
 	if !exists {
 		return false
@@ -90,10 +314,15 @@ func isGrokRequestContext(c *gin.Context) bool {
 	return ok && apiKey != nil && apiKey.Group != nil && apiKey.Group.Platform == PlatformGrok
 }
 
-// applyGrokResponsesCacheIdentity writes the tenant-isolated cache identity
-// into a Responses request. Free OAuth requests without client tools also get
-// the native-tool routing shape with tool_choice=none; explicit client intent
-// is never overwritten.
+// applyGrokResponsesCacheIdentity writes the cache routing identity into an
+// xAI Responses request. Existing client values are deliberately replaced by
+// the tenant-isolated value to prevent collisions on shared OAuth accounts.
+//
+// Free OAuth requests without native search tools are routed by xAI to the
+// non-cacheable build-free model. For otherwise tool-free requests, add the
+// native tools with tool_choice=none: this selects the cache-capable tier
+// without allowing an actual search. Explicit client function tools are handled by
+// applyGrokFreeMessagesFunctionToolCacheRoute (Messages bridge and native Responses).
 func applyGrokResponsesCacheIdentity(body, intentSourceBody []byte, identity string, injectFreeTierTools bool) ([]byte, error) {
 	identity = strings.TrimSpace(identity)
 	if identity == "" {
@@ -109,7 +338,10 @@ func applyGrokResponsesCacheIdentity(body, intentSourceBody []byte, identity str
 	if !injectFreeTierTools {
 		return out, nil
 	}
-	if gjson.GetBytes(intentSourceBody, "tools").Exists() || gjson.GetBytes(intentSourceBody, "tool_choice").Exists() {
+	// Inspect the pre-sanitization source. patchGrokResponsesBody may remove an
+	// unsupported client tool and its tool_choice; that must not turn an
+	// explicit client tool intent into an eligible native-tool request.
+	if hasGrokResponsesToolIntent(intentSourceBody) {
 		return out, nil
 	}
 	out, err = sjson.SetRawBytes(out, "tools", []byte(grokFreeCacheNativeToolsJSON))
@@ -249,6 +481,11 @@ func isKnownGrokFreeAccount(account *Account) bool {
 	if account == nil || !account.IsGrokOAuth() {
 		return false
 	}
+	// Live access-token JWT wins over stale billing/credential snapshots
+	// so a downgrade to free is visible as soon as the AT is refreshed.
+	if jwtTier := xai.SubscriptionTierFromJWT(account.GetCredential("access_token")); jwtTier != "" {
+		return isGrokFreeSubscriptionTier(jwtTier)
+	}
 	freeSignal := false
 	paidSignal := false
 	inferredFreeSignal := false
@@ -298,8 +535,8 @@ func isKnownGrokFreeAccount(account *Account) bool {
 }
 
 func isGrokFreeSubscriptionTier(tier string) bool {
-	switch strings.ToLower(strings.TrimSpace(tier)) {
-	case "free", "grok-free", "grok_free", "free-tier", "free_tier", "basic", "grok-basic", "grok_basic":
+	switch xai.NormalizeSubscriptionTier(tier) {
+	case "free", "x_basic":
 		return true
 	default:
 		return false
@@ -351,14 +588,6 @@ func isGrokFreeCacheFunctionToolIntent(tools, toolChoice gjson.Result) bool {
 	default:
 		return false
 	}
-}
-
-func appendMissingGrokFreeCacheNativeTools(body []byte) ([]byte, error) {
-	return appendGrokFreeCacheNativeTools(body, false)
-}
-
-func appendGrokFreeCacheNativeTools(body []byte, allowPureClientTools bool) ([]byte, error) {
-	return appendGrokFreeCacheNativeToolsWithPolicy(body, allowPureClientTools, true)
 }
 
 func appendGrokFreeCacheNativeToolsWithPolicy(body []byte, allowPureClientTools, allowFunctionSearch bool) ([]byte, error) {
@@ -472,6 +701,8 @@ func applyGrokCacheHeaders(headers http.Header, identity string) {
 	headers.Set(grokConversationIDHeader, identity)
 }
 
+// stripGrokChatPromptCacheKey removes the Responses-only body field after it
+// has been used as an identity seed. Chat Completions routes cache by header.
 func stripGrokChatPromptCacheKey(body []byte) ([]byte, error) {
 	if !gjson.GetBytes(body, "prompt_cache_key").Exists() {
 		return body, nil

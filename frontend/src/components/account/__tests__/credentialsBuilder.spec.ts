@@ -117,6 +117,13 @@ describe('isHeaderOverrideCapable', () => {
     expect(isHeaderOverrideCapable('grok', 'bedrock')).toBe(false)
     expect(isHeaderOverrideCapable('gemini', 'apikey')).toBe(false)
   })
+
+  it('kimi/zhipu/deepseek only support API-key accounts', () => {
+    for (const platform of ['kimi', 'zhipu', 'deepseek']) {
+      expect(isHeaderOverrideCapable(platform, 'apikey')).toBe(true)
+      expect(isHeaderOverrideCapable(platform, 'oauth')).toBe(false)
+    }
+  })
 })
 
 describe('JSON header override helpers', () => {

@@ -25,6 +25,10 @@ func TestDetectModelPlatform(t *testing.T) {
 		{name: "learnlm", model: "learnlm-2.0-flash-experimental", platform: PlatformGemini, ok: true},
 		{name: "grok", model: "grok-4", platform: PlatformGrok, ok: true},
 		{name: "xai prefix", model: "xai/grok-4", platform: PlatformGrok, ok: true},
+		{name: "kimi", model: "kimi-k2-thinking", platform: PlatformKimi, ok: true},
+		{name: "moonshot prefix", model: "moonshot/moonshot-v1-32k", platform: PlatformKimi, ok: true},
+		{name: "zhipu", model: "glm-5.2", platform: PlatformZhipu, ok: true},
+		{name: "deepseek", model: "deepseek-v4-pro", platform: PlatformDeepseek, ok: true},
 		{name: "unknown", model: "llama-4-maverick", ok: false},
 	}
 
@@ -34,6 +38,13 @@ func TestDetectModelPlatform(t *testing.T) {
 			require.Equal(t, tt.ok, ok)
 			require.Equal(t, tt.platform, platform)
 		})
+	}
+}
+
+func TestCompositeConcretePlatformsIncludeCNProviders(t *testing.T) {
+	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek} {
+		require.True(t, isConcreteRequestPlatform(platform))
+		require.True(t, canCopyAccountsFromGroupPlatform(PlatformComposite, platform))
 	}
 }
 

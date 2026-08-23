@@ -71,6 +71,21 @@ func extractFirstUserText(body []byte) string {
 	return first
 }
 
+// buildBillingAttributionText constructs the billing attribution text used by
+// the configurable three-block Claude Code system shape. Keep the local
+// cch=00000 placeholder: signBillingHeaderCCH replaces it after the final body
+// is assembled, matching the branch's locked Claude CLI 2.1.119 profile.
+func buildBillingAttributionText(body []byte, cliVersion string) (string, error) {
+	if cliVersion == "" {
+		return "", fmt.Errorf("cliVersion required")
+	}
+	fp := computeClaudeCodeFingerprint(body, cliVersion)
+	return fmt.Sprintf(
+		"x-anthropic-billing-header: cc_version=%s.%s; cc_entrypoint=cli; cch=00000;",
+		cliVersion, fp,
+	), nil
+}
+
 // buildBillingAttributionBlockJSON 构造 system 数组的 billing attribution block。
 //
 // 形态严格对齐真实 Claude Code CLI：

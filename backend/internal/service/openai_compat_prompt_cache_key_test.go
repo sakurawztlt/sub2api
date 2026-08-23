@@ -112,7 +112,7 @@ func TestDeriveAnthropicCompatPromptCacheKey_StableAcrossLaterTurns(t *testing.T
 // tools should produce different keys.
 func TestDeriveAnthropicCacheControlPromptCacheKey_DifferentToolsProduceDifferentKeys(t *testing.T) {
 	base := &apicompat.AnthropicRequest{
-		Model: "claude-sonnet-4-5",
+		Model:  "claude-sonnet-4-5",
 		System: mustRawJSON(t, `[{"type":"text","text":"system text","cache_control":{"type":"ephemeral"}}]`),
 		Messages: []apicompat.AnthropicMessage{
 			{Role: "user", Content: mustRawJSON(t, `[{"type":"text","text":"user anchor","cache_control":{"type":"ephemeral"}}]`)},
@@ -136,7 +136,7 @@ func TestDeriveAnthropicCacheControlPromptCacheKey_DifferentToolsProduceDifferen
 
 func TestDeriveAnthropicCacheControlPromptCacheKey_DifferentModelProducesDifferentKey(t *testing.T) {
 	base := &apicompat.AnthropicRequest{
-		Model: "claude-sonnet-4-5",
+		Model:  "claude-sonnet-4-5",
 		System: mustRawJSON(t, `[{"type":"text","text":"system text","cache_control":{"type":"ephemeral"}}]`),
 		Messages: []apicompat.AnthropicMessage{
 			{Role: "user", Content: mustRawJSON(t, `[{"type":"text","text":"user anchor","cache_control":{"type":"ephemeral"}}]`)},
@@ -154,11 +154,11 @@ func TestDeriveAnthropicCacheControlPromptCacheKey_DifferentModelProducesDiffere
 // the same content don't share an upstream OpenAI prefix cache bucket.
 func TestApplyOpenAICompatPromptCacheKeyNamespace(t *testing.T) {
 	cases := []struct {
-		name      string
-		account   *Account
-		apiKeyID  int64
-		key       string
-		want      string
+		name     string
+		account  *Account
+		apiKeyID int64
+		key      string
+		want     string
 	}{
 		{"nil account no-op", nil, 0, "anthropic-cache-deadbeef", "anthropic-cache-deadbeef"},
 		{"empty account no-op", &Account{}, 0, "anthropic-cache-deadbeef", "anthropic-cache-deadbeef"},

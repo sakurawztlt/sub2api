@@ -35,11 +35,22 @@ func (ChannelMonitor) Fields() []ent.Field {
 			NotEmpty().
 			MaxLen(100),
 		field.Enum("provider").
-			Values("openai", "anthropic", "gemini"),
+			Values("openai", "anthropic", "gemini", "grok",
+				"antigravity", "kimi", "zhipu", "deepseek"),
+		field.String("check_mode").
+			Default("probe").
+			MaxLen(32).
+			Comment("probe = LLM probe (default); quota = account usage only; quota_probe = both"),
+		field.Int64("account_id").
+			Optional().
+			Nillable(),
+		field.String("api_mode").
+			Default("chat_completions").
+			MaxLen(32).
+			Comment("OpenAI request protocol: chat_completions or responses; non-OpenAI uses chat_completions"),
 		field.String("endpoint").
-			NotEmpty().
 			MaxLen(500).
-			Comment("Provider base origin, e.g. https://api.openai.com"),
+			Comment("Provider base origin, e.g. https://api.openai.com; empty for quota-only monitors"),
 		field.String("api_key_encrypted").
 			NotEmpty().
 			Sensitive().
@@ -58,6 +69,10 @@ func (ChannelMonitor) Fields() []ent.Field {
 			Default(true),
 		field.Int("interval_seconds").
 			Range(15, 3600),
+		field.Int("jitter_seconds").
+			Default(0).
+			Range(0, 3600).
+			Comment("Random scheduling jitter in seconds; service validation keeps interval - jitter >= 15"),
 		field.Time("last_checked_at").
 			Optional().
 			Nillable(),
@@ -104,7 +119,9 @@ func (ChannelMonitor) Indexes() []ent.Index {
 	return []ent.Index{
 		index.Fields("enabled", "last_checked_at"),
 		index.Fields("provider"),
+		index.Fields("provider", "api_mode"),
 		index.Fields("group_name"),
 		index.Fields("template_id"),
+		index.Fields("account_id"),
 	}
 }

@@ -699,10 +699,6 @@ func BuildVideoURLWithValidator(baseURL, requestID string, validator BaseURLVali
 	return buildAPIURLWithValidator(baseURL, "/videos/"+url.PathEscape(requestID), validator)
 }
 
-func buildAPIURL(baseURL, endpoint string) (string, error) {
-	return buildAPIURLWithValidator(baseURL, endpoint, nil)
-}
-
 func buildAPIURLWithValidator(baseURL, endpoint string, validator BaseURLValidator) (string, error) {
 	validatedBaseURL, err := validatedBaseURLWithValidator(baseURL, validator)
 	if err != nil {

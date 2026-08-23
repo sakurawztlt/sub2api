@@ -78,7 +78,10 @@ describe('useModelWhitelist', () => {
     expect(models).toContain('grok-composer-2.5-fast')
     expect(models).not.toContain('grok-composer')
     expect(models).toContain('composer-2.5')
-    expect(models).toContain('grok-imagine-video-1.5-preview')
+    expect(models).toContain('grok-4.6')
+    expect(models).toContain('grok-4.6-latest')
+    expect(models).toContain('grok-imagine-image-2.0')
+    expect(models).toContain('grok-imagine-video-1.5')
     expect(presets).toContainEqual(expect.objectContaining({ from: 'grok-latest', to: 'grok-4.5' }))
     expect(presets).toContainEqual(
       expect.objectContaining({ from: 'composer-2.5', to: 'grok-composer-2.5-fast' })

@@ -286,3 +286,45 @@ func TestRateLimitService_HandleUpstreamError_OAuth401NoRefreshTokenSetsError(t 
 		require.Len(t, invalidator.accounts, 1)
 	})
 }
+
+func TestRateLimitService_HandleUpstreamError_SparkShadow401RedirectsToParent(t *testing.T) {
+	repo := &rateLimitAccountRepoStub{}
+	repo.accountsByID = map[int64]*Account{}
+	invalidator := &tokenCacheInvalidatorRecorder{}
+	service := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	service.SetTokenCacheInvalidator(invalidator)
+
+	const parentID = int64(500)
+	mother := &Account{
+		ID:          parentID,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Credentials: map[string]any{"refresh_token": "rt-mother"},
+	}
+	repo.accountsByID[parentID] = mother
+
+	shadowParent := parentID
+	shadow := &Account{
+		ID:              501,
+		Platform:        PlatformOpenAI,
+		Type:            AccountTypeOAuth,
+		ParentAccountID: &shadowParent,
+		QuotaDimension:  QuotaDimensionSpark,
+		// 影子不持凭据:GetCredential("refresh_token") == ""
+	}
+
+	shouldDisable := service.HandleUpstreamError(context.Background(), shadow, 401, http.Header{}, []byte("unauthorized"))
+
+	require.True(t, shouldDisable)
+	require.Equal(t, 0, repo.setErrorCalls, "spark shadow must not be permanently disabled on a parent-token 401")
+	require.Equal(t, 1, repo.tempCalls)
+	require.Equal(t, parentID, repo.lastTempID, "temp-unschedulable must target the credential owner (parent)")
+	require.Len(t, invalidator.accounts, 1)
+	require.Equal(t, parentID, invalidator.accounts[0].ID, "token cache invalidation must target the parent")
+}
+
+// TestRateLimitService_HandleUpstreamError_OAuth401InvalidatorError
+// OpenAI OAuth 401 缓存失效出错时仍走 temp_unschedulable。
+// 注意：401 handler 不再回写 credentials(避免请求开始时的快照整列覆盖 DB
+// 把另一个 worker 刚刷新出来的新 refresh_token 回滚为旧值),
+// 因此 updateCredentialsCalls 应当为 0。

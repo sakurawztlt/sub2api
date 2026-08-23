@@ -252,6 +252,7 @@ func (h *AccountHandler) buildAccountResponseWithRuntime(ctx context.Context, ac
 			}
 		}
 	}
+	h.enrichShadowParents(ctx, []AccountWithConcurrency{item})
 
 	return item
 }
@@ -679,6 +680,7 @@ func (h *AccountHandler) List(c *gin.Context) {
 
 		result[i] = item
 	}
+	h.enrichShadowParents(c.Request.Context(), result)
 
 	etag := buildAccountsListETag(result, total, page, pageSize, platform, accountType, status, search, lite)
 	if etag != "" {
@@ -965,7 +967,8 @@ func (h *AccountHandler) Update(c *gin.Context) {
 // 当前请求。探测错误仅记录日志，不向上下文传播：探测失败时标记保持缺失，
 // 网关会按"现状即证据"默认走 Responses。
 func (h *AccountHandler) scheduleOpenAIResponsesProbe(account *service.Account) {
-	if account == nil || account.Platform != service.PlatformOpenAI || account.Type != service.AccountTypeAPIKey {
+	if account == nil || account.Type != service.AccountTypeAPIKey ||
+		(account.Platform != service.PlatformOpenAI && !service.IsCNProvider(account.Platform)) {
 		return
 	}
 	if h.accountTestService == nil {
@@ -1255,6 +1258,10 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 	if !account.IsOAuth() {
 		return nil, "", infraerrors.BadRequest("NOT_OAUTH", "cannot refresh non-OAuth account")
 	}
+	if account.IsCredentialShadow() {
+		return nil, "", infraerrors.BadRequest("SPARK_SHADOW_NO_REFRESH",
+			"cannot refresh spark shadow account; its credentials are managed by the parent account")
+	}
 
 	var newCredentials map[string]any
 
@@ -1272,6 +1279,7 @@ func (h *AccountHandler) refreshSingleAccount(ctx context.Context, account *serv
 				newCredentials[k] = v
 			}
 		}
+		newCredentials = service.NormalizeOpenAIPersonalAccessTokenCredentials(account, tokenInfo, newCredentials)
 	} else if account.Platform == service.PlatformGemini {
 		tokenInfo, err := h.geminiOAuthService.RefreshAccountToken(ctx, account)
 		if err != nil {
@@ -1615,6 +1623,10 @@ func (h *AccountHandler) BatchDelete(c *gin.Context) {
 		Error     string `json:"error"`
 	}
 
+	requestedIDs := make(map[int64]struct{}, len(accountIDs))
+	for _, accountID := range accountIDs {
+		requestedIDs[accountID] = struct{}{}
+	}
 	accountsByID := make(map[int64]*service.Account, len(accounts))
 	for _, account := range accounts {
 		if account != nil {
@@ -1623,6 +1635,7 @@ func (h *AccountHandler) BatchDelete(c *gin.Context) {
 	}
 
 	rootIDs := make([]int64, 0, len(accountIDs))
+	dependentIDs := make(map[int64][]int64)
 	failedIDs := make([]int64, 0)
 	errorsByAccount := make([]deleteError, 0)
 	for _, accountID := range accountIDs {
@@ -1633,6 +1646,31 @@ func (h *AccountHandler) BatchDelete(c *gin.Context) {
 				AccountID: accountID,
 				Error:     "account not found",
 			})
+			continue
+		}
+		rootID := accountID
+		visited := map[int64]struct{}{accountID: {}}
+		for {
+			current := accountsByID[rootID]
+			if current == nil || current.ParentAccountID == nil {
+				break
+			}
+			parentID := *current.ParentAccountID
+			if _, selected := requestedIDs[parentID]; !selected {
+				break
+			}
+			if _, exists := accountsByID[parentID]; !exists {
+				break
+			}
+			if _, cyclic := visited[parentID]; cyclic {
+				rootID = accountID
+				break
+			}
+			visited[parentID] = struct{}{}
+			rootID = parentID
+		}
+		if rootID != accountID {
+			dependentIDs[rootID] = append(dependentIDs[rootID], accountID)
 			continue
 		}
 		rootIDs = append(rootIDs, accountID)
@@ -1653,7 +1691,7 @@ func (h *AccountHandler) BatchDelete(c *gin.Context) {
 
 			mu.Lock()
 			defer mu.Unlock()
-			affectedIDs := []int64{accountID}
+			affectedIDs := append([]int64{accountID}, dependentIDs[accountID]...)
 			if err != nil {
 				for _, affectedID := range affectedIDs {
 					failedIDs = append(failedIDs, affectedID)
@@ -2601,8 +2639,14 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 
 	// Handle Gemini accounts
 	if account.IsGemini() {
-		// For OAuth accounts: return default Gemini models
+		// Consumer Google One OAuth still uses the legacy Gemini CLI / Code
+		// Assist channel. Do not advertise newer 3.x or image models that the
+		// channel cannot serve.
 		if account.IsOAuth() {
+			if account.IsGeminiGoogleOne() {
+				response.Success(c, geminicli.GoogleOneModels)
+				return
+			}
 			response.Success(c, geminicli.DefaultModels)
 			return
 		}

@@ -32,12 +32,12 @@ import (
 //	SUB2API_TRAFFIC_CAPTURE_FILTER_ACCOUNT  逗号分隔 account ID 白名单
 //	SUB2API_TRAFFIC_CAPTURE_SAMPLING        采样 0.0-1.0, 默认 1.0 (100%)
 type TrafficCaptureConfig struct {
-	Enabled         bool
-	MaxBytes        int
-	TTL             time.Duration
-	APIKeyFilter    map[int64]bool // 空 = 全部放过
-	AccountFilter   map[int64]bool
-	Sampling        float64 // 0.0-1.0
+	Enabled       bool
+	MaxBytes      int
+	TTL           time.Duration
+	APIKeyFilter  map[int64]bool // 空 = 全部放过
+	AccountFilter map[int64]bool
+	Sampling      float64 // 0.0-1.0
 }
 
 func LoadTrafficCaptureConfig() TrafficCaptureConfig {

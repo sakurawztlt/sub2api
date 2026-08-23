@@ -223,6 +223,11 @@ func chatUserToResponses(m ChatMessage) ([]ResponsesInputItem, error) {
 // empty/nil and there are tool_calls, only function_call items are emitted.
 func chatAssistantToResponses(m ChatMessage) ([]ResponsesInputItem, error) {
 	var items []ResponsesInputItem
+	content := ""
+
+	if m.ReasoningContent != "" {
+		content = "<thinking>" + m.ReasoningContent + "</thinking>"
+	}
 
 	// Emit assistant message with output_text if content is non-empty.
 	if len(m.Content) > 0 {
@@ -231,13 +236,20 @@ func chatAssistantToResponses(m ChatMessage) ([]ResponsesInputItem, error) {
 			return nil, err
 		}
 		if s != "" {
-			parts := []ResponsesContentPart{{Type: "output_text", Text: s}}
-			partsJSON, err := json.Marshal(parts)
-			if err != nil {
-				return nil, err
+			if content != "" {
+				content += "\n"
 			}
-			items = append(items, ResponsesInputItem{Role: "assistant", Content: partsJSON})
+			content += s
 		}
+	}
+
+	if content != "" {
+		parts := []ResponsesContentPart{{Type: "output_text", Text: content}}
+		partsJSON, err := json.Marshal(parts)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, ResponsesInputItem{Role: "assistant", Content: partsJSON})
 	}
 
 	// Emit one function_call item per tool_call.
@@ -499,6 +511,18 @@ func convertChatToolsToResponses(tools []ChatTool, functions []ChatFunction) []R
 	var out []ResponsesTool
 
 	for _, t := range tools {
+		if strings.EqualFold(strings.TrimSpace(t.Type), "x_search") {
+			out = append(out, ResponsesTool{
+				Type:                     "x_search",
+				AllowedXHandles:          t.AllowedXHandles,
+				ExcludedXHandles:         t.ExcludedXHandles,
+				FromDate:                 t.FromDate,
+				ToDate:                   t.ToDate,
+				EnableImageUnderstanding: t.EnableImageUnderstanding,
+				EnableVideoUnderstanding: t.EnableVideoUnderstanding,
+			})
+			continue
+		}
 		if t.Type != "function" || t.Function == nil {
 			continue
 		}
@@ -507,7 +531,7 @@ func convertChatToolsToResponses(tools []ChatTool, functions []ChatFunction) []R
 			Name:        t.Function.Name,
 			Description: t.Function.Description,
 			Parameters:  t.Function.Parameters,
-			Strict:      t.Function.Strict,
+			Strict:      defaultStrictFalse(t.Function.Strict),
 		}
 		out = append(out, rt)
 	}
@@ -519,12 +543,20 @@ func convertChatToolsToResponses(tools []ChatTool, functions []ChatFunction) []R
 			Name:        f.Name,
 			Description: f.Description,
 			Parameters:  f.Parameters,
-			Strict:      f.Strict,
+			Strict:      defaultStrictFalse(f.Strict),
 		}
 		out = append(out, rt)
 	}
 
 	return out
+}
+
+func defaultStrictFalse(src *bool) *bool {
+	if src == nil {
+		value := false
+		return &value
+	}
+	return src
 }
 
 // convertChatFunctionCallToToolChoice maps the legacy function_call field to a

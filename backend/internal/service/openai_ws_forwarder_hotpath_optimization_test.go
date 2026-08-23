@@ -46,7 +46,11 @@ func TestOpenAIWSEventShouldParseUsageTerminalEvents(t *testing.T) {
 		require.True(t, openAIWSEventShouldParseUsage("  "+eventType+"  "), eventType)
 	}
 	require.False(t, openAIWSEventShouldParseUsage("response.output_text.delta"))
+	require.True(t, openAIWSEventShouldParseUsage("response.output_text.done"))
 	require.False(t, openAIWSEventShouldParseUsage(""))
+	require.False(t, openAIWSMessageShouldParseUsage("response.in_progress", []byte(`{"type":"response.in_progress"}`)))
+	require.True(t, openAIWSMessageShouldParseUsage("response.in_progress", []byte(`{"type":"response.in_progress","usage":{}}`)))
+	require.False(t, openAIWSMessageShouldParseUsage("response.output_text.delta", []byte(`{"type":"response.output_text.delta","usage":{}}`)))
 }
 
 func TestOpenAIWSErrorEventHelpers_ConsistentWithWrapper(t *testing.T) {

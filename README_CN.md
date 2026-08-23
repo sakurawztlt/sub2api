@@ -4,7 +4,7 @@
 
 # Sub2API
 
-[![Go](https://img.shields.io/badge/Go-1.25.7-00ADD8.svg)](https://golang.org/)
+[![Go](https://img.shields.io/badge/Go-1.26.6-00ADD8.svg)](https://golang.org/)
 [![Vue](https://img.shields.io/badge/Vue-3.4+-4FC08D.svg)](https://vuejs.org/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-336791.svg)](https://www.postgresql.org/)
 [![Redis](https://img.shields.io/badge/Redis-7+-DC382D.svg)](https://redis.io/)
@@ -111,7 +111,7 @@ Sub2API 是一个 AI API 网关平台，用于分发和管理 AI 产品订阅的
 
 | 组件 | 技术 |
 |------|------|
-| 后端 | Go 1.25.7, Gin, Ent |
+| 后端 | Go 1.26.6, Gin, Ent |
 | 前端 | Vue 3.4+, Vite 5+, TailwindCSS |
 | 数据库 | PostgreSQL 15+ |
 | 缓存/队列 | Redis 7+ |
@@ -246,6 +246,7 @@ cd sub2api/deploy
 
 # 2. 复制环境配置文件
 cp .env.example .env
+chmod 600 .env
 
 # 3. 编辑配置（生成安全密码）
 nano .env
@@ -377,7 +378,23 @@ rm -rf data/ postgres_data/ redis_data/
 
 ---
 
-### 方式三：源码编译
+### 方式三：Apple container（macOS）
+
+Apple 芯片 Mac 在 macOS 26 上可使用 Apple `container` 1.1.0 或更高版本运行完整的 Sub2API、PostgreSQL 和 Redis：
+
+```bash
+git clone https://github.com/Wei-Shaw/sub2api.git
+cd sub2api/deploy
+./apple-container.sh init
+./apple-container.sh up
+./apple-container.sh status
+```
+
+这是由运维人员管理的本地运行方式；生产环境仍建议使用 Docker Compose。生命周期命令、持久化、升级和运行时限制见 [deploy/APPLE_CONTAINER.md](deploy/APPLE_CONTAINER.md)。
+
+---
+
+### 方式四：源码编译
 
 从源码编译安装，适合开发或定制需求。
 
@@ -449,32 +466,7 @@ default:
   rate_multiplier: 1.0
 ```
 
-### Sora 功能状态（暂不可用）
-
-> ⚠️ 当前 Sora 相关功能因上游接入与媒体链路存在技术问题，暂时不可用。
-> 现阶段请勿在生产环境依赖 Sora 能力。
-> 文档中的 `gateway.sora_*` 配置仅作预留，待技术问题修复后再恢复可用。
-
-### Sora 媒体签名 URL（功能恢复后可选）
-
-当配置 `gateway.sora_media_signing_key` 且 `gateway.sora_media_signed_url_ttl_seconds > 0` 时，网关会将 Sora 输出的媒体地址改写为临时签名 URL（`/sora/media-signed/...`）。这样无需 API Key 即可在浏览器中直接访问，且具备过期控制与防篡改能力（签名包含 path + query）。
-
-```yaml
-gateway:
-  # /sora/media 是否强制要求 API Key（默认 false）
-  sora_media_require_api_key: false
-  # 媒体临时签名密钥（为空则禁用签名）
-  sora_media_signing_key: "your-signing-key"
-  # 临时签名 URL 有效期（秒）
-  sora_media_signed_url_ttl_seconds: 900
-```
-
-> 若未配置签名密钥，`/sora/media-signed` 将返回 503。  
-> 如需更严格的访问控制，可将 `sora_media_require_api_key` 设为 true，仅允许携带 API Key 的 `/sora/media` 访问。
-
-访问策略说明：
-- `/sora/media`：内部调用或客户端携带 API Key 才能下载
-- `/sora/media-signed`：外部可访问，但有签名 + 过期控制
+**首次创建管理员：** 只要 `config.yaml` 已存在，Web 初始化向导就会被跳过；`default.admin_email` / `default.admin_password` 也不会创建管理员。全新的源码安装可跳过“创建/编辑配置”步骤，直接运行 `./sub2api` 并访问 `http://<host>:8080`，由向导创建配置和管理员；也可改用 `./sub2api -setup` / `AUTO_SETUP` 初始化。只有目标数据库已经有管理员时，才应手工预先创建配置。
 
 `config.yaml` 还支持以下安全相关配置：
 
@@ -486,8 +478,11 @@ gateway:
 - `security.response_headers.enabled` 可启用可配置响应头过滤（关闭时使用默认白名单）
 - `security.csp` 配置 Content-Security-Policy
 - `billing.circuit_breaker` 计费异常时 fail-closed
-- `server.trusted_proxies` 启用可信代理解析 X-Forwarded-For
+- `server.trusted_proxies` 配置 Gin 信任的直接反向代理 IP/CIDR；留空即不信任代理链
+- `security.trust_forwarded_ip_for_api_key_acl` 让 API Key IP 白/黑名单改用旧式原始转发头提取，而不是 Gin 的可信代理链（默认 `false`）
 - `turnstile.required` 在 release 模式强制启用 Turnstile
+
+API Key ACL 默认使用 Gin 的可信代理链。建议保持旧式接管关闭，并在 `server.trusted_proxies` 中只填写直接连接 Sub2API 的反代地址。如果兼容性要求启用原始 `CF-Connecting-IP`、`X-Real-IP` 或 `X-Forwarded-For` 提取，必须把源站防火墙限制到代理/CDN，并由边缘覆盖这些外部传入的头。
 
 **网关防御纵深建议（重点）**
 
@@ -499,20 +494,20 @@ gateway:
 
 **⚠️ 安全警告：HTTP URL 配置**
 
-当 `security.url_allowlist.enabled=false` 时，系统默认执行最小 URL 校验，**拒绝 HTTP URL**，仅允许 HTTPS。要允许 HTTP URL（例如用于开发或内网测试），必须显式设置：
+当 `security.url_allowlist.enabled=false` 时，当前默认只执行最小 URL 校验并**允许 HTTP URL**。这便于本地或可信内网调试，但生产环境应显式收紧为仅允许 HTTPS：
 
 ```yaml
 security:
   url_allowlist:
     enabled: false                # 禁用白名单检查
-    allow_insecure_http: true     # 允许 HTTP URL（⚠️ 不安全）
+    allow_insecure_http: false    # 仅允许 HTTPS（生产环境推荐）
 ```
 
 **或通过环境变量：**
 
 ```bash
 SECURITY_URL_ALLOWLIST_ENABLED=false
-SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP=true
+SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP=false
 ```
 
 **允许 HTTP 的风险：**
@@ -526,7 +521,7 @@ SECURITY_URL_ALLOWLIST_ALLOW_INSECURE_HTTP=true
 - ✅ 获取 HTTPS 前测试账号连通性
 - ❌ 生产环境（仅使用 HTTPS）
 
-**未设置此项时的错误示例：**
+**设置 `allow_insecure_http: false` 后访问 HTTP URL 的错误示例：**
 ```
 Invalid base URL: invalid url scheme: http
 ```
@@ -537,14 +532,35 @@ Invalid base URL: invalid url scheme: http
 - 强制仅允许 TLS 出站
 - 在反向代理层移除敏感响应头
 
+#### OpenAI Responses WebSocket 模式与 HTTP bridge
+
+Codex 风格的 Responses WebSocket 入口支持按账号选择 `off`、`ctx_pool`、`passthrough` 和 `http_bridge`。在账号表单中选择这些模式前，需要先开启 v2 模式路由：
+
+```yaml
+gateway:
+  openai_ws:
+    mode_router_v2_enabled: true
+    ingress_mode_default: ctx_pool
+    http_bridge_enabled: true
+    http_bridge_threshold_bytes: 15728640 # 15 MiB
+```
+
+`off` 回退到 HTTP/SSE，`ctx_pool` 使用受管的上游 WebSocket 连接池，`passthrough` 通过上游 WebSocket 适配器透传客户端会话；`http_bridge` 则保留客户端 WebSocket、但让上游 turn 走 HTTP/SSE。开启 bridge 后，超过阈值的大帧可自动切换；Grok WebSocket 入口会使用 HTTP bridge 访问 xAI 的 HTTP/SSE Responses 上游。紧急全局回滚可设置 `gateway.openai_ws.force_http=true`。
+
 ```bash
-# 6. 运行应用
+# 7. 运行应用
 ./sub2api
 ```
 
 #### HTTP/2 (h2c) 与 HTTP/1.1 回退
 
-后端明文端口默认支持 h2c，并保留 HTTP/1.1 回退用于 WebSocket 与旧客户端。浏览器通常不支持 h2c，性能收益主要在反向代理或内网链路。
+主服务仅在 `server.h2c.enabled=true` 时启用明文 HTTP/2；`deploy/config.example.yaml` 已开启该项。HTTP/1.1 始终保留，用于 WebSocket 升级与旧客户端。浏览器通常不直接使用 h2c，收益主要在反向代理或内网链路。
+
+```yaml
+server:
+  h2c:
+    enabled: true
+```
 
 **反向代理示例（Caddy）：**
 
@@ -596,6 +612,64 @@ go generate ./cmd/server
 - 启用方式：设置环境变量 `RUN_MODE=simple`
 - 功能差异：隐藏 SaaS 相关功能，跳过计费流程
 - 安全注意事项：生产环境需同时设置 `SIMPLE_MODE_CONFIRM=true` 才允许启动
+
+---
+
+## Grok / xAI 支持
+
+Sub2API 同时支持通过 xAI OAuth 接入的 Grok 订阅账号和标准 xAI API Key 账号，并按账号类型转发到对应的 xAI 上游。
+
+### 支持范围
+
+- 平台名：`grok`；账号类型：OAuth 订阅账号、xAI API Key 账号
+- Responses：`/v1/responses`、`/responses`、`/backend-api/codex/responses`
+- Claude 兼容：`/v1/messages`（转换为 xAI Responses，再返回 Anthropic Messages 结构）
+- Chat Completions：`/v1/chat/completions`、`/chat/completions`
+- Codex 风格 Responses WebSocket 入口通过 HTTP bridge 访问 xAI HTTP/SSE 上游
+- 文本模型包括 `grok-4.5`、`grok-4.3`、`grok-build-0.1`、`grok-composer-2.5-fast` 和 Grok 4.20 reasoning/non-reasoning/multi-agent 系列
+- Grok 分组支持图片生成/编辑与视频生成/编辑/扩展/状态查询；生成、编辑和扩展需要开启分组图片生成权限
+- 媒体模型包括 `grok-imagine`、`grok-imagine-image-quality`、`grok-imagine-image`、`grok-imagine-image-2.0`、`grok-imagine-edit`、`grok-imagine-video`、`grok-imagine-video-1.5`
+- JSON 图片编辑和视频生成请求可在 `image`、`images`、`reference_images`、`mask` 中传入图片；推荐使用 xAI 兼容的 `url`，旧 `image_url` 会在转发前规范化
+
+### OAuth 与 API Key 配置
+
+OAuth 使用 PKCE，不需要提交私有客户端密钥。常用环境变量如下：
+
+| 变量 | 默认值 |
+|------|--------|
+| `XAI_OAUTH_SCOPE` | `openid profile email offline_access grok-cli:access api:access` |
+| `XAI_OAUTH_REDIRECT_URI` | `http://127.0.0.1:56121/callback` |
+| `XAI_BASE_URL` | `https://api.x.ai/v1`（转发以账号 `base_url` 为准） |
+| `XAI_GROK_CLI_VERSION` | `0.2.114`；低于该版本下限的覆盖值会被忽略 |
+
+管理员可在控制台创建或重新授权 Grok OAuth 账号，也可直接创建 Grok API Key 账号。OAuth 默认推断到 `https://cli-chat-proxy.grok.com/v1`；API Key 账号默认使用官方 `https://api.x.ai/v1`，并复用账号的 `base_url` 与 `api_key` 字段。
+
+### Grok Build CLI 配置
+
+把 Grok 账号加入 Grok 分组并创建对应 Sub2API API Key 后，可在用户 API Key 页面选择 **使用密钥 → Grok CLI** 自动生成配置。手动配置可保存为 `~/.grok/config.toml`（Windows：`%USERPROFILE%\.grok\config.toml`）：
+
+```toml
+[models]
+default = "grok"
+web_search = "grok"
+
+[model."grok"]
+model = "grok-4.5"
+base_url = "https://your-sub2api.example.com/v1"
+name = "Grok 4.5"
+api_key = "sk-your-sub2api-key"
+api_backend = "responses"
+context_window = 1000000
+supports_backend_search = true
+```
+
+配置文件包含 API Key，请限制文件权限，并使用 `grok inspect` 验证。`base_url` 应是以 `/v1` 结尾的公开 Sub2API 地址，而不是 xAI 内部上游地址。
+
+### 用量、额度与媒体资格
+
+xAI 额度采用被动观测：只有上游实际返回受信的 rate-limit 响应头时才记录；首次获得有效观测前，控制台显示额度未知，同时仍展示 Sub2API 本地用量。`401`、`403`、`429` 会分别按凭据失效、访问/权益失败和短期限流语义处理。
+
+新图片/视频生成还会执行媒体资格检查：API Key 账号默认合格；OAuth 账号必须由 xAI 计费探测确认付费权益。Free、禁止访问、缺失、格式错误或不确定的结果不会参与新的媒体生成；无合格账号时返回 HTTP `503` 和 `grok_media_no_eligible_account`。管理员可通过账号字段 `extra.grok_media_eligible` 覆盖自动判断。
 
 ---
 
@@ -669,11 +743,11 @@ sub2api/
 
 ## Star History
 
-<a href="https://star-history.com/#Wei-Shaw/sub2api&Date">
+<a href="https://star-history.dera.page/#Wei-Shaw/sub2api&Date">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=Wei-Shaw/sub2api&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=Wei-Shaw/sub2api&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=Wei-Shaw/sub2api&type=Date" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=Wei-Shaw/sub2api&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=Wei-Shaw/sub2api&type=Date" />
+   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=Wei-Shaw/sub2api&type=Date" />
  </picture>
 </a>
 

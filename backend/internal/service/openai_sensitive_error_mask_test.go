@@ -187,7 +187,7 @@ func TestHandleSSEToJSON_SensitiveResponseFailedMasksBody(t *testing.T) {
 		"",
 	}, "\n"))
 
-	usage, err := svc.handleSSEToJSON(resp, c, body, "gpt-5.4", "gpt-5.4")
+	usage, err := svc.handleSSEToJSON(resp, c, nil, body, "gpt-5.4", "gpt-5.4")
 
 	require.Nil(t, usage)
 	require.Error(t, err)
