@@ -316,15 +316,16 @@ func TestPricingRequestToService_Defaults(t *testing.T) {
 func TestPricingRequestToService_WithAllFields(t *testing.T) {
 	reqs := []channelModelPricingRequest{
 		{
-			Platform:         "openai",
-			Models:           []string{"gpt-4", "gpt-4o"},
-			BillingMode:      "per_request",
-			InputPrice:       float64Ptr(0.01),
-			OutputPrice:      float64Ptr(0.03),
-			CacheWritePrice:  float64Ptr(0.005),
-			CacheReadPrice:   float64Ptr(0.002),
-			ImageOutputPrice: float64Ptr(0.04),
-			PerRequestPrice:  float64Ptr(0.5),
+			Platform:          "openai",
+			Models:            []string{"gpt-4", "gpt-4o"},
+			BillingMode:       "per_request",
+			InputPrice:        float64Ptr(0.01),
+			OutputPrice:       float64Ptr(0.03),
+			CacheWritePrice:   float64Ptr(0.005),
+			CacheWrite1hPrice: float64Ptr(0.008),
+			CacheReadPrice:    float64Ptr(0.002),
+			ImageOutputPrice:  float64Ptr(0.04),
+			PerRequestPrice:   float64Ptr(0.5),
 		},
 	}
 
@@ -337,6 +338,7 @@ func TestPricingRequestToService_WithAllFields(t *testing.T) {
 	require.Equal(t, float64Ptr(0.01), r.InputPrice)
 	require.Equal(t, float64Ptr(0.03), r.OutputPrice)
 	require.Equal(t, float64Ptr(0.005), r.CacheWritePrice)
+	require.Equal(t, float64Ptr(0.008), r.CacheWrite1hPrice)
 	require.Equal(t, float64Ptr(0.002), r.CacheReadPrice)
 	require.Equal(t, float64Ptr(0.04), r.ImageOutputPrice)
 	require.Equal(t, float64Ptr(0.5), r.PerRequestPrice)
@@ -349,15 +351,16 @@ func TestPricingRequestToService_WithIntervals(t *testing.T) {
 			BillingMode: "per_request",
 			Intervals: []pricingIntervalRequest{
 				{
-					MinTokens:       0,
-					MaxTokens:       intPtr(2000),
-					TierLabel:       "small",
-					InputPrice:      float64Ptr(0.01),
-					OutputPrice:     float64Ptr(0.02),
-					CacheWritePrice: float64Ptr(0.003),
-					CacheReadPrice:  float64Ptr(0.001),
-					PerRequestPrice: float64Ptr(0.1),
-					SortOrder:       1,
+					MinTokens:         0,
+					MaxTokens:         intPtr(2000),
+					TierLabel:         "small",
+					InputPrice:        float64Ptr(0.01),
+					OutputPrice:       float64Ptr(0.02),
+					CacheWritePrice:   float64Ptr(0.003),
+					CacheWrite1hPrice: float64Ptr(0.006),
+					CacheReadPrice:    float64Ptr(0.001),
+					PerRequestPrice:   float64Ptr(0.1),
+					SortOrder:         1,
 				},
 				{
 					MinTokens: 2000,
@@ -380,6 +383,7 @@ func TestPricingRequestToService_WithIntervals(t *testing.T) {
 	require.Equal(t, float64Ptr(0.01), iv0.InputPrice)
 	require.Equal(t, float64Ptr(0.02), iv0.OutputPrice)
 	require.Equal(t, float64Ptr(0.003), iv0.CacheWritePrice)
+	require.Equal(t, float64Ptr(0.006), iv0.CacheWrite1hPrice)
 	require.Equal(t, float64Ptr(0.001), iv0.CacheReadPrice)
 	require.Equal(t, float64Ptr(0.1), iv0.PerRequestPrice)
 	require.Equal(t, 1, iv0.SortOrder)
@@ -422,7 +426,8 @@ func TestPricingRequestToService_TimePricing(t *testing.T) {
 		Models:      []string{"gpt-5"},
 		BillingMode: "token",
 		TimePricing: &channelTimePricingRequest{
-			Timezone: "Asia/Shanghai",
+			Timezone:     "Asia/Shanghai",
+			WeekdaysOnly: true,
 			Periods: []channelTimePricingPeriodRequest{{
 				StartTime: "09:00", EndTime: "12:00", Multiplier: 2,
 			}},
@@ -431,6 +436,7 @@ func TestPricingRequestToService_TimePricing(t *testing.T) {
 
 	got := pricingRequestToService([]channelModelPricingRequest{req}, true)
 	require.Equal(t, "Asia/Shanghai", got[0].TimePricing.Timezone)
+	require.True(t, got[0].TimePricing.WeekdaysOnly)
 	require.Equal(t, 2.0, got[0].TimePricing.Periods[0].Multiplier)
 }
 
@@ -478,7 +484,8 @@ func TestPricingToResponse_TimePricing(t *testing.T) {
 	got := pricingToResponse(&service.ChannelModelPricing{
 		BillingMode: service.BillingModeToken,
 		TimePricing: &service.ChannelTimePricing{
-			Timezone: "Asia/Shanghai",
+			Timezone:     "Asia/Shanghai",
+			WeekdaysOnly: true,
 			Periods: []service.ChannelTimePricingPeriod{{
 				StartTime: "14:00", EndTime: "18:00", Multiplier: 1.25,
 			}},
@@ -487,6 +494,7 @@ func TestPricingToResponse_TimePricing(t *testing.T) {
 
 	require.NotNil(t, got.TimePricing)
 	require.Equal(t, "Asia/Shanghai", got.TimePricing.Timezone)
+	require.True(t, got.TimePricing.WeekdaysOnly)
 	require.Equal(t, 1.25, got.TimePricing.Periods[0].Multiplier)
 }
 

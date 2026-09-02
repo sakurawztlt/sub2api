@@ -93,7 +93,7 @@ func TestPatchGrokResponsesBodyDropsNestedUnsupportedFields(t *testing.T) {
 	require.True(t, json.Valid(patched))
 	require.False(t, strings.Contains(string(patched), "external_web_access"))
 	require.Equal(t, "kept_fn", gjson.GetBytes(patched, "tools.0.name").String())
-	require.Equal(t, "9007199254740993", gjson.GetBytes(patched, "metadata.large_id").Raw)
+	require.False(t, gjson.GetBytes(patched, "metadata").Exists())
 }
 
 func TestStripAnthropicThinkingSignaturesPreservesLargeIntegers(t *testing.T) {
@@ -151,6 +151,72 @@ func TestPatchGrokResponsesBodyDropsToolChoiceWhenNoSupportedToolsRemain(t *test
 	require.True(t, json.Valid(patched))
 	require.False(t, gjson.GetBytes(patched, "tools").Exists())
 	require.False(t, gjson.GetBytes(patched, "tool_choice").Exists())
+}
+
+func TestSanitizeGrokResponsesToolsRemovesDeferredFlagsWithToolSearch(t *testing.T) {
+	body := []byte(`{"tools":[{"type":"tool_search"},{"type":"function","name":"shell","defer_loading":true},{"type":"function","name":"apply_patch"}]}`)
+
+	patched, err := sanitizeGrokResponsesTools(body)
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(patched, `tools.#(type=="tool_search")`).Exists())
+	require.False(t, gjson.GetBytes(patched, `tools.#(name=="shell").defer_loading`).Exists())
+	require.True(t, gjson.GetBytes(patched, `tools.#(name=="apply_patch")`).Exists())
+}
+
+func TestSanitizeGrokResponsesToolsSimplifiesInvalidRootUnion(t *testing.T) {
+	body := []byte(`{"tools":[
+		{"type":"function","name":"mcp__codex_app__automation_update","strict":true,"parameters":{"oneOf":[{"type":"object","properties":{"id":{"type":"string"}}},{"type":"null"}]}},
+		{"type":"function","name":"object_only","strict":true,"parameters":{"type":"object","anyOf":[{"type":"object","properties":{"a":{"type":"string"}}},{"type":"object","properties":{"b":{"type":"integer"}}}]}}
+	]}`)
+
+	patched, err := sanitizeGrokResponsesTools(body)
+	require.NoError(t, err)
+	require.True(t, json.Valid(patched))
+
+	mixed := gjson.GetBytes(patched, `tools.#(name=="mcp__codex_app__automation_update")`)
+	require.Equal(t, "object", mixed.Get("parameters.type").String())
+	require.True(t, mixed.Get("parameters.properties").IsObject())
+	require.True(t, mixed.Get("parameters.additionalProperties").Bool())
+	require.False(t, mixed.Get("parameters.oneOf").Exists())
+	require.Equal(t, gjson.False, mixed.Get("strict").Type)
+
+	objectOnly := gjson.GetBytes(patched, `tools.#(name=="object_only")`)
+	require.True(t, objectOnly.Get("parameters.anyOf").Exists())
+	require.Equal(t, gjson.True, objectOnly.Get("strict").Type)
+}
+
+func TestPatchGrokResponsesBodySimplifiesTypedInvalidRootUnion(t *testing.T) {
+	body := []byte(`{
+		"model":"grok-4.6",
+		"metadata":{"session_id":"abc"},
+		"tools":[{
+			"type":"namespace",
+			"name":"mcp__codex_app",
+			"tools":[{
+				"type":"function",
+				"name":"automation_update",
+				"strict":true,
+				"parameters":{
+					"type":"object",
+					"oneOf":[{"$ref":"#/$defs/update"},{"type":"null"}],
+					"$defs":{"update":{"type":"object","properties":{"id":{"type":"string"}}}}
+				}
+			}]
+		}]
+	}`)
+
+	patched, _, err := patchGrokResponsesBodyWithClientTools(body, "grok-4.6")
+	require.NoError(t, err)
+	require.True(t, json.Valid(patched))
+	require.False(t, gjson.GetBytes(patched, "metadata").Exists())
+
+	tool := gjson.GetBytes(patched, `tools.#(name=="mcp__codex_app__automation_update")`)
+	require.Equal(t, "object", tool.Get("parameters.type").String())
+	require.True(t, tool.Get("parameters.properties").IsObject())
+	require.True(t, tool.Get("parameters.additionalProperties").Bool())
+	require.False(t, tool.Get("parameters.oneOf").Exists())
+	require.False(t, tool.Get("parameters.$defs").Exists())
+	require.Equal(t, gjson.False, tool.Get("strict").Type)
 }
 
 func TestSanitizeGrokResponsesToolsKeepsToolChoiceOnlyWithSupportedTools(t *testing.T) {
@@ -413,7 +479,7 @@ func TestForwardGrokMediaImagesGenerationNormalizesImagineAlias(t *testing.T) {
 	require.Equal(t, "Bearer api-key", upstream.lastReq.Header.Get("Authorization"))
 	require.Equal(t, "application/json", upstream.lastReq.Header.Get("Content-Type"))
 	require.Empty(t, upstream.lastReq.Header.Get("X-Grok-Client-Version"))
-	require.NotEqual(t, grokUpstreamUserAgent, upstream.lastReq.Header.Get("User-Agent"))
+	require.NotEqual(t, defaultGrokUpstreamUserAgent(), upstream.lastReq.Header.Get("User-Agent"))
 	require.JSONEq(t, `{"model":"grok-imagine-image-quality","prompt":"draw a cat"}`, string(upstream.lastBody))
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.JSONEq(t, `{"data":[{"url":"https://images.test/cat.png"}]}`, recorder.Body.String())

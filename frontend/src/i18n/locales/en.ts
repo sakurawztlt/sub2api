@@ -2536,6 +2536,13 @@ export default {
         targetModelPlaceholder: 'e.g., gpt-5.4',
         removeExactMapping: 'Remove Exact Mapping'
       },
+      openaiFast: {
+        title: 'OpenAI Fast mode',
+        force: 'Force Fast (priority)',
+        hint: 'Forces service_tier=priority on OpenAI requests in this group. The global Fast/Flex policy can still filter or block it. New requests update immediately after saving; existing WebSocket sessions must reconnect.',
+        free: 'Free Fast',
+        freeHint: 'Fast requests in this group still use the priority tier, but customers are charged the equivalent Standard price.'
+      },
       invalidRequestFallback: {
         title: 'Invalid Request Fallback Group',
         hint: 'Triggered only when upstream explicitly returns prompt too long. Leave empty to disable fallback.',
@@ -6290,7 +6297,10 @@ export default {
         totp: 'Two-Factor Authentication (2FA)',
         totpHint: 'Allow users to use authenticator apps like Google Authenticator',
         totpKeyNotConfigured:
-          'Please configure TOTP_ENCRYPTION_KEY in environment variables first. Generate a key with: openssl rand -hex 32'
+          'Please configure TOTP_ENCRYPTION_KEY in environment variables first. Generate a key with: openssl rand -hex 32',
+        stepUp: 'Sensitive Operation Verification',
+        stepUpHint:
+          'Require a recent TOTP check before plugin uploads and other protected admin actions'
       },
       panelRateLimit: {
         title: 'Panel API Rate Limiting',
@@ -7771,7 +7781,7 @@ export default {
     amountTooLow: 'Minimum amount is {min}',
     amountTooHigh: 'Maximum amount is {max}',
     amountNoMethod: 'No payment method available for this amount',
-    rechargeRatePreview: 'Current rate: 1 CNY = {usd} USD',
+    rechargeRatePreview: 'Current rate: 1 {currency} = {usd} USD',
     refundReason: 'Refund Reason',
     refundReasonPlaceholder: 'Please describe your refund reason',
     stripeLoadFailed: 'Failed to load payment component. Please refresh and try again.',

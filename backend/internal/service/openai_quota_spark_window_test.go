@@ -23,9 +23,10 @@ import (
 // stubQuotaAccountRepo 是多账号 AccountRepository stub，仅实现 GetByID。
 type stubQuotaAccountRepo struct {
 	AccountRepository
-	accounts       map[int64]*Account
-	extraUpdates   map[int64]map[string]any
-	extraUpdateErr error
+	accounts         map[int64]*Account
+	extraUpdates     map[int64]map[string]any
+	extraUpdateCalls int
+	extraUpdateErr   error
 }
 
 func (r *stubQuotaAccountRepo) GetByID(_ context.Context, id int64) (*Account, error) {
@@ -49,6 +50,7 @@ func (r *stubQuotaAccountRepo) UpdateExtra(_ context.Context, id int64, updates 
 	if r.extraUpdateErr != nil {
 		return r.extraUpdateErr
 	}
+	r.extraUpdateCalls++
 	if r.extraUpdates == nil {
 		r.extraUpdates = make(map[int64]map[string]any)
 	}

@@ -108,6 +108,10 @@ const (
 	FieldSortOrder = "sort_order"
 	// FieldAllowMessagesDispatch holds the string denoting the allow_messages_dispatch field in the database.
 	FieldAllowMessagesDispatch = "allow_messages_dispatch"
+	// FieldForceOpenaiFast holds the string denoting the force_openai_fast field in the database.
+	FieldForceOpenaiFast = "force_openai_fast"
+	// FieldFreeOpenaiFast holds the string denoting the free_openai_fast field in the database.
+	FieldFreeOpenaiFast = "free_openai_fast"
 	// FieldRequireOauthOnly holds the string denoting the require_oauth_only field in the database.
 	FieldRequireOauthOnly = "require_oauth_only"
 	// FieldRequirePrivacySet holds the string denoting the require_privacy_set field in the database.
@@ -122,6 +126,8 @@ const (
 	FieldRpmLimit = "rpm_limit"
 	// FieldMaxReasoningEffort holds the string denoting the max_reasoning_effort field in the database.
 	FieldMaxReasoningEffort = "max_reasoning_effort"
+	// FieldMaxReasoningEffortOverLimit holds the string denoting the max_reasoning_effort_over_limit field in the database.
+	FieldMaxReasoningEffortOverLimit = "max_reasoning_effort_over_limit"
 	// FieldReasoningEffortMappings holds the string denoting the reasoning_effort_mappings field in the database.
 	FieldReasoningEffortMappings = "reasoning_effort_mappings"
 	// FieldProfitControlEnabled holds the string denoting the profit_control_enabled field in the database.
@@ -251,6 +257,8 @@ var Columns = []string{
 	FieldSupportedModelScopes,
 	FieldSortOrder,
 	FieldAllowMessagesDispatch,
+	FieldForceOpenaiFast,
+	FieldFreeOpenaiFast,
 	FieldRequireOauthOnly,
 	FieldRequirePrivacySet,
 	FieldDefaultMappedModel,
@@ -258,6 +266,7 @@ var Columns = []string{
 	FieldModelsListConfig,
 	FieldRpmLimit,
 	FieldMaxReasoningEffort,
+	FieldMaxReasoningEffortOverLimit,
 	FieldReasoningEffortMappings,
 	FieldProfitControlEnabled,
 	FieldProfitMinMargin,
@@ -363,6 +372,10 @@ var (
 	DefaultSortOrder int
 	// DefaultAllowMessagesDispatch holds the default value on creation for the "allow_messages_dispatch" field.
 	DefaultAllowMessagesDispatch bool
+	// DefaultForceOpenaiFast holds the default value on creation for the "force_openai_fast" field.
+	DefaultForceOpenaiFast bool
+	// DefaultFreeOpenaiFast holds the default value on creation for the "free_openai_fast" field.
+	DefaultFreeOpenaiFast bool
 	// DefaultRequireOauthOnly holds the default value on creation for the "require_oauth_only" field.
 	DefaultRequireOauthOnly bool
 	// DefaultRequirePrivacySet holds the default value on creation for the "require_privacy_set" field.
@@ -381,6 +394,10 @@ var (
 	DefaultMaxReasoningEffort string
 	// MaxReasoningEffortValidator is a validator for the "max_reasoning_effort" field. It is called by the builders before save.
 	MaxReasoningEffortValidator func(string) error
+	// DefaultMaxReasoningEffortOverLimit holds the default value on creation for the "max_reasoning_effort_over_limit" field.
+	DefaultMaxReasoningEffortOverLimit string
+	// MaxReasoningEffortOverLimitValidator is a validator for the "max_reasoning_effort_over_limit" field. It is called by the builders before save.
+	MaxReasoningEffortOverLimitValidator func(string) error
 	// DefaultReasoningEffortMappings holds the default value on creation for the "reasoning_effort_mappings" field.
 	DefaultReasoningEffortMappings []domain.ReasoningEffortMapping
 	// DefaultProfitControlEnabled holds the default value on creation for the "profit_control_enabled" field.
@@ -609,6 +626,16 @@ func ByAllowMessagesDispatch(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldAllowMessagesDispatch, opts...).ToFunc()
 }
 
+// ByForceOpenaiFast orders the results by the force_openai_fast field.
+func ByForceOpenaiFast(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldForceOpenaiFast, opts...).ToFunc()
+}
+
+// ByFreeOpenaiFast orders the results by the free_openai_fast field.
+func ByFreeOpenaiFast(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldFreeOpenaiFast, opts...).ToFunc()
+}
+
 // ByRequireOauthOnly orders the results by the require_oauth_only field.
 func ByRequireOauthOnly(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldRequireOauthOnly, opts...).ToFunc()
@@ -632,6 +659,11 @@ func ByRpmLimit(opts ...sql.OrderTermOption) OrderOption {
 // ByMaxReasoningEffort orders the results by the max_reasoning_effort field.
 func ByMaxReasoningEffort(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldMaxReasoningEffort, opts...).ToFunc()
+}
+
+// ByMaxReasoningEffortOverLimit orders the results by the max_reasoning_effort_over_limit field.
+func ByMaxReasoningEffortOverLimit(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldMaxReasoningEffortOverLimit, opts...).ToFunc()
 }
 
 // ByProfitControlEnabled orders the results by the profit_control_enabled field.

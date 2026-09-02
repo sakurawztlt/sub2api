@@ -294,6 +294,7 @@ const backendModeDBTimeout = 5 * time.Second
 
 // cachedGatewayForwardingSettings 缓存网关转发行为设置（进程内缓存，60s TTL）
 type cachedGatewayForwardingSettings struct {
+	openAITTFTMode                   string
 	fingerprintUnification           bool
 	metadataPassthrough              bool
 	cchSigning                       bool
@@ -312,6 +313,13 @@ var gatewayForwardingSF singleflight.Group
 const gatewayForwardingCacheTTL = 60 * time.Second
 const gatewayForwardingErrorTTL = 5 * time.Second
 const gatewayForwardingDBTimeout = 5 * time.Second
+
+func normalizeOpenAITTFTMode(mode string) string {
+	if strings.EqualFold(strings.TrimSpace(mode), OpenAITTFTModeVisible) {
+		return OpenAITTFTModeVisible
+	}
+	return OpenAITTFTModeSemantic
+}
 
 type cachedAccountSchedulingThresholds struct {
 	thresholds map[string]int
@@ -1929,6 +1937,7 @@ type PublicSettingsInjectionPayload struct {
 	AffiliateEnabled                     bool   `json:"affiliate_enabled"`
 	RiskControlEnabled                   bool   `json:"risk_control_enabled"`
 	AllowUserViewErrorRequests           bool   `json:"allow_user_view_error_requests"`
+	PluginManagementEnabled              bool   `json:"plugin_management_enabled"`
 }
 
 // GetPublicSettingsForInjection returns public settings in a format suitable for HTML injection.
@@ -2001,6 +2010,7 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		AffiliateEnabled:                     settings.AffiliateEnabled,
 		RiskControlEnabled:                   settings.RiskControlEnabled,
 		AllowUserViewErrorRequests:           settings.AllowUserViewErrorRequests,
+		PluginManagementEnabled:              settings.PluginManagementEnabled,
 	}, nil
 }
 
@@ -2471,6 +2481,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyFrontendURL] = settings.FrontendURL
 	updates[SettingKeyInvitationCodeEnabled] = strconv.FormatBool(settings.InvitationCodeEnabled)
 	updates[SettingKeyTotpEnabled] = strconv.FormatBool(settings.TotpEnabled)
+	updates[SettingKeyStepUpEnabled] = strconv.FormatBool(settings.StepUpEnabled)
 	settings.LoginAgreementMode = normalizeLoginAgreementMode(settings.LoginAgreementMode)
 	settings.LoginAgreementUpdatedAt = strings.TrimSpace(settings.LoginAgreementUpdatedAt)
 	if settings.LoginAgreementUpdatedAt == "" {
@@ -2733,6 +2744,12 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyBackendModeEnabled] = strconv.FormatBool(settings.BackendModeEnabled)
 
 	// Gateway forwarding behavior
+	mode := normalizeOpenAITTFTMode(settings.OpenAITTFTMode)
+	rawMode := strings.ToLower(strings.TrimSpace(settings.OpenAITTFTMode))
+	if rawMode != "" && rawMode != OpenAITTFTModeSemantic && rawMode != OpenAITTFTModeVisible {
+		return nil, fmt.Errorf("%s must be one of: %s/%s", SettingKeyOpenAITTFTMode, OpenAITTFTModeSemantic, OpenAITTFTModeVisible)
+	}
+	updates[SettingKeyOpenAITTFTMode] = mode
 	updates[SettingKeyEnableFingerprintUnification] = strconv.FormatBool(settings.EnableFingerprintUnification)
 	updates[SettingKeyEnableMetadataPassthrough] = strconv.FormatBool(settings.EnableMetadataPassthrough)
 	updates[SettingKeyEnableCCHSigning] = strconv.FormatBool(settings.EnableCCHSigning)
@@ -2904,6 +2921,7 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	})
 	gatewayForwardingSF.Forget("gateway_forwarding")
 	gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
+		openAITTFTMode:                   normalizeOpenAITTFTMode(settings.OpenAITTFTMode),
 		fingerprintUnification:           settings.EnableFingerprintUnification,
 		metadataPassthrough:              settings.EnableMetadataPassthrough,
 		cchSigning:                       settings.EnableCCHSigning,
@@ -3189,13 +3207,14 @@ func (s *SettingService) IsBackendModeEnabled(ctx context.Context) bool {
 type gatewayForwardingSettingsResult struct {
 	fp, mp, cch, claudeOAuthSystemPromptInjection, cacheTTL1h, rewriteMessageCacheControl bool
 	clientDatelineNormalization                                                           bool
-	claudeOAuthSystemPrompt, claudeOAuthSystemPromptBlocks                                string
+	openAITTFTMode, claudeOAuthSystemPrompt, claudeOAuthSystemPromptBlocks                string
 }
 
 func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context) gatewayForwardingSettingsResult {
 	if cached, ok := gatewayForwardingCache.Load().(*cachedGatewayForwardingSettings); ok && cached != nil {
 		if time.Now().UnixNano() < cached.expiresAt {
 			return gatewayForwardingSettingsResult{
+				openAITTFTMode:                   normalizeOpenAITTFTMode(cached.openAITTFTMode),
 				fp:                               cached.fingerprintUnification,
 				mp:                               cached.metadataPassthrough,
 				cch:                              cached.cchSigning,
@@ -3212,6 +3231,7 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 		if cached, ok := gatewayForwardingCache.Load().(*cachedGatewayForwardingSettings); ok && cached != nil {
 			if time.Now().UnixNano() < cached.expiresAt {
 				return gatewayForwardingSettingsResult{
+					openAITTFTMode:                   normalizeOpenAITTFTMode(cached.openAITTFTMode),
 					fp:                               cached.fingerprintUnification,
 					mp:                               cached.metadataPassthrough,
 					cch:                              cached.cchSigning,
@@ -3227,6 +3247,7 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 		dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), gatewayForwardingDBTimeout)
 		defer cancel()
 		values, err := s.settingRepo.GetMultiple(dbCtx, []string{
+			SettingKeyOpenAITTFTMode,
 			SettingKeyEnableFingerprintUnification,
 			SettingKeyEnableMetadataPassthrough,
 			SettingKeyEnableCCHSigning,
@@ -3240,6 +3261,7 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 		if err != nil {
 			slog.Warn("failed to get gateway forwarding settings", "error", err)
 			gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
+				openAITTFTMode:                   OpenAITTFTModeSemantic,
 				fingerprintUnification:           true,
 				metadataPassthrough:              false,
 				cchSigning:                       false,
@@ -3249,8 +3271,9 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 				clientDatelineNormalization:      true,
 				expiresAt:                        time.Now().Add(gatewayForwardingErrorTTL).UnixNano(),
 			})
-			return gatewayForwardingSettingsResult{fp: true, claudeOAuthSystemPromptInjection: true, rewriteMessageCacheControl: s.defaultRewriteMessageCacheControl(), clientDatelineNormalization: true}, nil
+			return gatewayForwardingSettingsResult{openAITTFTMode: OpenAITTFTModeSemantic, fp: true, claudeOAuthSystemPromptInjection: true, rewriteMessageCacheControl: s.defaultRewriteMessageCacheControl(), clientDatelineNormalization: true}, nil
 		}
+		ttftMode := normalizeOpenAITTFTMode(values[SettingKeyOpenAITTFTMode])
 		fp := true
 		if v, ok := values[SettingKeyEnableFingerprintUnification]; ok && v != "" {
 			fp = v == "true"
@@ -3273,6 +3296,7 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 			clientDatelineNormalization = v == "true"
 		}
 		gatewayForwardingCache.Store(&cachedGatewayForwardingSettings{
+			openAITTFTMode:                   ttftMode,
 			fingerprintUnification:           fp,
 			metadataPassthrough:              mp,
 			cchSigning:                       cch,
@@ -3285,6 +3309,7 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 			expiresAt:                        time.Now().Add(gatewayForwardingCacheTTL).UnixNano(),
 		})
 		return gatewayForwardingSettingsResult{
+			openAITTFTMode:                   ttftMode,
 			fp:                               fp,
 			mp:                               mp,
 			cch:                              cch,
@@ -3299,7 +3324,12 @@ func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context)
 	if r, ok := val.(gatewayForwardingSettingsResult); ok {
 		return r
 	}
-	return gatewayForwardingSettingsResult{fp: true, claudeOAuthSystemPromptInjection: true, clientDatelineNormalization: true}
+	return gatewayForwardingSettingsResult{openAITTFTMode: OpenAITTFTModeSemantic, fp: true, claudeOAuthSystemPromptInjection: true, clientDatelineNormalization: true}
+}
+
+// GetOpenAITTFTMode returns the configured first-token timing definition.
+func (s *SettingService) GetOpenAITTFTMode(ctx context.Context) string {
+	return s.getGatewayForwardingSettingsCached(ctx).openAITTFTMode
 }
 
 // GetGatewayForwardingSettings returns cached gateway forwarding settings.
@@ -3490,6 +3520,16 @@ func (s *SettingService) IsTotpEnabled(ctx context.Context) bool {
 	value, err := s.settingRepo.GetValue(ctx, SettingKeyTotpEnabled)
 	if err != nil {
 		return false // 默认关闭
+	}
+	return value == "true"
+}
+
+// IsStepUpEnabled checks whether sensitive admin operations require a recent
+// TOTP verification. Storage failures retain the backward-compatible default.
+func (s *SettingService) IsStepUpEnabled(ctx context.Context) bool {
+	value, err := s.settingRepo.GetValue(ctx, SettingKeyStepUpEnabled)
+	if err != nil {
+		return false
 	}
 	return value == "true"
 }
@@ -3940,6 +3980,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		FrontendURL:                         settings[SettingKeyFrontendURL],
 		InvitationCodeEnabled:               settings[SettingKeyInvitationCodeEnabled] == "true",
 		TotpEnabled:                         settings[SettingKeyTotpEnabled] == "true",
+		StepUpEnabled:                       settings[SettingKeyStepUpEnabled] == "true",
 		LoginAgreementEnabled:               settings[SettingKeyLoginAgreementEnabled] == "true",
 		LoginAgreementMode:                  normalizeLoginAgreementMode(settings[SettingKeyLoginAgreementMode]),
 		LoginAgreementUpdatedAt:             loginAgreementUpdatedAt,
@@ -4441,6 +4482,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.AllowUngroupedKeyScheduling = settings[SettingKeyAllowUngroupedKeyScheduling] == "true"
 
 	// Gateway forwarding behavior (defaults: fingerprint=true, metadata_passthrough=false, cch_signing=false)
+	result.OpenAITTFTMode = normalizeOpenAITTFTMode(settings[SettingKeyOpenAITTFTMode])
 	if v, ok := settings[SettingKeyEnableFingerprintUnification]; ok && v != "" {
 		result.EnableFingerprintUnification = v == "true"
 	} else {

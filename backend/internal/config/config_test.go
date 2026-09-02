@@ -1629,6 +1629,11 @@ func TestValidateConfigErrors(t *testing.T) {
 			wantErr: "gateway.text_max_body_size",
 		},
 		{
+			name:    "gateway models list read limit",
+			mutate:  func(c *Config) { c.Gateway.ModelsListReadMaxBytes = 0 },
+			wantErr: "gateway.models_list_read_max_bytes",
+		},
+		{
 			name:    "gateway response header timeout",
 			mutate:  func(c *Config) { c.Gateway.ResponseHeaderTimeout = -1 },
 			wantErr: "gateway.response_header_timeout",

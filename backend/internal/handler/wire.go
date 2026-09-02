@@ -33,6 +33,7 @@ func ProvideAdminHandlers(
 	userAttributeHandler *admin.UserAttributeHandler,
 	errorPassthroughHandler *admin.ErrorPassthroughHandler,
 	tlsFingerprintProfileHandler *admin.TLSFingerprintProfileHandler,
+	pluginHandler *admin.PluginHandler,
 	apiKeyHandler *admin.AdminAPIKeyHandler,
 	scheduledTestHandler *admin.ScheduledTestHandler,
 	channelHandler *admin.ChannelHandler,
@@ -72,6 +73,7 @@ func ProvideAdminHandlers(
 		UserAttribute:          userAttributeHandler,
 		ErrorPassthrough:       errorPassthroughHandler,
 		TLSFingerprintProfile:  tlsFingerprintProfileHandler,
+		Plugin:                 pluginHandler,
 		APIKey:                 apiKeyHandler,
 		ScheduledTest:          scheduledTestHandler,
 		Channel:                channelHandler,
@@ -99,6 +101,8 @@ func ProvideAdminSettingHandler(
 	paymentService *service.PaymentService,
 	userAttributeService *service.UserAttributeService,
 	notificationEmailService *service.NotificationEmailService,
+	totpService *service.TotpService,
+	userService *service.UserService,
 ) *admin.SettingHandler {
 	h := admin.NewSettingHandler(
 		settingService,
@@ -110,6 +114,7 @@ func ProvideAdminSettingHandler(
 		userAttributeService,
 	)
 	h.SetNotificationEmailService(notificationEmailService)
+	h.SetStepUpDeps(totpService, userService)
 	return h
 }
 
@@ -145,6 +150,7 @@ func ProvideHandlers(
 	modelPlazaHandler *ModelPlazaHandler,
 	_ *service.IdempotencyCoordinator,
 	_ *service.IdempotencyCleanupService,
+	_ *service.OpenAIQuotaAutoResetService,
 ) *Handlers {
 	return &Handlers{
 		Auth:             authHandler,
@@ -214,6 +220,7 @@ var ProviderSet = wire.NewSet(
 	admin.NewUserAttributeHandler,
 	admin.NewErrorPassthroughHandler,
 	admin.NewTLSFingerprintProfileHandler,
+	admin.NewPluginHandler,
 	admin.NewAdminAPIKeyHandler,
 	admin.NewScheduledTestHandler,
 	admin.NewChannelHandler,

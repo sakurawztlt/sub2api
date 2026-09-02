@@ -96,6 +96,18 @@ func ApplyLegacyRequestFields(requestType RequestType, fallbackStream bool, fall
 	}
 }
 
+// coalesceRequestedReasoningEffort prefers explicit client intent and keeps
+// the effective value as a backward-compatible fallback.
+func coalesceRequestedReasoningEffort(requested, forwarded *string) *string {
+	if trimmed := optionalStringValue(requested); trimmed != "" {
+		return &trimmed
+	}
+	if trimmed := optionalStringValue(forwarded); trimmed != "" {
+		return &trimmed
+	}
+	return nil
+}
+
 type UsageLog struct {
 	ID        int64
 	UserID    int64
@@ -126,10 +138,14 @@ type UsageLog struct {
 	// ServiceTier records the billable request tier, e.g. OpenAI "priority" / "flex"
 	// or Anthropic "fast".
 	ServiceTier *string
-	// ReasoningEffort is the request's reasoning effort level.
+	// ReasoningEffort is the effective effort recorded for this request after
+	// group policy rewriting and model-family remapping (e.g. max -> xhigh).
 	// OpenAI: "low" / "medium" / "high" / "xhigh"; Claude: "low" / "medium" / "high" / "max".
 	// Nil means not provided / not applicable.
 	ReasoningEffort *string
+	// RequestedReasoningEffort is the client-requested effort before mapping.
+	// Nil means historical rows, or that no explicit/suffix-derived effort was observed.
+	RequestedReasoningEffort *string
 	// InboundEndpoint is the client-facing API endpoint path, e.g. /v1/chat/completions.
 	InboundEndpoint *string
 	// UpstreamEndpoint is the normalized upstream endpoint path, e.g. /v1/responses.
@@ -164,14 +180,15 @@ type UsageLog struct {
 	// AccountStatsCost 账号统计定价预计算费用（nil = 使用默认公式 total_cost × account_rate_multiplier）
 	AccountStatsCost *float64
 
-	BillingType  int8
-	RequestType  RequestType
-	Stream       bool
-	OpenAIWSMode bool
-	DurationMs   *int
-	FirstTokenMs *int
-	UserAgent    *string
-	IPAddress    *string
+	BillingType        int8
+	RequestType        RequestType
+	Stream             bool
+	OpenAIWSMode       bool
+	NativeCompactionV2 bool
+	DurationMs         *int
+	FirstTokenMs       *int
+	UserAgent          *string
+	IPAddress          *string
 	// SessionID is accepted only from a validated explicit inbound session
 	// header. It is never derived from metadata.user_id, prompt_cache_key, or a
 	// relay-synthesized identifier.

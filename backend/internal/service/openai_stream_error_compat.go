@@ -75,6 +75,7 @@ func (s *OpenAIGatewayService) handleOpenAIStreamTerminalAccountSideEffects(
 	payload []byte,
 	message string,
 	headers http.Header,
+	canonicalModel ...string,
 ) (int, bool) {
 	statusCode := openAIStreamFailureStatus(payload, message)
 	switch statusCode {
@@ -88,14 +89,25 @@ func (s *OpenAIGatewayService) handleOpenAIStreamTerminalAccountSideEffects(
 		if c != nil && c.Request != nil {
 			ctx = c.Request.Context()
 		}
+		model := firstNonEmpty(canonicalModel...)
+		if model == "" {
+			model = firstNonEmpty(gjson.GetBytes(payload, "model").String(), gjson.GetBytes(payload, "response.model").String())
+		}
 		accountHeaders := headers
 		if statusCode == http.StatusTooManyRequests {
-			accountHeaders = nil
+			accountHeaders = openAIWSSemantic429Headers(account, model, headers)
 		}
-		return statusCode, s.handleOpenAIAccountUpstreamError(ctx, account, statusCode, accountHeaders, payload)
+		return statusCode, s.handleOpenAIAccountUpstreamError(ctx, account, statusCode, accountHeaders, payload, model)
 	default:
 		return statusCode, false
 	}
+}
+
+func openAIWSSemantic429Headers(account *Account, model string, headers http.Header) http.Header {
+	if isCodexSparkModel(model) && isOpenAIOAuthAccount(account) {
+		return headers
+	}
+	return nil
 }
 
 // openAIResponsesCompletedEventIsEmpty reports whether a response.completed /

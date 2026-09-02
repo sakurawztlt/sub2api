@@ -13,7 +13,7 @@ func shouldForwardOpenAIResponsesViaRawChatCompletions(account *Account) bool {
 		case APIProtocolChatCompletions:
 			return true
 		case APIProtocolAdaptive:
-			return account.Platform != PlatformDeepseek
+			return !account.SupportsNativeCNResponses()
 		default:
 			return false
 		}

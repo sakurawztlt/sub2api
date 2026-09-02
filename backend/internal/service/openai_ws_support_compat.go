@@ -2,12 +2,19 @@ package service
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
+
+// ErrOpenAIWSIngressLeaseLost is retained as the typed cancellation cause
+// understood by the upstream WebSocket lifecycle. The relay build currently
+// has no distributed ingress lease producer, but preserving the cause keeps
+// transport shutdown behavior compatible when one is supplied.
+var ErrOpenAIWSIngressLeaseLost = errors.New("openai websocket ingress lease lost")
 
 func normalizeOpenAIWSTerminalEvent(eventType string) string {
 	switch strings.TrimSpace(eventType) {
@@ -142,6 +149,14 @@ func (s *OpenAIGatewayService) handleOpenAIWSFailureAccountSideEffects(ctx conte
 	}
 	s.handleOpenAIAccountUpstreamError(ctx, account, status, headers, payload, canonicalModel)
 	return true
+}
+
+func (s *OpenAIGatewayService) handleOpenAIWSDialTransientFailure(ctx context.Context, account *Account, canonicalModel string, err error) {
+	var dialErr *openAIWSDialError
+	if !errors.As(err, &dialErr) || dialErr == nil || !shouldCooldownOpenAITransientUpstreamError(dialErr.StatusCode, dialErr.ResponseBody) {
+		return
+	}
+	s.handleOpenAIAccountUpstreamError(ctx, account, dialErr.StatusCode, dialErr.ResponseHeaders, dialErr.ResponseBody, canonicalModel)
 }
 
 func (s *OpenAIGatewayService) newOpenAIWSRateLimitFailoverError(account *Account, headers http.Header, responseBody []byte, message string) *UpstreamFailoverError {

@@ -49,6 +49,13 @@ const (
 	BetaRedactThinking     = "redact-thinking-2026-02-12"
 	BetaContextManagement  = "context-management-2025-06-27"
 	BetaExtendedCacheTTL   = "extended-cache-ttl-2025-04-11"
+
+	// Fallback beta tokens are only used to decide whether client-supplied
+	// beta-only fields may survive sanitization. They must never be injected
+	// into the default Claude Code disguise profile.
+	BetaServerSideFallback   = "server-side-fallback-2026-07-01"
+	BetaFallbackCredit       = "fallback-credit-2026-07-01"
+	BetaFallbackCreditLegacy = "fallback-credit-2026-06-01"
 	// 5/8 codex #4 audit: cc-api anthropic_direct.go 已注入这两个 beta,
 	// sub2api 之前漏了 → 三仓 profile 不一致。补齐对齐 CLI 2.1.119+ 流量。
 	BetaAdvisorTool     = "advisor-tool-2026-03-01"
@@ -163,6 +170,12 @@ type Model struct {
 
 // DefaultModels Claude Code 客户端支持的默认模型列表
 var DefaultModels = []Model{
+	{
+		ID:          "claude-fable-5-1",
+		Type:        "model",
+		DisplayName: "Claude Fable 5.1",
+		CreatedAt:   "2026-09-01T00:00:00Z",
+	},
 	{
 		ID:          "claude-fable-5",
 		Type:        "model",

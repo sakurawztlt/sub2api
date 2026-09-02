@@ -67,6 +67,8 @@ type SettingHandler struct {
 	paymentService           *service.PaymentService
 	userAttributeService     *service.UserAttributeService
 	notificationEmailService *service.NotificationEmailService
+	totpService              *service.TotpService
+	userService              *service.UserService
 }
 
 // NewSettingHandler 创建系统设置处理器
@@ -90,6 +92,13 @@ func NewSettingHandler(settingService *service.SettingService, emailService *ser
 // the constructor signature used by existing unit tests.
 func (h *SettingHandler) SetNotificationEmailService(notificationEmailService *service.NotificationEmailService) {
 	h.notificationEmailService = notificationEmailService
+}
+
+// SetStepUpDeps attaches the services used to validate changes to the step-up
+// security switch while preserving the constructor used by existing tests.
+func (h *SettingHandler) SetStepUpDeps(totpService *service.TotpService, userService *service.UserService) {
+	h.totpService = totpService
+	h.userService = userService
 }
 
 // GetSettings 获取所有系统设置
@@ -136,6 +145,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		InvitationCodeEnabled:                                  settings.InvitationCodeEnabled,
 		TotpEnabled:                                            settings.TotpEnabled,
 		TotpEncryptionKeyConfigured:                            h.settingService.IsTotpEncryptionKeyConfigured(),
+		StepUpEnabled:                                          settings.StepUpEnabled,
 		LoginAgreementEnabled:                                  settings.LoginAgreementEnabled,
 		LoginAgreementMode:                                     settings.LoginAgreementMode,
 		LoginAgreementUpdatedAt:                                settings.LoginAgreementUpdatedAt,
@@ -265,6 +275,7 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		MaxClaudeCodeVersion:                                   settings.MaxClaudeCodeVersion,
 		AllowUngroupedKeyScheduling:                            settings.AllowUngroupedKeyScheduling,
 		BackendModeEnabled:                                     settings.BackendModeEnabled,
+		OpenAITTFTMode:                                         settings.OpenAITTFTMode,
 		EnableFingerprintUnification:                           settings.EnableFingerprintUnification,
 		EnableMetadataPassthrough:                              settings.EnableMetadataPassthrough,
 		EnableCCHSigning:                                       settings.EnableCCHSigning,
@@ -360,9 +371,10 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 
 		AvailableChannelsEnabled: settings.AvailableChannelsEnabled,
 
-		ModelPlazaEnabled:     settings.ModelPlazaEnabled,
-		ModelPlazaRequireAuth: settings.ModelPlazaRequireAuth,
-		ModelPlazaDescription: settings.ModelPlazaDescription,
+		ModelPlazaEnabled:       settings.ModelPlazaEnabled,
+		ModelPlazaRequireAuth:   settings.ModelPlazaRequireAuth,
+		PluginManagementEnabled: settings.PluginManagementEnabled,
+		ModelPlazaDescription:   settings.ModelPlazaDescription,
 
 		AffiliateEnabled: settings.AffiliateEnabled,
 
@@ -462,6 +474,7 @@ type UpdateSettingsRequest struct {
 	FrontendURL                         string                       `json:"frontend_url"`
 	InvitationCodeEnabled               bool                         `json:"invitation_code_enabled"`
 	TotpEnabled                         bool                         `json:"totp_enabled"` // TOTP 双因素认证
+	StepUpEnabled                       *bool                        `json:"step_up_enabled"`
 	LoginAgreementEnabled               bool                         `json:"login_agreement_enabled"`
 	LoginAgreementMode                  string                       `json:"login_agreement_mode"`
 	LoginAgreementUpdatedAt             string                       `json:"login_agreement_updated_at"`
@@ -655,6 +668,7 @@ type UpdateSettingsRequest struct {
 	// Backend Mode
 	BackendModeEnabled bool `json:"backend_mode_enabled"`
 
+	OpenAITTFTMode                         *string `json:"openai_ttft_mode"`
 	EnableFingerprintUnification           *bool   `json:"enable_fingerprint_unification"`
 	EnableMetadataPassthrough              *bool   `json:"enable_metadata_passthrough"`
 	EnableCCHSigning                       *bool   `json:"enable_cch_signing"`
@@ -832,6 +846,38 @@ func omittedSettingKeys(sentFields map[string]json.RawMessage) service.OmittedSe
 
 // UpdateSettings 更新系统设置
 // PUT /api/v1/admin/settings
+func (h *SettingHandler) ensureActorTotpForStepUp(c *gin.Context) bool {
+	if c.GetString("auth_method") == service.AuditAuthMethodAdminAPIKey {
+		response.ErrorWithDetails(c, http.StatusForbidden,
+			"Admin API key cannot enable step-up verification; use an admin session with TOTP enabled",
+			"STEP_UP_ADMIN_API_KEY_FORBIDDEN", nil)
+		return false
+	}
+	subject, ok := middleware.GetAuthSubjectFromContext(c)
+	if !ok || subject.UserID <= 0 {
+		response.ErrorWithDetails(c, http.StatusForbidden,
+			"Enabling step-up verification requires an authenticated admin session",
+			"STEP_UP_ENABLE_REQUIRES_TOTP", nil)
+		return false
+	}
+	if h.userService == nil {
+		response.InternalError(c, "Step-up precondition check unavailable")
+		return false
+	}
+	user, err := h.userService.GetByID(c.Request.Context(), subject.UserID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return false
+	}
+	if !user.TotpEnabled {
+		response.ErrorWithDetails(c, http.StatusBadRequest,
+			"Enable two-factor authentication (TOTP) for your account before turning on step-up verification",
+			"STEP_UP_ENABLE_REQUIRES_TOTP", nil)
+		return false
+	}
+	return true
+}
+
 func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	var sentFields map[string]json.RawMessage
 	if err := c.ShouldBindBodyWith(&sentFields, binding.JSON); err != nil {
@@ -854,6 +900,24 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
+	}
+	stepUpEnabled := previousSettings.StepUpEnabled
+	if req.StepUpEnabled != nil {
+		stepUpEnabled = *req.StepUpEnabled
+	}
+	if stepUpEnabled && !previousSettings.StepUpEnabled {
+		if !h.ensureActorTotpForStepUp(c) {
+			return
+		}
+	}
+	if !stepUpEnabled && previousSettings.StepUpEnabled {
+		if h.totpService == nil || h.userService == nil {
+			response.InternalError(c, "Step-up verification service unavailable")
+			return
+		}
+		if !middleware.EnforceStepUpAlways(c, h.totpService, h.userService) {
+			return
+		}
 	}
 
 	// 验证参数
@@ -1699,6 +1763,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		FrontendURL:             req.FrontendURL,
 		InvitationCodeEnabled:   req.InvitationCodeEnabled,
 		TotpEnabled:             req.TotpEnabled,
+		StepUpEnabled:           stepUpEnabled,
 		LoginAgreementEnabled:   req.LoginAgreementEnabled,
 		LoginAgreementMode:      loginAgreementMode,
 		LoginAgreementUpdatedAt: loginAgreementUpdatedAt,
@@ -1874,6 +1939,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 				return *req.OpsMetricsIntervalSeconds
 			}
 			return previousSettings.OpsMetricsIntervalSeconds
+		}(),
+		OpenAITTFTMode: func() string {
+			if req.OpenAITTFTMode != nil {
+				return *req.OpenAITTFTMode
+			}
+			return previousSettings.OpenAITTFTMode
 		}(),
 		EnableFingerprintUnification: func() bool {
 			if req.EnableFingerprintUnification != nil {
@@ -2319,6 +2390,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		InvitationCodeEnabled:                                  updatedSettings.InvitationCodeEnabled,
 		TotpEnabled:                                            updatedSettings.TotpEnabled,
 		TotpEncryptionKeyConfigured:                            h.settingService.IsTotpEncryptionKeyConfigured(),
+		StepUpEnabled:                                          updatedSettings.StepUpEnabled,
 		LoginAgreementEnabled:                                  updatedSettings.LoginAgreementEnabled,
 		LoginAgreementMode:                                     updatedSettings.LoginAgreementMode,
 		LoginAgreementUpdatedAt:                                updatedSettings.LoginAgreementUpdatedAt,
@@ -2445,6 +2517,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		MaxClaudeCodeVersion:                                   updatedSettings.MaxClaudeCodeVersion,
 		AllowUngroupedKeyScheduling:                            updatedSettings.AllowUngroupedKeyScheduling,
 		BackendModeEnabled:                                     updatedSettings.BackendModeEnabled,
+		OpenAITTFTMode:                                         updatedSettings.OpenAITTFTMode,
 		EnableFingerprintUnification:                           updatedSettings.EnableFingerprintUnification,
 		EnableMetadataPassthrough:                              updatedSettings.EnableMetadataPassthrough,
 		EnableCCHSigning:                                       updatedSettings.EnableCCHSigning,
@@ -2643,6 +2716,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.TotpEnabled != after.TotpEnabled {
 		changed = append(changed, "totp_enabled")
+	}
+	if before.StepUpEnabled != after.StepUpEnabled {
+		changed = append(changed, "step_up_enabled")
 	}
 	if before.LoginAgreementEnabled != after.LoginAgreementEnabled {
 		changed = append(changed, "login_agreement_enabled")
@@ -3000,6 +3076,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.EnableFingerprintUnification != after.EnableFingerprintUnification {
 		changed = append(changed, "enable_fingerprint_unification")
+	}
+	if before.OpenAITTFTMode != after.OpenAITTFTMode {
+		changed = append(changed, "openai_ttft_mode")
 	}
 	if before.EnableMetadataPassthrough != after.EnableMetadataPassthrough {
 		changed = append(changed, "enable_metadata_passthrough")
@@ -3423,7 +3502,14 @@ type TestSMTPRequest struct {
 	SMTPPort     int    `json:"smtp_port"`
 	SMTPUsername string `json:"smtp_username"`
 	SMTPPassword string `json:"smtp_password"`
-	SMTPUseTLS   bool   `json:"smtp_use_tls"`
+	SMTPUseTLS   *bool  `json:"smtp_use_tls"`
+}
+
+func resolveSMTPUseTLS(requested *bool, savedConfig *service.SMTPConfig) bool {
+	if requested != nil {
+		return *requested
+	}
+	return savedConfig != nil && savedConfig.UseTLS
 }
 
 // TestSMTPConnection 测试SMTP连接
@@ -3470,7 +3556,7 @@ func (h *SettingHandler) TestSMTPConnection(c *gin.Context) {
 		Port:     req.SMTPPort,
 		Username: req.SMTPUsername,
 		Password: password,
-		UseTLS:   req.SMTPUseTLS,
+		UseTLS:   resolveSMTPUseTLS(req.SMTPUseTLS, savedConfig),
 	}
 
 	err := h.emailService.TestSMTPConnectionWithConfig(config)
@@ -3491,7 +3577,7 @@ type SendTestEmailRequest struct {
 	SMTPPassword string `json:"smtp_password"`
 	SMTPFrom     string `json:"smtp_from_email"`
 	SMTPFromName string `json:"smtp_from_name"`
-	SMTPUseTLS   bool   `json:"smtp_use_tls"`
+	SMTPUseTLS   *bool  `json:"smtp_use_tls"`
 }
 
 // SendTestEmail 发送测试邮件
@@ -3548,7 +3634,7 @@ func (h *SettingHandler) SendTestEmail(c *gin.Context) {
 		Password: password,
 		From:     req.SMTPFrom,
 		FromName: req.SMTPFromName,
-		UseTLS:   req.SMTPUseTLS,
+		UseTLS:   resolveSMTPUseTLS(req.SMTPUseTLS, savedConfig),
 	}
 
 	siteName := h.settingService.GetSiteName(c.Request.Context())
@@ -3735,6 +3821,33 @@ func (h *SettingHandler) UpdateRateLimit429CooldownSettings(c *gin.Context) {
 		Enabled:         updatedSettings.Enabled,
 		CooldownSeconds: updatedSettings.CooldownSeconds,
 	})
+}
+
+func (h *SettingHandler) GetOpenAIImagesOAuthUnavailableCooldownSettings(c *gin.Context) {
+	settings, err := h.settingService.GetOpenAIImagesOAuthUnavailableCooldownSettings(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, dto.OpenAIImagesOAuthUnavailableCooldownSettings{CooldownMinutes: settings.CooldownMinutes})
+}
+
+type UpdateOpenAIImagesOAuthUnavailableCooldownSettingsRequest struct {
+	CooldownMinutes int `json:"cooldown_minutes"`
+}
+
+func (h *SettingHandler) UpdateOpenAIImagesOAuthUnavailableCooldownSettings(c *gin.Context) {
+	var req UpdateOpenAIImagesOAuthUnavailableCooldownSettingsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	settings := &service.OpenAIImagesOAuthUnavailableCooldownSettings{CooldownMinutes: req.CooldownMinutes}
+	if err := h.settingService.SetOpenAIImagesOAuthUnavailableCooldownSettings(c.Request.Context(), settings); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+	response.Success(c, dto.OpenAIImagesOAuthUnavailableCooldownSettings{CooldownMinutes: settings.CooldownMinutes})
 }
 
 // GetPanelRateLimitSettings 获取面板 API 限流配置

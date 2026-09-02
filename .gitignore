@@ -1,4 +1,5 @@
-docs/claude-relay-service/
+# 本地杂项文档、测试数据和外部项目副本
+/docs-local/
 .codex
 
 # Claude Code hook 日志 / 历史聊天 — 可能含真实 OAuth token / API key, 永不入 git
@@ -157,3 +158,5 @@ output/
 
 # Vitest / Vite cache at repo root
 .vite/
+# 本地闭源插件开发目录及构建产物不进入 Sub2API 仓库
+/plugins/

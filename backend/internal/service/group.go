@@ -42,17 +42,21 @@ type Group struct {
 
 	// 图片/视频生成计费配置（OpenAI/Gemini/Antigravity/Grok 平台按能力使用）
 	AllowImageGeneration         bool
+	AllowBatchImageGeneration    bool
 	ImageRateIndependent         bool
 	ImageRateMultiplier          float64
 	ImagePrice1K                 *float64
 	ImagePrice2K                 *float64
 	ImagePrice4K                 *float64
+	BatchImageDiscountMultiplier float64
+	BatchImageHoldMultiplier     float64
 	VideoRateIndependent         bool
 	VideoRateMultiplier          float64
 	VideoPrice480P               *float64
 	VideoPrice720P               *float64
 	VideoPrice1080P              *float64
 	VideoModelPrices             map[string]map[string]float64
+	WebSearchPricePerCall        *float64
 	SearchPricePer1k             *float64
 	AudioRealtimePricePerMin     *float64
 	AudioTTSPricePerMillionChars *float64
@@ -87,6 +91,9 @@ type Group struct {
 
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
 	AllowMessagesDispatch       bool
+	AllowLive                   bool
+	ForceOpenAIFast             bool
+	FreeOpenAIFast              bool
 	RequireOAuthOnly            bool // 仅允许非 apikey 类型账号关联（OpenAI/Antigravity/Anthropic/Gemini）
 	RequirePrivacySet           bool // 调度时仅允许 privacy 已成功设置的账号（OpenAI/Antigravity/Anthropic/Gemini）
 	DefaultMappedModel          string
@@ -100,6 +107,9 @@ type Group struct {
 	// MaxReasoningEffort limits the effective OpenAI/Codex reasoning effort.
 	// Empty means unlimited; supported values are minimal/low/medium/high/xhigh/max.
 	MaxReasoningEffort string
+	// MaxReasoningEffortOverLimit is the access control when an explicit effort
+	// exceeds the ceiling: downgrade (default) or deny.
+	MaxReasoningEffortOverLimit string
 	// ReasoningEffortMappings rewrites explicit request values before applying the ceiling.
 	ReasoningEffortMappings []ReasoningEffortMapping
 

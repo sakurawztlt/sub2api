@@ -31,18 +31,93 @@ func normalizeOpenAIOAuthResponsesCompatibilityFields(reqBody map[string]any) bo
 	return changed
 }
 
-func normalizeOpenAIParallelToolCallsWithoutTools(body []byte) ([]byte, bool, error) {
+func normalizeOpenAIParallelToolCallsWithoutTools(body []byte, responsesLiteOpt ...bool) ([]byte, bool, error) {
+	responsesLite := len(responsesLiteOpt) > 0 && responsesLiteOpt[0]
+	if responsesLite {
+		return body, false, nil
+	}
 	parallel := gjson.GetBytes(body, "parallel_tool_calls")
 	if !parallel.Exists() {
 		return body, false, nil
 	}
-	tools := gjson.GetBytes(body, "tools")
-	if tools.IsArray() && len(tools.Array()) > 0 {
+	if openAIRequestBodyHasTools(body) {
 		return body, false, nil
 	}
 	normalized, err := sjson.DeleteBytes(body, "parallel_tool_calls")
 	if err != nil {
 		return body, false, fmt.Errorf("normalize parallel_tool_calls without tools: %w", err)
+	}
+	return normalized, true, nil
+}
+
+// openAIRequestBodyHasTools recognizes both top-level tools and the Responses
+// Lite input.additional_tools carrier.
+func openAIRequestBodyHasTools(body []byte) bool {
+	if tools := gjson.GetBytes(body, "tools"); tools.IsArray() && len(tools.Array()) > 0 {
+		return true
+	}
+	for _, item := range gjson.GetBytes(body, "input").Array() {
+		if strings.TrimSpace(item.Get("type").String()) != "additional_tools" {
+			continue
+		}
+		if tools := item.Get("tools"); tools.IsArray() && len(tools.Array()) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizeOpenAIResponsesReasoningContentReplay removes non-portable visible
+// reasoning.content while retaining the portable reasoning item metadata.
+func normalizeOpenAIResponsesReasoningContentReplay(body []byte) ([]byte, bool, error) {
+	input := gjson.GetBytes(body, "input")
+	if !input.IsArray() {
+		return body, false, nil
+	}
+
+	needsNormalization := false
+	input.ForEach(func(_, item gjson.Result) bool {
+		if strings.TrimSpace(item.Get("type").String()) != "reasoning" {
+			return true
+		}
+		content := item.Get("content")
+		if content.IsArray() && len(content.Array()) > 0 {
+			needsNormalization = true
+			return false
+		}
+		return true
+	})
+	if !needsNormalization {
+		return body, false, nil
+	}
+
+	var reqBody map[string]any
+	if err := decodeOpenAIJSONUseNumber(body, &reqBody); err != nil {
+		return body, false, fmt.Errorf("normalize OpenAI reasoning content replay: %w", err)
+	}
+	items, ok := reqBody["input"].([]any)
+	if !ok {
+		return body, false, nil
+	}
+	changed := false
+	for _, rawItem := range items {
+		item, ok := rawItem.(map[string]any)
+		if !ok || strings.TrimSpace(firstNonEmptyString(item["type"])) != "reasoning" {
+			continue
+		}
+		content, ok := item["content"].([]any)
+		if !ok || len(content) == 0 {
+			continue
+		}
+		delete(item, "content")
+		changed = true
+	}
+	if !changed {
+		return body, false, nil
+	}
+	normalized, err := marshalOpenAIUpstreamJSON(reqBody)
+	if err != nil {
+		return body, false, fmt.Errorf("serialize normalized OpenAI reasoning content replay: %w", err)
 	}
 	return normalized, true, nil
 }
@@ -223,10 +298,11 @@ func normalizeOpenAIResponseFormatSchemasBody(body []byte) ([]byte, bool, error)
 	return normalized, true, nil
 }
 
-func normalizeOpenAIResponsesWebSocketCompatibilityBody(body []byte, account *Account) ([]byte, bool, error) {
+func normalizeOpenAIResponsesWebSocketCompatibilityBody(body []byte, account *Account, responsesLiteOpt ...bool) ([]byte, bool, error) {
 	if account == nil || !account.IsOpenAI() {
 		return body, false, nil
 	}
+	responsesLite := len(responsesLiteOpt) > 0 && responsesLiteOpt[0]
 	normalized := body
 	changed := false
 	if account.IsOpenAIOAuthLike() {
@@ -236,8 +312,14 @@ func normalizeOpenAIResponsesWebSocketCompatibilityBody(body []byte, account *Ac
 			return body, false, err
 		}
 	}
+	if next, normalizedReasoningContent, err := normalizeOpenAIResponsesReasoningContentReplay(normalized); err != nil {
+		return body, false, err
+	} else if normalizedReasoningContent {
+		normalized = next
+		changed = true
+	}
 	if account.IsOpenAIApiKey() {
-		if next, normalizedParallel, err := normalizeOpenAIParallelToolCallsWithoutTools(normalized); err != nil {
+		if next, normalizedParallel, err := normalizeOpenAIParallelToolCallsWithoutTools(normalized, responsesLite); err != nil {
 			return body, false, err
 		} else if normalizedParallel {
 			normalized = next

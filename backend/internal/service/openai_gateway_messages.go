@@ -51,6 +51,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		forwardResultOut = attachObservedOpenAIUpstreamResponseModel(c, forwardResultOut)
 	}()
 	setCodexToolNameReverse(c, nil)
+	if _, err := s.prepareCodexAccountIdentitySource(ctx, c, account); err != nil {
+		return nil, err
+	}
 
 	// CN providers configured for their native Anthropic protocol (including
 	// adaptive mode) must stay on /v1/messages so thinking, tool_use and cache
@@ -304,6 +307,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		if codexResult.PromptCacheKey != "" {
 			promptCacheKey = codexResult.PromptCacheKey
 		}
+		applyCodexAccountIdentityClientMetadataMap(reqBody, codexAccountIdentitySource(c, account), apiKeyID)
 		// 058 step 2: prompt_cache_key is captured into result + sent via the
 		// session_id header. Sending it again in the body confuses Codex SSE
 		// (rejected as unsupported field on bridge path).
@@ -351,7 +355,16 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		}
 	}
 	if account.Platform == PlatformOpenAI {
-		if policyBody, changed := ApplyOpenAIReasoningEffortPolicyFromContext(ctx, responsesBody); changed {
+		policyBody, changed, policyErr := ApplyOpenAIReasoningEffortPolicyFromContext(ctx, responsesBody)
+		if policyErr != nil {
+			var overLimit *ReasoningEffortOverLimitError
+			if errors.As(policyErr, &overLimit) {
+				MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
+				writeAnthropicError(c, http.StatusForbidden, "forbidden_error", overLimit.Error())
+			}
+			return nil, policyErr
+		}
+		if changed {
 			responsesBody = policyBody
 			if responsesReq.Reasoning != nil {
 				responsesReq.Reasoning.Effort = gjson.GetBytes(responsesBody, "reasoning.effort").String()
@@ -372,6 +385,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		return nil, policyErr
 	}
 	responsesBody = updatedBody
+	responsesReq.ServiceTier = normalizedOpenAIServiceTierValue(gjson.GetBytes(responsesBody, "service_tier").String())
 	grokCacheIdentity := ""
 	if account.Platform == PlatformGrok {
 		grokIntentSourceBody := responsesBody
@@ -419,7 +433,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// session_id with the isolated prompt cache key to preserve the legacy
 	// upstream session behavior for OAuth/Codex accounts.
 	if promptCacheKey != "" {
-		isolatedSessionID := generateSessionUUID(isolateOpenAISessionID(apiKeyID, promptCacheKey))
+		isolatedSessionID := generateSessionUUID(isolateOpenAIUpstreamSessionID(apiKeyID, codexAccountIdentitySource(c, account), promptCacheKey))
 		upstreamReq.Header.Set("session_id", isolatedSessionID)
 		// 058 step 2: when upstream/builder set conversation_id we re-align it
 		// onto the isolated session id so per-key sessions stay separated.
@@ -476,6 +490,16 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
+		// Agent Identity assertions bind to a registered task. Recover a stale
+		// task once, then rebuild the complete request so the refreshed assertion,
+		// account-scoped identity, and disguise headers remain in sync.
+		if !agentIdentityTaskRecoveryWasTried(ctx) && s.isAgentIdentityAccount(ctx, account) && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, respBody) {
+			expectedTaskID := account.GetCredential("task_id")
+			if recoveryErr := s.recoverAgentIdentityTask(ctx, account, expectedTaskID); recoveryErr != nil {
+				return nil, fmt.Errorf("agent identity task recovery failed: %w", recoveryErr)
+			}
+			return s.ForwardAsAnthropic(markAgentIdentityTaskRecoveryTried(ctx), c, account, body, promptCacheKey, defaultMappedModel)
+		}
 		// 058 step 2: when upstream rejects the cached previous_response_id
 		// (account moved, response evicted, server doesn't honor the field),
 		// drop the binding and retry once without continuation. "unsupported"
@@ -594,6 +618,8 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		if snapshot := ParseCodexRateLimitHeaders(resp.Header); snapshot != nil {
 			s.updateCodexUsageSnapshot(ctx, account.ID, snapshot)
 		}
+	} else if handleErr == nil && account.IsShadow() && account.ParentAccountID != nil {
+		notifyOpenAIAutoReset(*account.ParentAccountID)
 	}
 
 	return result, handleErr
@@ -743,6 +769,7 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 		observer = beginUpstreamResponseModelObservation(c)
 	}
 	observer.Observe(finalResponse.Model, true)
+	observer.ObserveServiceTier(finalResponse.ServiceTier, true)
 
 	if strings.TrimSpace(finalResponse.Status) == "failed" {
 		payload, _ := json.Marshal(gin.H{"type": "response.failed", "response": finalResponse})
@@ -757,7 +784,7 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 			return nil, fmt.Errorf("openai cyber_policy: %s", msg)
 		}
 		if openAIStreamFailedEventShouldFailover(payload, message) {
-			return nil, s.newOpenAIStreamFailoverError(c, account, false, requestID, payload, message, resp.Header)
+			return nil, s.newOpenAIStreamFailoverErrorWithModel(c, account, false, requestID, payload, message, upstreamModel, resp.Header)
 		}
 		message = s.recordOpenAIStreamUpstreamError(c, account, false, requestID, "http_error", payload, message)
 		if status, errType, errMsg, matched := applyErrorPassthroughRule(
@@ -1864,7 +1891,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 					shouldFailover = openAIStreamErrorEventShouldFailover(payloadBytes, message)
 				}
 				if !clientOutputStarted && shouldFailover {
-					streamFailoverErr = s.newOpenAIStreamFailoverError(c, account, false, requestID, payloadBytes, message, resp.Header)
+					streamFailoverErr = s.newOpenAIStreamFailoverErrorWithModel(c, account, false, requestID, payloadBytes, message, upstreamModel, resp.Header)
 					return true
 				}
 

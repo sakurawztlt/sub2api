@@ -35,9 +35,12 @@ type Usage struct {
 }
 
 type RelayResult struct {
-	RequestModel            string
-	ResponseModel           string
-	ResponseModelConflict   bool
+	RequestModel          string
+	ResponseModel         string
+	ResponseModelConflict bool
+	// ResponseServiceTier is the raw service_tier declared by the last terminal
+	// response event; "" when the upstream never declared one.
+	ResponseServiceTier     string
 	Usage                   Usage
 	RequestID               string
 	TerminalEventType       string
@@ -52,6 +55,7 @@ type RelayTurnResult struct {
 	RequestModel          string
 	ResponseModel         string
 	ResponseModelConflict bool
+	ResponseServiceTier   string
 	Usage                 Usage
 	RequestID             string
 	TerminalEventType     string
@@ -63,6 +67,7 @@ type RelayTurnResult struct {
 type RelayExit struct {
 	Stage           string
 	Err             error
+	Graceful        bool
 	WroteDownstream bool
 }
 
@@ -79,6 +84,9 @@ type RelayOptions struct {
 	OnTurnComplete                  func(turn RelayTurnResult)
 	BeforeWriteClient               func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) error
 	RewriteClientPayload            func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) []byte
+	BeforeClientWrite               func(msgType coderws.MessageType, payload []byte)
+	AfterClientWrite                func(msgType coderws.MessageType, payload []byte, writeErr error)
+	BeforeRelayCancel               func(exit RelayExit)
 	ReadClientFrame                 func(ctx context.Context, clientConn FrameConn) (coderws.MessageType, []byte, error)
 	OnTrace                         func(event RelayTraceEvent)
 	Now                             func() time.Time
@@ -95,19 +103,20 @@ type RelayTraceEvent struct {
 }
 
 type relayState struct {
-	usage             Usage
-	turnUsage         Usage
-	requestModelMu    sync.RWMutex
-	requestModel      string
-	pendingTurnStart  atomic.Pointer[time.Time]
-	lastResponseID    string
-	lastResponseModel string
-	responseConflict  bool
-	terminalEventType string
-	firstTokenMs      *int
-	turnTimingByID    map[string]*relayTurnTiming
-	activeTurn        *relayTurnTiming
-	pendingBareError  *observedUpstreamEvent
+	usage                   Usage
+	turnUsage               Usage
+	requestModelMu          sync.RWMutex
+	requestModel            string
+	pendingTurnStart        atomic.Pointer[time.Time]
+	lastResponseID          string
+	lastResponseModel       string
+	lastResponseServiceTier string
+	responseConflict        bool
+	terminalEventType       string
+	firstTokenMs            *int
+	turnTimingByID          map[string]*relayTurnTiming
+	activeTurn              *relayTurnTiming
+	pendingBareError        *observedUpstreamEvent
 }
 
 type relayExitSignal struct {
@@ -118,15 +127,16 @@ type relayExitSignal struct {
 }
 
 type observedUpstreamEvent struct {
-	terminal         bool
-	eventType        string
-	responseID       string
-	usage            Usage
-	startedAt        time.Time
-	responseModel    string
-	responseConflict bool
-	duration         time.Duration
-	firstToken       *int
+	terminal            bool
+	eventType           string
+	responseID          string
+	usage               Usage
+	startedAt           time.Time
+	responseModel       string
+	responseConflict    bool
+	responseServiceTier string
+	duration            time.Duration
+	firstToken          *int
 }
 
 type relayTurnTiming struct {
@@ -135,6 +145,9 @@ type relayTurnTiming struct {
 	firstResponseModel    string
 	terminalResponseModel string
 	responseModelConflict bool
+	// terminalResponseServiceTier is only taken from terminal events: earlier
+	// events echo the requested tier, not the one the upstream actually used.
+	terminalResponseServiceTier string
 }
 
 func Relay(
@@ -283,6 +296,8 @@ func Relay(
 			options.OnTurnComplete,
 			options.BeforeWriteClient,
 			options.RewriteClientPayload,
+			options.BeforeClientWrite,
+			options.AfterClientWrite,
 			func() {
 				if options.StartClientAfterFirstDownstream {
 					startClientReader()
@@ -299,6 +314,12 @@ func Relay(
 	go runIdleWatchdog(relayCtx, nowFn, options.IdleTimeout, &lastActivity, onTrace, exitCh)
 
 	firstExit := <-exitCh
+	// An outer ingress cancellation is a control-plane close, not a graceful
+	// upstream disconnect. Leave the client connection open so the adapter can
+	// emit the precise lease/request close code before relay cancellation.
+	if ctx.Err() != nil {
+		firstExit.graceful = false
+	}
 	emitRelayTrace(onTrace, RelayTraceEvent{
 		Stage:           "first_exit",
 		Direction:       relayDirectionFromStage(firstExit.stage),
@@ -306,6 +327,14 @@ func Relay(
 		WroteDownstream: firstExit.wroteDownstream,
 		Error:           relayErrorString(firstExit.err),
 	})
+	if options.BeforeRelayCancel != nil {
+		options.BeforeRelayCancel(RelayExit{
+			Stage:           firstExit.stage,
+			Err:             firstExit.err,
+			Graceful:        firstExit.graceful,
+			WroteDownstream: firstExit.wroteDownstream,
+		})
+	}
 	combinedWroteDownstream := firstExit.wroteDownstream
 	secondExit := relayExitSignal{graceful: true}
 	hasSecondExit := false
@@ -493,6 +522,8 @@ func runUpstreamToClient(
 	onTurnComplete func(turn RelayTurnResult),
 	beforeWriteClient func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) error,
 	rewriteClientPayload func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) []byte,
+	beforeClientWrite func(msgType coderws.MessageType, payload []byte),
+	afterClientWrite func(msgType coderws.MessageType, payload []byte, writeErr error),
 	afterWriteClient func(),
 	dropDownstreamWrites *atomic.Bool,
 	forwardedFrames *atomic.Int64,
@@ -506,17 +537,26 @@ func runUpstreamToClient(
 		msgType, payload, err := upstreamConn.ReadFrame(ctx)
 		if err != nil {
 			emitTurnComplete(onTurnComplete, state, finalizePendingBareError(state, nowFn()))
+			graceful := isDisconnectError(err)
+			// A clean WebSocket close only describes the transport handshake. Once
+			// the upstream has started a Responses turn, success still requires a
+			// terminal protocol event. Treat an early 1000/EOF as a relay failure so
+			// the adapter does not report relay_completed with an active turn.
+			if graceful && openAIWSRelayActiveTurnID(state) != "" {
+				graceful = false
+				err = errors.New("upstream websocket closed before terminal event: " + err.Error())
+			}
 			emitRelayTrace(onTrace, RelayTraceEvent{
 				Stage:           "read_upstream_failed",
 				Direction:       "upstream_to_client",
 				Error:           err.Error(),
-				Graceful:        isDisconnectError(err),
+				Graceful:        graceful,
 				WroteDownstream: wroteDownstream,
 			})
 			exitCh <- relayExitSignal{
 				stage:           "read_upstream",
 				err:             err,
-				graceful:        isDisconnectError(err),
+				graceful:        graceful,
 				wroteDownstream: wroteDownstream,
 			}
 			return
@@ -577,16 +617,23 @@ func runUpstreamToClient(
 			markActivity()
 			continue
 		}
-		if err := writeClient(msgType, payload); err != nil {
+		if beforeClientWrite != nil {
+			beforeClientWrite(msgType, payload)
+		}
+		writeErr := writeClient(msgType, payload)
+		if afterClientWrite != nil {
+			afterClientWrite(msgType, payload, writeErr)
+		}
+		if writeErr != nil {
 			emitRelayTrace(onTrace, RelayTraceEvent{
 				Stage:           "write_client_failed",
 				Direction:       "upstream_to_client",
 				MessageType:     relayMessageTypeString(msgType),
 				PayloadBytes:    len(payload),
 				WroteDownstream: wroteDownstream,
-				Error:           err.Error(),
+				Error:           writeErr.Error(),
 			})
-			exitCh <- relayExitSignal{stage: "write_client", err: err, wroteDownstream: wroteDownstream}
+			exitCh <- relayExitSignal{stage: "write_client", err: writeErr, wroteDownstream: wroteDownstream}
 			return
 		}
 		wroteDownstream = true
@@ -735,6 +782,7 @@ func observeUpstreamMessage(
 	if !isTerminalEvent(eventType) {
 		return observed
 	}
+	observeRelayTurnResponseServiceTier(turnTiming, firstRelayResponseServiceTier(message))
 	state.terminalEventType = eventType
 	if eventType == "error" {
 		// Some Responses servers emit error immediately before response.failed.
@@ -793,8 +841,10 @@ func finalizeObservedRelayTerminal(state *relayState, observed observedUpstreamE
 		if turnTiming, ok := openAIWSRelayDeleteTurnTiming(state, responseID); ok {
 			observed.responseModel = relayTurnResponseModel(&turnTiming)
 			observed.responseConflict = turnTiming.responseModelConflict
+			observed.responseServiceTier = turnTiming.terminalResponseServiceTier
 			state.lastResponseModel = observed.responseModel
 			state.responseConflict = observed.responseConflict
+			state.lastResponseServiceTier = observed.responseServiceTier
 			duration := now.Sub(turnTiming.startAt)
 			if duration < 0 {
 				duration = 0
@@ -830,6 +880,7 @@ func emitTurnComplete(
 		RequestModel:          requestModel,
 		ResponseModel:         observed.responseModel,
 		ResponseModelConflict: observed.responseConflict,
+		ResponseServiceTier:   observed.responseServiceTier,
 		Usage:                 observed.usage,
 		RequestID:             responseID,
 		TerminalEventType:     observed.eventType,
@@ -884,6 +935,31 @@ func relayTurnResponseModel(turn *relayTurnTiming) string {
 		return turn.terminalResponseModel
 	}
 	return turn.firstResponseModel
+}
+
+func firstRelayResponseServiceTier(message []byte) string {
+	if len(message) == 0 {
+		return ""
+	}
+	values := gjson.GetManyBytes(message, "response.service_tier", "service_tier")
+	for _, value := range values {
+		if value.Type != gjson.String {
+			continue
+		}
+		if tier := strings.TrimSpace(value.String()); tier != "" {
+			return tier
+		}
+	}
+	return ""
+}
+
+func observeRelayTurnResponseServiceTier(turn *relayTurnTiming, tier string) {
+	if turn == nil {
+		return
+	}
+	if tier = strings.TrimSpace(tier); tier != "" {
+		turn.terminalResponseServiceTier = tier
+	}
 }
 
 func openAIWSRelayGetOrInitTurnTiming(state *relayState, responseID string, now time.Time) *relayTurnTiming {
@@ -1161,6 +1237,7 @@ func enrichResult(result *RelayResult, state *relayState, duration time.Duration
 	result.RequestModel = state.currentRequestModel()
 	result.ResponseModel = state.lastResponseModel
 	result.ResponseModelConflict = state.responseConflict
+	result.ResponseServiceTier = state.lastResponseServiceTier
 	result.Usage = state.usage
 	result.RequestID = state.lastResponseID
 	result.TerminalEventType = state.terminalEventType

@@ -59,7 +59,7 @@ func TestHTTPUpstreamDoAppliesGrokCLIIdentityBeforeOAuthRoundTrip(t *testing.T) 
 
 			req, err := http.NewRequest(http.MethodPost, "https://cli-chat-proxy.grok.com/v1/"+endpoint, nil)
 			require.NoError(t, err)
-			req.Header.Set("User-Agent", "sub2api-grok/1.0")
+			req.Header.Set("User-Agent", "legacy-client/1.0")
 
 			resp, err := svc.Do(req, "", accountID, 1)
 			require.NoError(t, err)
@@ -332,7 +332,7 @@ func TestApplyGrokCLIProxyHeaders(t *testing.T) {
 		t.Setenv("XAI_GROK_CLI_VERSION", "")
 		req, err := http.NewRequest(http.MethodPost, "https://cli-chat-proxy.grok.com/v1/responses", nil)
 		require.NoError(t, err)
-		req.Header.Set("User-Agent", "sub2api-grok/1.0")
+		req.Header.Set("User-Agent", "legacy-client/1.0")
 
 		applyGrokCLIProxyHeaders(req)
 
@@ -343,18 +343,18 @@ func TestApplyGrokCLIProxyHeaders(t *testing.T) {
 	})
 
 	t.Run("accepts a valid operator override", func(t *testing.T) {
-		t.Setenv("XAI_GROK_CLI_VERSION", "0.2.115-alpha.1")
+		t.Setenv("XAI_GROK_CLI_VERSION", "0.2.121-alpha.1")
 		req, err := http.NewRequest(http.MethodPost, "https://cli-chat-proxy.grok.com/v1/chat/completions", nil)
 		require.NoError(t, err)
 
 		applyGrokCLIProxyHeaders(req)
 
-		require.Equal(t, "0.2.115-alpha.1", req.Header.Get("x-grok-client-version"))
-		require.Equal(t, "xai-grok-workspace/0.2.115-alpha.1", req.Header.Get("User-Agent"))
+		require.Equal(t, "0.2.121-alpha.1", req.Header.Get("x-grok-client-version"))
+		require.Equal(t, xai.CLIUserAgent("0.2.121-alpha.1"), req.Header.Get("User-Agent"))
 	})
 
 	t.Run("rejects an unsafe override", func(t *testing.T) {
-		t.Setenv("XAI_GROK_CLI_VERSION", "0.2.115\r\nX-Injected: true")
+		t.Setenv("XAI_GROK_CLI_VERSION", "0.2.121\r\nX-Injected: true")
 		req, err := http.NewRequest(http.MethodPost, "https://cli-chat-proxy.grok.com/v1/responses", nil)
 		require.NoError(t, err)
 
@@ -365,7 +365,7 @@ func TestApplyGrokCLIProxyHeaders(t *testing.T) {
 	})
 
 	t.Run("rejects an override below the supported minimum", func(t *testing.T) {
-		t.Setenv("XAI_GROK_CLI_VERSION", "0.2.113")
+		t.Setenv("XAI_GROK_CLI_VERSION", "0.2.119")
 		req, err := http.NewRequest(http.MethodPost, "https://cli-chat-proxy.grok.com/v1/responses", nil)
 		require.NoError(t, err)
 
@@ -376,7 +376,7 @@ func TestApplyGrokCLIProxyHeaders(t *testing.T) {
 	})
 
 	t.Run("rejects a prerelease override at the minimum version", func(t *testing.T) {
-		t.Setenv("XAI_GROK_CLI_VERSION", "0.2.114-beta.1")
+		t.Setenv("XAI_GROK_CLI_VERSION", "0.2.120-beta.1")
 		req, err := http.NewRequest(http.MethodPost, "https://cli-chat-proxy.grok.com/v1/responses", nil)
 		require.NoError(t, err)
 
@@ -391,7 +391,7 @@ func TestApplyGrokCLIProxyHeaders(t *testing.T) {
 		"0.2.115-alpha..1",
 		"0.3",
 		"1",
-		"0.2.115+build.1",
+		"0.2.121+build.1",
 	} {
 		t.Run("rejects invalid semver "+version, func(t *testing.T) {
 			t.Setenv("XAI_GROK_CLI_VERSION", version)

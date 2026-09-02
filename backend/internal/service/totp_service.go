@@ -41,6 +41,10 @@ type TotpCache interface {
 	IncrementVerifyAttempts(ctx context.Context, userID int64) (int, error)
 	GetVerifyAttempts(ctx context.Context, userID int64) (int, error)
 	ClearVerifyAttempts(ctx context.Context, userID int64) error
+
+	// Step-up grants for sensitive operations.
+	SetStepUpGrant(ctx context.Context, userID int64, sessionKey string, ttl time.Duration) error
+	HasStepUpGrant(ctx context.Context, userID int64, sessionKey string) (bool, error)
 }
 
 // SecretEncryptor defines encryption operations for TOTP secrets
@@ -403,6 +407,26 @@ func (s *TotpService) VerifyCode(ctx context.Context, userID int64, code string)
 	_ = s.cache.ClearVerifyAttempts(ctx, userID)
 
 	return nil
+}
+
+// StepUpGrantTTL is the sudo-style authorization window after a successful
+// second-factor verification.
+const StepUpGrantTTL = 15 * time.Minute
+
+// VerifyStepUp verifies the TOTP code and records a grant for this session.
+func (s *TotpService) VerifyStepUp(ctx context.Context, userID int64, sessionKey, code string) (time.Duration, error) {
+	if err := s.VerifyCode(ctx, userID, code); err != nil {
+		return 0, err
+	}
+	if err := s.cache.SetStepUpGrant(ctx, userID, sessionKey, StepUpGrantTTL); err != nil {
+		return 0, fmt.Errorf("store step-up grant: %w", err)
+	}
+	return StepUpGrantTTL, nil
+}
+
+// HasStepUpGrant checks whether this user session has a live grant.
+func (s *TotpService) HasStepUpGrant(ctx context.Context, userID int64, sessionKey string) (bool, error) {
+	return s.cache.HasStepUpGrant(ctx, userID, sessionKey)
 }
 
 // CreateLoginSession creates a temporary login session for 2FA

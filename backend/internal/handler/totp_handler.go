@@ -179,3 +179,39 @@ func (h *TotpHandler) SendVerifyCode(c *gin.Context) {
 
 	response.Success(c, gin.H{"success": true})
 }
+
+// TotpStepUpRequest is the second-factor payload for a sensitive operation.
+type TotpStepUpRequest struct {
+	Code string `json:"code" binding:"required"`
+}
+
+// TotpStepUpResponse reports the lifetime of the newly issued grant.
+type TotpStepUpResponse struct {
+	Verified  bool  `json:"verified"`
+	ExpiresIn int64 `json:"expires_in"`
+}
+
+// StepUp verifies TOTP and grants the current session temporary access to
+// sensitive operations.
+func (h *TotpHandler) StepUp(c *gin.Context) {
+	subject, ok := middleware2.GetAuthSubjectFromContext(c)
+	if !ok {
+		response.Unauthorized(c, "User not authenticated")
+		return
+	}
+
+	var req TotpStepUpRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "TOTP code is required")
+		return
+	}
+
+	sessionKey := middleware2.StepUpSessionKey(c, subject.UserID)
+	ttl, err := h.totpService.VerifyStepUp(c.Request.Context(), subject.UserID, sessionKey, req.Code)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, TotpStepUpResponse{Verified: true, ExpiresIn: int64(ttl.Seconds())})
+}

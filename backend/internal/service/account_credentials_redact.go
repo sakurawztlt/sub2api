@@ -11,7 +11,7 @@ var SensitiveCredentialKeys = []string{
 	"password", "sso_token", "sso", "sso-rw", "clearTextPassword",
 	// 云服务凭据
 	"aws_secret_access_key", "aws_session_token",
-	"service_account_json", "service_account", "private_key",
+	"service_account_json", "service_account", "private_key", "agent_private_key",
 }
 
 var sensitiveCredentialKeySet = func() map[string]struct{} {

@@ -178,6 +178,12 @@ func AnthropicStopReasonString(value *string) string {
 	return *value
 }
 
+// AnthropicPromptTokensDetails holds OpenAI-compatible prompt token details
+// occasionally included by Anthropic-compatible providers.
+type AnthropicPromptTokensDetails struct {
+	CachedTokens int `json:"cached_tokens,omitempty"`
+}
+
 // AnthropicUsage holds token counts in Anthropic format. Field declaration
 // order MUST match real Anthropic response ordering so byte-level signature
 // checks on the response body cannot distinguish us from the real thing.
@@ -185,11 +191,16 @@ func AnthropicStopReasonString(value *string) string {
 // cache_read_input_tokens → output_tokens → server_tool_use. Do not
 // reorder.
 type AnthropicUsage struct {
-	InputTokens              int                       `json:"input_tokens"`
-	CacheCreationInputTokens int                       `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int                       `json:"cache_read_input_tokens"`
-	OutputTokens             int                       `json:"output_tokens"`
-	ServerToolUse            *AnthropicServerToolUsage `json:"server_tool_use,omitempty"`
+	InputTokens              int                           `json:"input_tokens"`
+	CacheCreationInputTokens int                           `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int                           `json:"cache_read_input_tokens"`
+	OutputTokens             int                           `json:"output_tokens"`
+	ServerToolUse            *AnthropicServerToolUsage     `json:"server_tool_use,omitempty"`
+	PromptTokens             int                           `json:"prompt_tokens,omitempty"`
+	CachedTokens             int                           `json:"cached_tokens,omitempty"`
+	PromptTokensDetails      *AnthropicPromptTokensDetails `json:"prompt_tokens_details,omitempty"`
+	PromptCacheHitTokens     *int                          `json:"prompt_cache_hit_tokens,omitempty"`
+	PromptCacheMissTokens    *int                          `json:"prompt_cache_miss_tokens,omitempty"`
 }
 
 // 2026-05-13 P1: server_tool_use counter for hosted Anthropic server tools.
@@ -428,12 +439,18 @@ func (t *ResponsesTool) UnmarshalJSON(data []byte) error {
 
 // ResponsesResponse is the non-streaming response from POST /v1/responses.
 type ResponsesResponse struct {
-	ID     string            `json:"id"`
-	Object string            `json:"object"` // "response"
-	Model  string            `json:"model"`
-	Status string            `json:"status"` // "completed" | "incomplete" | "failed"
-	Output []ResponsesOutput `json:"output"`
-	Usage  *ResponsesUsage   `json:"usage,omitempty"`
+	ID     string `json:"id"`
+	Object string `json:"object"` // "response"
+	// CreatedAt is the unix creation timestamp. Strict Responses clients declare
+	// it non-optional and abort with `missing field 'created_at'` when it is
+	// absent, so it is always emitted — no omitempty. Same rule as ID (see the
+	// "clients treat it as required" fallback in ChatCompletionsResponseToAnthropic).
+	CreatedAt   int64             `json:"created_at"`
+	Model       string            `json:"model"`
+	Status      string            `json:"status"` // "completed" | "incomplete" | "failed"
+	Output      []ResponsesOutput `json:"output"`
+	Usage       *ResponsesUsage   `json:"usage,omitempty"`
+	ServiceTier string            `json:"service_tier,omitempty"` // upstream tier, echoed back verbatim
 
 	// incomplete_details is present when status="incomplete"
 	IncompleteDetails *ResponsesIncompleteDetails `json:"incomplete_details,omitempty"`
@@ -816,7 +833,7 @@ type ChatFile struct {
 
 // ChatTool describes a tool available to the model.
 type ChatTool struct {
-	Type     string        `json:"type"` // "function" | "x_search"
+	Type     string        `json:"type"` // "function" | "web_search" | "code_execution" | "x_search"
 	Function *ChatFunction `json:"function,omitempty"`
 
 	// type=x_search

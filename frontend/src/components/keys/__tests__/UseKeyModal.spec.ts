@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
-const { copyToClipboardMock } = vi.hoisted(() => ({
-  copyToClipboardMock: vi.fn().mockResolvedValue(true)
+const { copyToClipboardMock, saveAsMock } = vi.hoisted(() => ({
+  copyToClipboardMock: vi.fn().mockResolvedValue(true),
+  saveAsMock: vi.fn()
 }))
 
 vi.mock('vue-i18n', () => ({
@@ -18,9 +19,72 @@ vi.mock('@/composables/useClipboard', () => ({
   })
 }))
 
+vi.mock('file-saver', () => ({
+  saveAs: saveAsMock
+}))
+
 import UseKeyModal from '../UseKeyModal.vue'
 
+function readBlobAsText(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.addEventListener('load', () => resolve(String(reader.result || '')))
+    reader.addEventListener('error', () => reject(reader.error))
+    reader.readAsText(blob)
+  })
+}
+
 describe('UseKeyModal', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    saveAsMock.mockClear()
+  })
+
+  it('omits the attribution override from every standard Claude Code setup form', async () => {
+    const wrapper = mount(UseKeyModal, {
+      props: {
+        show: true,
+        apiKey: 'sk-anthropic-test',
+        baseUrl: 'https://example.com/v1',
+        platform: 'anthropic'
+      },
+      global: {
+        stubs: {
+          BaseDialog: {
+            template: '<div><slot /><slot name="footer" /></div>'
+          },
+          Icon: {
+            template: '<span />'
+          }
+        }
+      }
+    })
+
+    for (const [shell, trafficSetting] of [
+      ['macOS / Linux', 'export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1'],
+      ['Windows CMD', 'set CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1'],
+      ['PowerShell', '$env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1']
+    ]) {
+      if (shell !== 'macOS / Linux') {
+        const shellTab = wrapper.findAll('button').find(
+          (button) => button.text().trim() === shell
+        )
+        expect(shellTab).toBeDefined()
+        await shellTab!.trigger('click')
+        await nextTick()
+      }
+
+      const codeBlocks = wrapper.findAll('pre code').map((code) => code.text())
+      const allCode = codeBlocks.join('\n')
+      const settings = JSON.parse(codeBlocks.find((content) => content.includes('"$schema"'))!)
+
+      expect(allCode).not.toContain('CLAUDE_CODE_ATTRIBUTION_HEADER')
+      expect(allCode).toContain(trafficSetting)
+      expect(settings.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBe('1')
+      expect(settings.env).not.toHaveProperty('CLAUDE_CODE_ATTRIBUTION_HEADER')
+    }
+  })
+
   it('renders Grok Build and OpenCode setup for Grok groups', async () => {
     const wrapper = mount(UseKeyModal, {
       props: {
@@ -301,8 +365,13 @@ describe('UseKeyModal', () => {
 
     expect(claudeConfig).toBeDefined()
     const parsed = JSON.parse(claudeConfig!)
+    const fable51 = parsed.provider['antigravity-claude'].models['claude-fable-5-1']
     const fable = parsed.provider['antigravity-claude'].models['claude-fable-5']
 
+    expect(fable51.name).toBe('Claude Fable 5.1')
+    expect(fable51.limit).toEqual({ context: 1048576, output: 128000 })
+    expect(fable51.options.thinking).toEqual({ type: 'adaptive' })
+    expect(fable51.options.thinking).not.toHaveProperty('budgetTokens')
     expect(fable.name).toBe('Claude Fable 5')
     expect(fable.limit).toEqual({ context: 1048576, output: 128000 })
     expect(fable.options.thinking).toEqual({ type: 'adaptive' })

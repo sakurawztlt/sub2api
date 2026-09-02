@@ -45,6 +45,7 @@ func TestForwardAlphaSearchOAuthPreservesWire(t *testing.T) {
 	c.Request.Header.Set("User-Agent", codexCLIUserAgent)
 	c.Request.Header.Set("Originator", "codex_cli_rs")
 	c.Request.Header.Set("Version", "0.144.1")
+	c.Request.Header.Set("X-Codex-Turn-Metadata", `{"session_id":"search-session","turn_id":"search-turn"}`)
 
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
@@ -78,6 +79,14 @@ func TestForwardAlphaSearchOAuthPreservesWire(t *testing.T) {
 	require.Equal(t, codexCLIUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, "codex_cli_rs", upstream.lastReq.Header.Get("Originator"))
 	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))
+	require.Equal(t,
+		scopeCodexAccountIdentityValue(account, 0, "session", "search-session"),
+		gjson.Get(upstream.lastReq.Header.Get("X-Codex-Turn-Metadata"), "session_id").String(),
+	)
+	require.Equal(t,
+		scopeCodexAccountIdentityValue(account, 0, "turn", "search-turn"),
+		gjson.Get(upstream.lastReq.Header.Get("X-Codex-Turn-Metadata"), "turn_id").String(),
+	)
 	require.JSONEq(t, string(body), string(upstream.lastBody))
 }
 

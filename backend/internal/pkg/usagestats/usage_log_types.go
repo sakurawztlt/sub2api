@@ -166,13 +166,16 @@ type UserSpendingRankingResponse struct {
 
 // UserBreakdownItem represents per-user usage breakdown within a dimension (group, model, endpoint).
 type UserBreakdownItem struct {
-	UserID      int64   `json:"user_id"`
-	Email       string  `json:"email"`
-	Requests    int64   `json:"requests"`
-	TotalTokens int64   `json:"total_tokens"`
-	Cost        float64 `json:"cost"`         // 标准计费
-	ActualCost  float64 `json:"actual_cost"`  // 实际扣除
-	AccountCost float64 `json:"account_cost"` // 账号成本
+	UserID       int64   `json:"user_id"`
+	Email        string  `json:"email"`
+	Requests     int64   `json:"requests"`
+	InputTokens  int64   `json:"input_tokens"`
+	OutputTokens int64   `json:"output_tokens"`
+	CacheTokens  int64   `json:"cache_tokens"`
+	TotalTokens  int64   `json:"total_tokens"`
+	Cost         float64 `json:"cost"`         // 标准计费
+	ActualCost   float64 `json:"actual_cost"`  // 实际扣除
+	AccountCost  float64 `json:"account_cost"` // 账号成本
 }
 
 // UserBreakdownDimension specifies the dimension to filter for user breakdown.
@@ -183,12 +186,14 @@ type UserBreakdownDimension struct {
 	Endpoint     string // filter by endpoint value (non-empty to enable)
 	EndpointType string // "inbound", "upstream", or "path"
 	// Additional filter conditions
-	UserID      int64  // filter by user_id (>0 to enable)
-	APIKeyID    int64  // filter by api_key_id (>0 to enable)
-	AccountID   int64  // filter by account_id (>0 to enable)
-	RequestType *int16 // filter by request_type (non-nil to enable)
-	Stream      *bool  // filter by stream flag (non-nil to enable)
-	BillingType *int8  // filter by billing_type (non-nil to enable)
+	UserID             int64  // filter by user_id (>0 to enable)
+	APIKeyID           int64  // filter by api_key_id (>0 to enable)
+	AccountID          int64  // filter by account_id (>0 to enable)
+	RequestType        *int16 // filter by request_type (non-nil to enable)
+	Stream             *bool  // filter by stream flag (non-nil to enable)
+	NativeCompactionV2 *bool  // filter by native compaction v2 flag (non-nil to enable)
+	BillingType        *int8  // filter by billing_type (non-nil to enable)
+	SortBy             string // validated repository-side sort key
 }
 
 // APIKeyUsageTrendPoint represents API key usage trend data point
@@ -273,6 +278,7 @@ type UsageLogFilters struct {
 	ModelFilterSource     string
 	RequestType           *int16
 	Stream                *bool
+	NativeCompactionV2    *bool
 	BillingType           *int8
 	BillingMode           string
 	UpstreamModelMismatch *bool

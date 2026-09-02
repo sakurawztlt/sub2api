@@ -14,6 +14,8 @@ export interface AdminUsageStatsResponse {
   total_input_tokens: number
   total_output_tokens: number
   total_cache_tokens: number
+  total_cache_creation_tokens: number
+  total_cache_read_tokens: number
   total_tokens: number
   total_cost: number
   total_actual_cost: number
@@ -122,6 +124,7 @@ export async function getStats(params: {
   model?: string
   request_type?: UsageRequestType
   stream?: boolean
+  native_compaction_v2?: boolean | null
   upstream_model_mismatch?: boolean
   period?: string
   start_date?: string

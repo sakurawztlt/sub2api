@@ -4,7 +4,7 @@ package ent
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"time"
@@ -519,7 +519,7 @@ func (_c *GroupCreate) SetNillableLongContextPricingEnabled(v *bool) *GroupCreat
 }
 
 // SetModelPricing sets the "model_pricing" field.
-func (_c *GroupCreate) SetModelPricing(v json.RawMessage) *GroupCreate {
+func (_c *GroupCreate) SetModelPricing(v jsontext.Value) *GroupCreate {
 	_c.mutation.SetModelPricing(v)
 	return _c
 }
@@ -634,6 +634,34 @@ func (_c *GroupCreate) SetNillableAllowMessagesDispatch(v *bool) *GroupCreate {
 	return _c
 }
 
+// SetForceOpenaiFast sets the "force_openai_fast" field.
+func (_c *GroupCreate) SetForceOpenaiFast(v bool) *GroupCreate {
+	_c.mutation.SetForceOpenaiFast(v)
+	return _c
+}
+
+// SetNillableForceOpenaiFast sets the "force_openai_fast" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableForceOpenaiFast(v *bool) *GroupCreate {
+	if v != nil {
+		_c.SetForceOpenaiFast(*v)
+	}
+	return _c
+}
+
+// SetFreeOpenaiFast sets the "free_openai_fast" field.
+func (_c *GroupCreate) SetFreeOpenaiFast(v bool) *GroupCreate {
+	_c.mutation.SetFreeOpenaiFast(v)
+	return _c
+}
+
+// SetNillableFreeOpenaiFast sets the "free_openai_fast" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableFreeOpenaiFast(v *bool) *GroupCreate {
+	if v != nil {
+		_c.SetFreeOpenaiFast(*v)
+	}
+	return _c
+}
+
 // SetRequireOauthOnly sets the "require_oauth_only" field.
 func (_c *GroupCreate) SetRequireOauthOnly(v bool) *GroupCreate {
 	_c.mutation.SetRequireOauthOnly(v)
@@ -728,6 +756,20 @@ func (_c *GroupCreate) SetMaxReasoningEffort(v string) *GroupCreate {
 func (_c *GroupCreate) SetNillableMaxReasoningEffort(v *string) *GroupCreate {
 	if v != nil {
 		_c.SetMaxReasoningEffort(*v)
+	}
+	return _c
+}
+
+// SetMaxReasoningEffortOverLimit sets the "max_reasoning_effort_over_limit" field.
+func (_c *GroupCreate) SetMaxReasoningEffortOverLimit(v string) *GroupCreate {
+	_c.mutation.SetMaxReasoningEffortOverLimit(v)
+	return _c
+}
+
+// SetNillableMaxReasoningEffortOverLimit sets the "max_reasoning_effort_over_limit" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableMaxReasoningEffortOverLimit(v *string) *GroupCreate {
+	if v != nil {
+		_c.SetMaxReasoningEffortOverLimit(*v)
 	}
 	return _c
 }
@@ -1009,6 +1051,14 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultAllowMessagesDispatch
 		_c.mutation.SetAllowMessagesDispatch(v)
 	}
+	if _, ok := _c.mutation.ForceOpenaiFast(); !ok {
+		v := group.DefaultForceOpenaiFast
+		_c.mutation.SetForceOpenaiFast(v)
+	}
+	if _, ok := _c.mutation.FreeOpenaiFast(); !ok {
+		v := group.DefaultFreeOpenaiFast
+		_c.mutation.SetFreeOpenaiFast(v)
+	}
 	if _, ok := _c.mutation.RequireOauthOnly(); !ok {
 		v := group.DefaultRequireOauthOnly
 		_c.mutation.SetRequireOauthOnly(v)
@@ -1036,6 +1086,10 @@ func (_c *GroupCreate) defaults() error {
 	if _, ok := _c.mutation.MaxReasoningEffort(); !ok {
 		v := group.DefaultMaxReasoningEffort
 		_c.mutation.SetMaxReasoningEffort(v)
+	}
+	if _, ok := _c.mutation.MaxReasoningEffortOverLimit(); !ok {
+		v := group.DefaultMaxReasoningEffortOverLimit
+		_c.mutation.SetMaxReasoningEffortOverLimit(v)
 	}
 	if _, ok := _c.mutation.ReasoningEffortMappings(); !ok {
 		v := group.DefaultReasoningEffortMappings
@@ -1188,6 +1242,12 @@ func (_c *GroupCreate) check() error {
 	if _, ok := _c.mutation.AllowMessagesDispatch(); !ok {
 		return &ValidationError{Name: "allow_messages_dispatch", err: errors.New(`ent: missing required field "Group.allow_messages_dispatch"`)}
 	}
+	if _, ok := _c.mutation.ForceOpenaiFast(); !ok {
+		return &ValidationError{Name: "force_openai_fast", err: errors.New(`ent: missing required field "Group.force_openai_fast"`)}
+	}
+	if _, ok := _c.mutation.FreeOpenaiFast(); !ok {
+		return &ValidationError{Name: "free_openai_fast", err: errors.New(`ent: missing required field "Group.free_openai_fast"`)}
+	}
 	if _, ok := _c.mutation.RequireOauthOnly(); !ok {
 		return &ValidationError{Name: "require_oauth_only", err: errors.New(`ent: missing required field "Group.require_oauth_only"`)}
 	}
@@ -1217,6 +1277,14 @@ func (_c *GroupCreate) check() error {
 	if v, ok := _c.mutation.MaxReasoningEffort(); ok {
 		if err := group.MaxReasoningEffortValidator(v); err != nil {
 			return &ValidationError{Name: "max_reasoning_effort", err: fmt.Errorf(`ent: validator failed for field "Group.max_reasoning_effort": %w`, err)}
+		}
+	}
+	if _, ok := _c.mutation.MaxReasoningEffortOverLimit(); !ok {
+		return &ValidationError{Name: "max_reasoning_effort_over_limit", err: errors.New(`ent: missing required field "Group.max_reasoning_effort_over_limit"`)}
+	}
+	if v, ok := _c.mutation.MaxReasoningEffortOverLimit(); ok {
+		if err := group.MaxReasoningEffortOverLimitValidator(v); err != nil {
+			return &ValidationError{Name: "max_reasoning_effort_over_limit", err: fmt.Errorf(`ent: validator failed for field "Group.max_reasoning_effort_over_limit": %w`, err)}
 		}
 	}
 	if _, ok := _c.mutation.ReasoningEffortMappings(); !ok {
@@ -1442,6 +1510,14 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 		_spec.SetField(group.FieldAllowMessagesDispatch, field.TypeBool, value)
 		_node.AllowMessagesDispatch = value
 	}
+	if value, ok := _c.mutation.ForceOpenaiFast(); ok {
+		_spec.SetField(group.FieldForceOpenaiFast, field.TypeBool, value)
+		_node.ForceOpenaiFast = value
+	}
+	if value, ok := _c.mutation.FreeOpenaiFast(); ok {
+		_spec.SetField(group.FieldFreeOpenaiFast, field.TypeBool, value)
+		_node.FreeOpenaiFast = value
+	}
 	if value, ok := _c.mutation.RequireOauthOnly(); ok {
 		_spec.SetField(group.FieldRequireOauthOnly, field.TypeBool, value)
 		_node.RequireOauthOnly = value
@@ -1469,6 +1545,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.MaxReasoningEffort(); ok {
 		_spec.SetField(group.FieldMaxReasoningEffort, field.TypeString, value)
 		_node.MaxReasoningEffort = value
+	}
+	if value, ok := _c.mutation.MaxReasoningEffortOverLimit(); ok {
+		_spec.SetField(group.FieldMaxReasoningEffortOverLimit, field.TypeString, value)
+		_node.MaxReasoningEffortOverLimit = value
 	}
 	if value, ok := _c.mutation.ReasoningEffortMappings(); ok {
 		_spec.SetField(group.FieldReasoningEffortMappings, field.TypeJSON, value)
@@ -2255,7 +2335,7 @@ func (u *GroupUpsert) UpdateLongContextPricingEnabled() *GroupUpsert {
 }
 
 // SetModelPricing sets the "model_pricing" field.
-func (u *GroupUpsert) SetModelPricing(v json.RawMessage) *GroupUpsert {
+func (u *GroupUpsert) SetModelPricing(v jsontext.Value) *GroupUpsert {
 	u.Set(group.FieldModelPricing, v)
 	return u
 }
@@ -2416,6 +2496,30 @@ func (u *GroupUpsert) UpdateAllowMessagesDispatch() *GroupUpsert {
 	return u
 }
 
+// SetForceOpenaiFast sets the "force_openai_fast" field.
+func (u *GroupUpsert) SetForceOpenaiFast(v bool) *GroupUpsert {
+	u.Set(group.FieldForceOpenaiFast, v)
+	return u
+}
+
+// UpdateForceOpenaiFast sets the "force_openai_fast" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateForceOpenaiFast() *GroupUpsert {
+	u.SetExcluded(group.FieldForceOpenaiFast)
+	return u
+}
+
+// SetFreeOpenaiFast sets the "free_openai_fast" field.
+func (u *GroupUpsert) SetFreeOpenaiFast(v bool) *GroupUpsert {
+	u.Set(group.FieldFreeOpenaiFast, v)
+	return u
+}
+
+// UpdateFreeOpenaiFast sets the "free_openai_fast" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateFreeOpenaiFast() *GroupUpsert {
+	u.SetExcluded(group.FieldFreeOpenaiFast)
+	return u
+}
+
 // SetRequireOauthOnly sets the "require_oauth_only" field.
 func (u *GroupUpsert) SetRequireOauthOnly(v bool) *GroupUpsert {
 	u.Set(group.FieldRequireOauthOnly, v)
@@ -2503,6 +2607,18 @@ func (u *GroupUpsert) SetMaxReasoningEffort(v string) *GroupUpsert {
 // UpdateMaxReasoningEffort sets the "max_reasoning_effort" field to the value that was provided on create.
 func (u *GroupUpsert) UpdateMaxReasoningEffort() *GroupUpsert {
 	u.SetExcluded(group.FieldMaxReasoningEffort)
+	return u
+}
+
+// SetMaxReasoningEffortOverLimit sets the "max_reasoning_effort_over_limit" field.
+func (u *GroupUpsert) SetMaxReasoningEffortOverLimit(v string) *GroupUpsert {
+	u.Set(group.FieldMaxReasoningEffortOverLimit, v)
+	return u
+}
+
+// UpdateMaxReasoningEffortOverLimit sets the "max_reasoning_effort_over_limit" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateMaxReasoningEffortOverLimit() *GroupUpsert {
+	u.SetExcluded(group.FieldMaxReasoningEffortOverLimit)
 	return u
 }
 
@@ -3329,7 +3445,7 @@ func (u *GroupUpsertOne) UpdateLongContextPricingEnabled() *GroupUpsertOne {
 }
 
 // SetModelPricing sets the "model_pricing" field.
-func (u *GroupUpsertOne) SetModelPricing(v json.RawMessage) *GroupUpsertOne {
+func (u *GroupUpsertOne) SetModelPricing(v jsontext.Value) *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.SetModelPricing(v)
 	})
@@ -3517,6 +3633,34 @@ func (u *GroupUpsertOne) UpdateAllowMessagesDispatch() *GroupUpsertOne {
 	})
 }
 
+// SetForceOpenaiFast sets the "force_openai_fast" field.
+func (u *GroupUpsertOne) SetForceOpenaiFast(v bool) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetForceOpenaiFast(v)
+	})
+}
+
+// UpdateForceOpenaiFast sets the "force_openai_fast" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateForceOpenaiFast() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateForceOpenaiFast()
+	})
+}
+
+// SetFreeOpenaiFast sets the "free_openai_fast" field.
+func (u *GroupUpsertOne) SetFreeOpenaiFast(v bool) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetFreeOpenaiFast(v)
+	})
+}
+
+// UpdateFreeOpenaiFast sets the "free_openai_fast" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateFreeOpenaiFast() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateFreeOpenaiFast()
+	})
+}
+
 // SetRequireOauthOnly sets the "require_oauth_only" field.
 func (u *GroupUpsertOne) SetRequireOauthOnly(v bool) *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
@@ -3619,6 +3763,20 @@ func (u *GroupUpsertOne) SetMaxReasoningEffort(v string) *GroupUpsertOne {
 func (u *GroupUpsertOne) UpdateMaxReasoningEffort() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateMaxReasoningEffort()
+	})
+}
+
+// SetMaxReasoningEffortOverLimit sets the "max_reasoning_effort_over_limit" field.
+func (u *GroupUpsertOne) SetMaxReasoningEffortOverLimit(v string) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetMaxReasoningEffortOverLimit(v)
+	})
+}
+
+// UpdateMaxReasoningEffortOverLimit sets the "max_reasoning_effort_over_limit" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateMaxReasoningEffortOverLimit() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateMaxReasoningEffortOverLimit()
 	})
 }
 
@@ -4621,7 +4779,7 @@ func (u *GroupUpsertBulk) UpdateLongContextPricingEnabled() *GroupUpsertBulk {
 }
 
 // SetModelPricing sets the "model_pricing" field.
-func (u *GroupUpsertBulk) SetModelPricing(v json.RawMessage) *GroupUpsertBulk {
+func (u *GroupUpsertBulk) SetModelPricing(v jsontext.Value) *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.SetModelPricing(v)
 	})
@@ -4809,6 +4967,34 @@ func (u *GroupUpsertBulk) UpdateAllowMessagesDispatch() *GroupUpsertBulk {
 	})
 }
 
+// SetForceOpenaiFast sets the "force_openai_fast" field.
+func (u *GroupUpsertBulk) SetForceOpenaiFast(v bool) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetForceOpenaiFast(v)
+	})
+}
+
+// UpdateForceOpenaiFast sets the "force_openai_fast" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateForceOpenaiFast() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateForceOpenaiFast()
+	})
+}
+
+// SetFreeOpenaiFast sets the "free_openai_fast" field.
+func (u *GroupUpsertBulk) SetFreeOpenaiFast(v bool) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetFreeOpenaiFast(v)
+	})
+}
+
+// UpdateFreeOpenaiFast sets the "free_openai_fast" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateFreeOpenaiFast() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateFreeOpenaiFast()
+	})
+}
+
 // SetRequireOauthOnly sets the "require_oauth_only" field.
 func (u *GroupUpsertBulk) SetRequireOauthOnly(v bool) *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
@@ -4911,6 +5097,20 @@ func (u *GroupUpsertBulk) SetMaxReasoningEffort(v string) *GroupUpsertBulk {
 func (u *GroupUpsertBulk) UpdateMaxReasoningEffort() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.UpdateMaxReasoningEffort()
+	})
+}
+
+// SetMaxReasoningEffortOverLimit sets the "max_reasoning_effort_over_limit" field.
+func (u *GroupUpsertBulk) SetMaxReasoningEffortOverLimit(v string) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetMaxReasoningEffortOverLimit(v)
+	})
+}
+
+// UpdateMaxReasoningEffortOverLimit sets the "max_reasoning_effort_over_limit" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateMaxReasoningEffortOverLimit() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateMaxReasoningEffortOverLimit()
 	})
 }
 

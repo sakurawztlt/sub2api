@@ -34,8 +34,9 @@ import (
 var sseDataPrefix = regexp.MustCompile(`^data:\s*`)
 
 const (
-	testClaudeAPIURL   = "https://api.anthropic.com/v1/messages?beta=true"
-	chatgptCodexAPIURL = "https://chatgpt.com/backend-api/codex/responses"
+	testClaudeAPIURL            = "https://api.anthropic.com/v1/messages?beta=true"
+	chatgptCodexAPIURL          = "https://chatgpt.com/backend-api/codex/responses"
+	defaultAntigravityTestModel = "claude-sonnet-4-6"
 )
 
 // TestEvent represents a SSE event for account testing
@@ -128,6 +129,12 @@ type AccountTestService struct {
 	cfg                       *config.Config
 	settingService            *SettingService
 	tlsFPProfileService       *TLSFingerprintProfileService
+	modelMetadataRegistryMu   sync.Mutex
+	modelMetadataRegistry     map[string]modelsDevProvider
+	modelMetadataRegistryAt   time.Time
+	pluginManager             *PluginManager
+	agentIdentityTaskMu       sync.Mutex
+	agentIdentityWS           agentIdentityWSConnectionInvalidator
 	// grokWSDialer is optional; realtime account tests use the default OpenAI-style
 	// WS dialer when nil (supports proxy + coder/websocket handshake).
 	grokWSDialer openAIWSClientDialer
@@ -136,6 +143,12 @@ type AccountTestService struct {
 func (s *AccountTestService) SetSettingService(settingService *SettingService) {
 	if s != nil {
 		s.settingService = settingService
+	}
+}
+
+func (s *AccountTestService) SetPluginManager(pluginManager *PluginManager) {
+	if s != nil {
+		s.pluginManager = pluginManager
 	}
 }
 
@@ -645,9 +658,11 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 
 	if credentialAccount.IsOAuth() {
 		isOAuth = true
-		// OAuth - use Bearer token with ChatGPT internal API
-		authToken = credentialAccount.GetOpenAIAccessToken()
-		if authToken == "" {
+		// Agent Identity signs each request and does not retain an OAuth token.
+		if !credentialAccount.IsOpenAIAgentIdentity() {
+			authToken = credentialAccount.GetOpenAIAccessToken()
+		}
+		if authToken == "" && !credentialAccount.IsOpenAIAgentIdentity() {
 			return s.sendErrorAndEnd(c, "No access token available")
 		}
 
@@ -684,12 +699,17 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
 	c.Writer.Flush()
 
-	// Create OpenAI Responses API payload
-	payload := createOpenAITestPayload(testModelID, isOAuth)
+	// Match real OAuth forwarding's model normalization.
+	upstreamTestModelID := testModelID
+	if isOAuth {
+		upstreamTestModelID = normalizeOpenAIModelForUpstream(credentialAccount, testModelID)
+	}
+	payload := createOpenAITestPayload(upstreamTestModelID, isOAuth)
 	payloadBytes, _ := json.Marshal(payload)
 
-	// Send test_start event
-	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
+	if !agentIdentityTaskRecoveryWasTried(ctx) {
+		s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(payloadBytes))
 	if err != nil {
@@ -702,7 +722,19 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	if !isOAuth {
 		applyOpenAICodexProbeHeaders(req.Header)
 	}
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	if credentialAccount.IsOpenAIAgentIdentity() {
+		authHeaders, authErr := buildAgentIdentityAuthenticationHeaders(ctx, s.accountRepo, s.agentIdentityWS, &s.agentIdentityTaskMu, credentialAccount)
+		if authErr != nil {
+			return s.sendErrorAndEnd(c, "Failed to build Agent Identity authentication")
+		}
+		for key, values := range authHeaders {
+			for _, value := range values {
+				req.Header.Add(key, value)
+			}
+		}
+	} else {
+		req.Header.Set("Authorization", "Bearer "+authToken)
+	}
 
 	// Set OAuth-specific headers for ChatGPT internal API
 	if isOAuth {
@@ -730,7 +762,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		proxyURL = account.Proxy.ActiveURL()
 	}
 
-	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+	resp, err := s.doOpenAIAccountTestUpstream(req, proxyURL, account, true)
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Request failed: %s", err.Error()))
 	}
@@ -745,6 +777,15 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		body = redactAgentIdentitySensitiveBodyForAccount(ctx, s.accountRepo, credentialAccount, body)
+		if !agentIdentityTaskRecoveryWasTried(ctx) && credentialAccount.IsOpenAIAgentIdentity() && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, body) {
+			expectedTaskID := credentialAccount.GetCredential("task_id")
+			if err := ensureAgentIdentityTaskForAccount(ctx, s.accountRepo, s.agentIdentityWS, &s.agentIdentityTaskMu, credentialAccount, expectedTaskID); err != nil {
+				return s.sendErrorAndEnd(c, fmt.Sprintf("Agent Identity task recovery failed: %s", err.Error()))
+			}
+			c.Request = c.Request.WithContext(markAgentIdentityTaskRecoveryTried(ctx))
+			return s.testOpenAIAccountConnection(c, account, modelID, prompt, mode)
+		}
 		if resp.StatusCode == http.StatusTooManyRequests {
 			s.reconcileOpenAI429State(ctx, account, resp.Header, body)
 		}
@@ -845,8 +886,10 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 	switch {
 	case credentialAccount.IsOAuth():
 		isOAuth = true
-		authToken = credentialAccount.GetOpenAIAccessToken()
-		if authToken == "" {
+		if !credentialAccount.IsOpenAIAgentIdentity() {
+			authToken = credentialAccount.GetOpenAIAccessToken()
+		}
+		if authToken == "" && !credentialAccount.IsOpenAIAgentIdentity() {
 			return s.sendErrorAndEnd(c, "No access token available")
 		}
 		apiURL = chatgptCodexAPIURL
@@ -879,8 +922,13 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
 	c.Writer.Flush()
 
+	if isOAuth {
+		testModelID = normalizeOpenAIModelForUpstream(credentialAccount, testModelID)
+	}
 	payloadBytes, _ := json.Marshal(createOpenAICompactProbePayload(testModelID, isOAuth))
-	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
+	if !agentIdentityTaskRecoveryWasTried(ctx) {
+		s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(payloadBytes))
 	if err != nil {
@@ -895,7 +943,19 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 		req.Header.Set("Accept", "text/event-stream")
 		ensureOpenAIRemoteCompactionV2BetaFeature(req.Header)
 	}
-	req.Header.Set("Authorization", "Bearer "+authToken)
+	if credentialAccount.IsOpenAIAgentIdentity() {
+		authHeaders, authErr := buildAgentIdentityAuthenticationHeaders(ctx, s.accountRepo, s.agentIdentityWS, &s.agentIdentityTaskMu, credentialAccount)
+		if authErr != nil {
+			return s.sendErrorAndEnd(c, "Failed to build Agent Identity authentication")
+		}
+		for key, values := range authHeaders {
+			for _, value := range values {
+				req.Header.Add(key, value)
+			}
+		}
+	} else {
+		req.Header.Set("Authorization", "Bearer "+authToken)
+	}
 	applyOpenAICodexProbeHeaders(req.Header)
 	if isOAuth {
 		enforceCodexIdentityHeadersWithUA(req.Header, credentialAccount.GetOpenAIUserAgent())
@@ -920,7 +980,7 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 		proxyURL = account.Proxy.ActiveURL()
 	}
 
-	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+	resp, err := s.doOpenAIAccountTestUpstream(req, proxyURL, account, true)
 	if err != nil {
 		if s.accountRepo != nil {
 			updates := buildOpenAICompactProbeExtraUpdates(nil, nil, err, false, time.Now())
@@ -932,6 +992,15 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	body = redactAgentIdentitySensitiveBodyForAccount(ctx, s.accountRepo, credentialAccount, body)
+	if !agentIdentityTaskRecoveryWasTried(ctx) && credentialAccount.IsOpenAIAgentIdentity() && isAgentIdentityTaskInvalidHTTPResponse(resp.StatusCode, body) {
+		expectedTaskID := credentialAccount.GetCredential("task_id")
+		if err := ensureAgentIdentityTaskForAccount(ctx, s.accountRepo, s.agentIdentityWS, &s.agentIdentityTaskMu, credentialAccount, expectedTaskID); err != nil {
+			return s.sendErrorAndEnd(c, fmt.Sprintf("Agent Identity task recovery failed: %s", err.Error()))
+		}
+		c.Request = c.Request.WithContext(markAgentIdentityTaskRecoveryTried(ctx))
+		return s.testOpenAICompactConnection(c, account, testModelID)
+	}
 
 	compactionFound := openAICompactProbeFoundCompactionItem(body)
 	if s.accountRepo != nil {
@@ -1089,11 +1158,7 @@ func (s *AccountTestService) routeAntigravityTest(c *gin.Context, account *Accou
 func (s *AccountTestService) testAntigravityAccountConnection(c *gin.Context, account *Account, modelID string) error {
 	ctx := c.Request.Context()
 
-	// 默认模型：Claude 使用 claude-sonnet-4-5，Gemini 使用 gemini-3-pro-preview
-	testModelID := modelID
-	if testModelID == "" {
-		testModelID = "claude-sonnet-4-5"
-	}
+	testModelID := antigravityConnectionTestModel(modelID)
 
 	if s.antigravityGatewayService == nil {
 		return s.sendErrorAndEnd(c, "Antigravity gateway service not configured")
@@ -1126,6 +1191,13 @@ func (s *AccountTestService) testAntigravityAccountConnection(c *gin.Context, ac
 
 	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 	return nil
+}
+
+func antigravityConnectionTestModel(modelID string) string {
+	if modelID == "" {
+		return defaultAntigravityTestModel
+	}
+	return modelID
 }
 
 // buildGeminiAPIKeyRequest builds request for Gemini API Key accounts
@@ -1795,7 +1867,7 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.ActiveURL()
 	}
-	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+	resp, err := s.doOpenAIAccountTestUpstream(req, proxyURL, account, false)
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Responses API request failed: %s", err.Error()))
 	}

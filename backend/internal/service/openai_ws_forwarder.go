@@ -289,6 +289,9 @@ type OpenAIWSIngressHooks struct {
 	InitialTurnStartedAt time.Time
 	// MaxReasoningEffort limits explicit reasoning effort values for this WS session.
 	MaxReasoningEffort string
+	// MaxReasoningEffortOverLimit is the access control when an explicit effort
+	// exceeds the ceiling: downgrade (default) or deny.
+	MaxReasoningEffortOverLimit string
 	// ReasoningEffortMappings rewrites explicit effort values for this WS session.
 	ReasoningEffortMappings []ReasoningEffortMapping
 	TurnStarted             func(turn int, startedAt time.Time)
@@ -356,20 +359,19 @@ func resolveOpenAIWSSessionHeaders(c *gin.Context, promptCacheKey string) openAI
 		ConversationSource: "none",
 	}
 	if c != nil && c.Request != nil {
+		if sessionID := strings.TrimSpace(c.Request.Header.Get("session-id")); sessionID != "" {
+			resolution.SessionID = sessionID
+			resolution.SessionSource = "header_session-id"
+		} else if sessionID := strings.TrimSpace(c.Request.Header.Get("session_id")); sessionID != "" {
+			resolution.SessionID = sessionID
+			resolution.SessionSource = "header_session_id"
+		}
 		if conversationID := strings.TrimSpace(c.Request.Header.Get("conversation_id")); conversationID != "" {
 			resolution.ConversationID = conversationID
 			resolution.ConversationSource = "header_conversation_id"
-			// The upstream WS handshake must treat a new conversation_id as a brand-new
-			// conversation boundary even if the client keeps reusing session_id. This
-			// prevents the server from replaying a stale turn_state or reattaching to a
-			// continuation flow that belongs to the previous conversation.
-			resolution.SessionID = conversationID
-			resolution.SessionSource = "header_conversation_id"
-		}
-		if sessionID := strings.TrimSpace(c.Request.Header.Get("session_id")); sessionID != "" {
 			if resolution.SessionID == "" {
-				resolution.SessionID = sessionID
-				resolution.SessionSource = "header_session_id"
+				resolution.SessionID = conversationID
+				resolution.SessionSource = "header_conversation_id"
 			}
 		}
 	}
@@ -1262,10 +1264,10 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 	if account != nil && account.UsesOpenAICodexProtocol() {
 		apiKeyID := getAPIKeyIDFromContext(c)
 		if sessionResolution.SessionID != "" {
-			headers.Set("session_id", isolateOpenAISessionID(apiKeyID, sessionResolution.SessionID))
+			headers.Set("session_id", isolateOpenAIUpstreamSessionID(apiKeyID, codexAccountIdentitySource(c, account), sessionResolution.SessionID))
 		}
 		if sessionResolution.ConversationID != "" {
-			headers.Set("conversation_id", isolateOpenAISessionID(apiKeyID, sessionResolution.ConversationID))
+			headers.Set("conversation_id", isolateOpenAIUpstreamSessionID(apiKeyID, codexAccountIdentitySource(c, account), sessionResolution.ConversationID))
 		}
 	} else {
 		if sessionResolution.SessionID != "" {
@@ -1281,6 +1283,7 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 	if metadata := strings.TrimSpace(turnMetadata); metadata != "" {
 		headers.Set(openAIWSTurnMetadataHeader, metadata)
 	}
+	applyCodexAccountIdentityHeaders(headers, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
 	applyStagedCodexFingerprintHeaders(c, account, headers)
 
 	if account != nil && account.UsesOpenAICodexProtocol() {
@@ -2669,13 +2672,16 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		clientDisconnected,
 	)
 
+	resultBody := payloadAsJSONBytes(payload)
 	result := &OpenAIForwardResult{
 		RequestID:                     responseID,
 		Usage:                         *usage,
 		Model:                         originalModel,
 		UpstreamModel:                 mappedModel,
-		ServiceTier:                   extractOpenAIServiceTier(reqBody),
-		ReasoningEffort:               extractOpenAIReasoningEffort(reqBody, mappedModel, originalModel),
+		UpstreamResponseServiceTier:   responseModelObserver.ServiceTier(),
+		ServiceTier:                   resolvedOpenAIUpstreamServiceTierFromObserver(responseModelObserver, extractOpenAIServiceTier(reqBody)),
+		ReasoningEffort:               ApplyThinkingEnabledFallback(extractOpenAIReasoningEffort(reqBody, mappedModel, originalModel), resultBody, mappedModel),
+		RequestedReasoningEffort:      CanonicalRequestedReasoningEffort(resultBody, originalModel, mappedModel),
 		Stream:                        reqStream,
 		OpenAIWSMode:                  true,
 		ResponseHeaders:               lease.HandshakeHeaders(),
@@ -2768,8 +2774,14 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	if account == nil {
 		return errors.New("account is nil")
 	}
-	if strings.TrimSpace(token) == "" {
-		return errors.New("token is empty")
+	// The Gin context is reused across failover attempts. Reset attempt-scoped
+	// aliases and overwrite the staged OAuth identity before shaping the body.
+	setCodexToolNameReverse(c, nil)
+	if _, err := s.prepareCodexAccountIdentitySource(ctx, c, account); err != nil {
+		return err
+	}
+	if err := validateOpenAIWSBearerToken(account, token); err != nil {
+		return err
 	}
 
 	// 预取一次 OpenAI Fast Policy settings，绑定到 ctx，让该 WS session
@@ -2782,7 +2794,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
-	forceHTTPBridge := account.Platform == PlatformGrok
+	forceHTTPBridge := account.Platform == PlatformGrok ||
+		(s.pluginManager != nil && s.pluginManager.ShouldRouteOpenAIOAuth(account))
 	modeRouterV2Enabled := s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.ModeRouterV2Enabled
 	ingressMode := OpenAIWSIngressModeCtxPool
 	if modeRouterV2Enabled && !forceHTTPBridge {
@@ -2798,6 +2811,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		case OpenAIWSIngressModePassthrough:
 			if wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2 {
 				return fmt.Errorf("websocket ingress requires ws_v2 transport, got=%s", wsDecision.Transport)
+			}
+			if s.shouldBridgeOpenAIWSPassthroughFirstMessage(account, firstClientMessage) {
+				forceHTTPBridge = true
+				break
 			}
 			return s.proxyResponsesWebSocketV2Passthrough(
 				ctx,
@@ -2847,15 +2864,16 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	isCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) || (s.cfg != nil && s.cfg.Gateway.ForceCodexCLI)
 
 	type openAIWSClientPayload struct {
-		payloadRaw         []byte
-		rawForHash         []byte
-		promptCacheKey     string
-		previousResponseID string
-		originalModel      string
-		imageBillingModel  string
-		imageSizeTier      string
-		imageInputSize     string
-		payloadBytes       int
+		payloadRaw               []byte
+		accountIdentitySourceRaw []byte
+		rawForHash               []byte
+		promptCacheKey           string
+		previousResponseID       string
+		originalModel            string
+		imageBillingModel        string
+		imageSizeTier            string
+		imageInputSize           string
+		payloadBytes             int
 	}
 	ingressSessionOriginalModel := ""
 
@@ -2919,10 +2937,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				nil,
 			)
 		}
-		if hooks != nil && (hooks.MaxReasoningEffort != "" || len(hooks.ReasoningEffortMappings) > 0) {
-			if capped, changed := ApplyOpenAIReasoningEffortPolicy(normalized, hooks.MaxReasoningEffort, hooks.ReasoningEffortMappings); changed {
-				normalized = capped
-			}
+		if next, policyErr := applyOpenAIWSReasoningEffortPolicy(normalized, hooks); policyErr != nil {
+			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, policyErr.Error(), policyErr)
+		} else {
+			normalized = next
 		}
 
 		originalModel := strings.TrimSpace(values[1].String())
@@ -2959,8 +2977,20 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			normalized = next
 		}
-		if account.IsOpenAIOAuth() && isOpenAIResponsesLiteWebSocketPayload(normalized) {
-			litePayload, _, liteErr := normalizeOpenAIResponsesLiteToolsPayload(normalized)
+		accountIdentitySourceRaw := append([]byte(nil), normalized...)
+		accountScopedPayload, accountScoped, scopeErr := applyCodexAccountIdentityClientMetadataRaw(
+			normalized,
+			codexAccountIdentitySource(c, account),
+			getAPIKeyIDFromContext(c),
+		)
+		if scopeErr != nil {
+			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket identity metadata", scopeErr)
+		}
+		if accountScoped {
+			normalized = accountScopedPayload
+		}
+		if isOpenAIResponsesLiteWebSocketPayload(normalized) {
+			litePayload, _, liteErr := normalizeOpenAIResponsesLitePayloadForAccount(normalized, account)
 			if liteErr != nil {
 				return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(
 					coderws.StatusPolicyViolation,
@@ -3101,15 +3131,16 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		ingressSessionOriginalModel = originalModel
 
 		return openAIWSClientPayload{
-			payloadRaw:         normalized,
-			rawForHash:         trimmed,
-			promptCacheKey:     promptCacheKey,
-			previousResponseID: previousResponseID,
-			originalModel:      originalModel,
-			imageBillingModel:  imageBillingModel,
-			imageSizeTier:      imageSizeTier,
-			imageInputSize:     imageInputSize,
-			payloadBytes:       len(normalized),
+			payloadRaw:               normalized,
+			accountIdentitySourceRaw: accountIdentitySourceRaw,
+			rawForHash:               trimmed,
+			promptCacheKey:           promptCacheKey,
+			previousResponseID:       previousResponseID,
+			originalModel:            originalModel,
+			imageBillingModel:        imageBillingModel,
+			imageSizeTier:            imageSizeTier,
+			imageInputSize:           imageInputSize,
+			payloadBytes:             len(normalized),
 		}, nil
 	}
 
@@ -3292,7 +3323,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				var failoverErr *UpstreamFailoverError
 				if turn > 1 && errors.As(bridgeErr, &failoverErr) && failoverErr != nil {
 					retryPayload, retrySafe, retryPayloadErr := buildOpenAIWSCurrentTurnRetryPayload(
-						bridgePayloadRaw,
+						currentBridgePayload.accountIdentitySourceRaw,
 						turnAccountFailoverInput,
 						turnAccountFailoverInputExists,
 						currentBridgePayload.originalModel,
@@ -3691,7 +3722,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 						ResponseHeaders: cloneHeader(lease.HandshakeHeaders()),
 					}
 				}
-				if !wroteDownstream && isOpenAIUpstreamCapacityShedEvent(upstreamMessage) {
+				// Only the handler's orchestrated path (non-nil hooks) can safely
+				// select another account. Direct callers must receive the sanitized
+				// error event so Codex can apply its own retry policy.
+				if hooks != nil && !wroteDownstream && isOpenAIUpstreamCapacityShedEvent(upstreamMessage) {
 					lease.MarkBroken()
 					return nil, s.newOpenAIStreamFailoverError(
 						c,
@@ -3806,8 +3840,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					Usage:                         usage,
 					Model:                         originalModel,
 					UpstreamModel:                 mappedModel,
-					ServiceTier:                   extractOpenAIServiceTierFromBody(payload),
-					ReasoningEffort:               extractOpenAIReasoningEffortFromBody(payload, mappedModel, originalModel),
+					UpstreamResponseServiceTier:   responseModelObserver.ServiceTier(),
+					ServiceTier:                   resolvedOpenAIUpstreamServiceTierFromObserver(responseModelObserver, extractOpenAIServiceTierFromBody(payload)),
+					ReasoningEffort:               ApplyThinkingEnabledFallback(extractOpenAIReasoningEffortFromBody(payload, mappedModel, originalModel), payload, mappedModel),
+					RequestedReasoningEffort:      CanonicalRequestedReasoningEffort(payload, originalModel, mappedModel),
 					Stream:                        reqStream,
 					OpenAIWSMode:                  true,
 					ResponseHeaders:               lease.HandshakeHeaders(),
@@ -5034,14 +5070,21 @@ func isOpenAIWSRateLimitError(codeRaw, errTypeRaw, msgRaw string) bool {
 	return false
 }
 
-func (s *OpenAIGatewayService) persistOpenAIWSRateLimitSignal(ctx context.Context, account *Account, headers http.Header, responseBody []byte, codeRaw, errTypeRaw, msgRaw string) {
+func (s *OpenAIGatewayService) persistOpenAIWSRateLimitSignal(ctx context.Context, account *Account, headers http.Header, responseBody []byte, codeRaw, errTypeRaw, msgRaw string, canonicalModel ...string) {
 	if s == nil || s.rateLimitService == nil || account == nil || account.Platform != PlatformOpenAI {
 		return
 	}
 	if !isOpenAIWSRateLimitError(codeRaw, errTypeRaw, msgRaw) {
 		return
 	}
-	s.handleOpenAIAccountUpstreamError(ctx, account, http.StatusTooManyRequests, headers, responseBody)
+	model := firstNonEmpty(canonicalModel...)
+	if model == "" {
+		model = firstNonEmpty(gjson.GetBytes(responseBody, "model").String(), gjson.GetBytes(responseBody, "response.model").String())
+	}
+	if len(responseBody) > 0 {
+		headers = openAIWSSemantic429Headers(account, model, headers)
+	}
+	s.handleOpenAIAccountUpstreamError(ctx, account, http.StatusTooManyRequests, headers, responseBody, model)
 }
 
 func classifyOpenAIWSErrorEventFromRaw(codeRaw, errTypeRaw, msgRaw string) (string, bool) {

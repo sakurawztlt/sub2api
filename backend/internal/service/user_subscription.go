@@ -125,6 +125,16 @@ func (s *UserSubscription) canAutomaticallyResetMonthlyAt(now time.Time) bool {
 	return ok
 }
 
+// windowResetAnchor corrects only the unambiguous legacy initial midnight
+// anchor; later/manual anchors remain authoritative.
+func (s *UserSubscription) windowResetAnchor(previous time.Time) time.Time {
+	legacyAnchor := startOfDay(s.StartsAt)
+	if legacyAnchor.Before(s.StartsAt) && previous.Equal(legacyAnchor) {
+		return s.StartsAt
+	}
+	return previous
+}
+
 // automaticWindowStartAt returns the latest elapsed window boundary that is
 // still inside the subscription term. The first legacy midnight anchor can be
 // identified unambiguously and is migrated to StartsAt; later/manual anchors
@@ -134,11 +144,7 @@ func (s *UserSubscription) automaticWindowStartAt(previous *time.Time, period ti
 		return time.Time{}, false
 	}
 
-	anchor := *previous
-	legacyAnchor := startOfDay(s.StartsAt)
-	if legacyAnchor.Before(s.StartsAt) && anchor.Equal(legacyAnchor) {
-		anchor = s.StartsAt
-	}
+	anchor := s.windowResetAnchor(*previous)
 
 	next := anchor.Add(period)
 	if now.Before(next) || !next.Before(s.ExpiresAt) {
@@ -169,7 +175,7 @@ func (s *UserSubscription) WeeklyResetTime() *time.Time {
 	if s.WeeklyWindowStart == nil {
 		return nil
 	}
-	t := s.WeeklyWindowStart.Add(7 * 24 * time.Hour)
+	t := s.windowResetAnchor(*s.WeeklyWindowStart).Add(7 * 24 * time.Hour)
 	return &t
 }
 
@@ -177,7 +183,7 @@ func (s *UserSubscription) MonthlyResetTime() *time.Time {
 	if s.MonthlyWindowStart == nil {
 		return nil
 	}
-	t := s.MonthlyWindowStart.Add(30 * 24 * time.Hour)
+	t := s.windowResetAnchor(*s.MonthlyWindowStart).Add(30 * 24 * time.Hour)
 	return &t
 }
 

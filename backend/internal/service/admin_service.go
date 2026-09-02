@@ -174,6 +174,8 @@ type UpdateUserInput struct {
 	RPMLimit      *int     // 使用指针区分"未提供"和"设置为0"
 	Status        string
 	AllowedGroups *[]int64 // 使用指针区分"未提供"和"设置为空数组"
+	// RestrictPublicGroups 指针区分"未提供"和"显式开关"。
+	RestrictPublicGroups *bool
 	// GroupRates 用户专属分组倍率配置
 	// map[groupID]*rate，nil 表示删除该分组的专属倍率
 	GroupRates map[int64]*float64
@@ -259,6 +261,7 @@ type CreateGroupInput struct {
 	VideoPrice720P               *float64
 	VideoPrice1080P              *float64
 	VideoModelPrices             map[string]map[string]float64
+	WebSearchPricePerCall        *float64
 	SearchPricePer1k             *float64
 	AudioRealtimePricePerMin     *float64
 	AudioTTSPricePerMillionChars *float64
@@ -275,6 +278,9 @@ type CreateGroupInput struct {
 	SupportedModelScopes []string
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
 	AllowMessagesDispatch       bool
+	AllowLive                   bool
+	ForceOpenAIFast             bool
+	FreeOpenAIFast              bool
 	DefaultMappedModel          string
 	RequireOAuthOnly            bool
 	RequirePrivacySet           bool
@@ -284,6 +290,8 @@ type CreateGroupInput struct {
 	RPMLimit int
 	// MaxReasoningEffort OpenAI/Codex 请求的推理强度上限，空字符串表示不限制。
 	MaxReasoningEffort string
+	// MaxReasoningEffortOverLimit 超过上限时的访问控制：downgrade（默认）或 deny。
+	MaxReasoningEffortOverLimit string
 	// ReasoningEffortMappings OpenAI/Codex 推理强度精确映射。
 	ReasoningEffortMappings []ReasoningEffortMapping
 	// 从指定分组复制账号（创建分组后在同一事务内绑定）
@@ -324,6 +332,7 @@ type UpdateGroupInput struct {
 	VideoPrice720P               *float64
 	VideoPrice1080P              *float64
 	VideoModelPrices             map[string]map[string]float64
+	WebSearchPricePerCall        *float64
 	SearchPricePer1k             *float64
 	AudioRealtimePricePerMin     *float64
 	AudioTTSPricePerMillionChars *float64
@@ -340,6 +349,9 @@ type UpdateGroupInput struct {
 	SupportedModelScopes *[]string
 	// OpenAI Messages 调度配置（仅 openai 平台使用）
 	AllowMessagesDispatch       *bool
+	AllowLive                   *bool
+	ForceOpenAIFast             *bool
+	FreeOpenAIFast              *bool
 	DefaultMappedModel          *string
 	RequireOAuthOnly            *bool
 	RequirePrivacySet           *bool
@@ -349,6 +361,8 @@ type UpdateGroupInput struct {
 	RPMLimit *int
 	// MaxReasoningEffort 空字符串表示清除上限；nil 表示未提供不改动。
 	MaxReasoningEffort *string
+	// MaxReasoningEffortOverLimit 空字符串视为 downgrade；nil 表示未提供不改动。
+	MaxReasoningEffortOverLimit *string
 	// ReasoningEffortMappings nil 表示不修改，空数组表示清空，非空数组表示替换。
 	ReasoningEffortMappings *[]ReasoningEffortMapping
 	// 从指定分组复制账号（同步操作：先清空当前分组的账号绑定，再绑定源分组的账号）
@@ -2277,6 +2291,13 @@ func groupSupportsOAuthOnlyFilter(platform string) bool {
 		platform == PlatformComposite
 }
 
+func sanitizeGroupOpenAIFast(group *Group) {
+	if group != nil && !groupSupportsOpenAIFast(group.Platform) {
+		group.ForceOpenAIFast = false
+		group.FreeOpenAIFast = false
+	}
+}
+
 func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupInput) (*Group, error) {
 	if input.RateMultiplier <= 0 {
 		return nil, errors.New("rate_multiplier must be > 0")
@@ -2290,6 +2311,10 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	maxReasoningEffort, err := normalizeMaxReasoningEffortForPlatform(platform, input.MaxReasoningEffort)
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusBadRequest, "INVALID_MAX_REASONING_EFFORT", "%v", err)
+	}
+	maxReasoningEffortOverLimit, err := normalizeMaxReasoningEffortOverLimitForPlatform(platform, input.MaxReasoningEffortOverLimit)
+	if err != nil {
+		return nil, infraerrors.Newf(http.StatusBadRequest, "INVALID_MAX_REASONING_EFFORT_OVER_LIMIT", "%v", err)
 	}
 	reasoningEffortMappings, err := NormalizeReasoningEffortMappings(platform, input.ReasoningEffortMappings)
 	if err != nil {
@@ -2313,6 +2338,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 	videoPrice480P := normalizePrice(input.VideoPrice480P)
 	videoPrice720P := normalizePrice(input.VideoPrice720P)
 	videoPrice1080P := normalizePrice(input.VideoPrice1080P)
+	webSearchPricePerCall := normalizePrice(input.WebSearchPricePerCall)
 	searchPricePer1k := normalizePrice(input.SearchPricePer1k)
 	audioRealtimePricePerMin := normalizePrice(input.AudioRealtimePricePerMin)
 	audioTTSPricePerMillionChars := normalizePrice(input.AudioTTSPricePerMillionChars)
@@ -2462,6 +2488,7 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		VideoPrice720P:                  videoPrice720P,
 		VideoPrice1080P:                 videoPrice1080P,
 		VideoModelPrices:                NormalizeVideoModelPrices(input.VideoModelPrices),
+		WebSearchPricePerCall:           webSearchPricePerCall,
 		SearchPricePer1k:                searchPricePer1k,
 		AudioRealtimePricePerMin:        audioRealtimePricePerMin,
 		AudioTTSPricePerMillionChars:    audioTTSPricePerMillionChars,
@@ -2473,6 +2500,9 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		MCPXMLInject:                    mcpXMLInject,
 		SupportedModelScopes:            input.SupportedModelScopes,
 		AllowMessagesDispatch:           input.AllowMessagesDispatch,
+		AllowLive:                       input.AllowLive,
+		ForceOpenAIFast:                 input.ForceOpenAIFast,
+		FreeOpenAIFast:                  input.FreeOpenAIFast,
 		RequireOAuthOnly:                input.RequireOAuthOnly,
 		RequirePrivacySet:               input.RequirePrivacySet,
 		DefaultMappedModel:              input.DefaultMappedModel,
@@ -2480,9 +2510,14 @@ func (s *adminServiceImpl) CreateGroup(ctx context.Context, input *CreateGroupIn
 		ModelsListConfig:                normalizeGroupModelsListConfig(input.ModelsListConfig),
 		RPMLimit:                        input.RPMLimit,
 		MaxReasoningEffort:              maxReasoningEffort,
+		MaxReasoningEffortOverLimit:     maxReasoningEffortOverLimit,
 		ReasoningEffortMappings:         reasoningEffortMappings,
 	}
 	sanitizeGroupMessagesDispatchFields(group)
+	sanitizeGroupOpenAIFast(group)
+	if group.Platform != PlatformOpenAI && group.Platform != PlatformComposite {
+		group.AllowLive = false
+	}
 	sanitizeGroupReasoningEffortPolicy(group)
 	if err := s.groupRepo.Create(opCtx, group); err != nil {
 		return nil, err
@@ -2740,6 +2775,9 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	if input.VideoModelPrices != nil {
 		group.VideoModelPrices = NormalizeVideoModelPrices(input.VideoModelPrices)
 	}
+	if input.WebSearchPricePerCall != nil {
+		group.WebSearchPricePerCall = normalizePrice(input.WebSearchPricePerCall)
+	}
 	if input.SearchPricePer1k != nil {
 		group.SearchPricePer1k = normalizePrice(input.SearchPricePer1k)
 	}
@@ -2804,6 +2842,15 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 	if input.AllowMessagesDispatch != nil {
 		group.AllowMessagesDispatch = *input.AllowMessagesDispatch
 	}
+	if input.AllowLive != nil {
+		group.AllowLive = *input.AllowLive
+	}
+	if input.ForceOpenAIFast != nil {
+		group.ForceOpenAIFast = *input.ForceOpenAIFast
+	}
+	if input.FreeOpenAIFast != nil {
+		group.FreeOpenAIFast = *input.FreeOpenAIFast
+	}
 	if input.RequireOAuthOnly != nil {
 		group.RequireOAuthOnly = *input.RequireOAuthOnly
 	}
@@ -2829,6 +2876,13 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		}
 		group.MaxReasoningEffort = maxReasoningEffort
 	}
+	if input.MaxReasoningEffortOverLimit != nil {
+		maxReasoningEffortOverLimit, err := normalizeMaxReasoningEffortOverLimitForPlatform(group.Platform, *input.MaxReasoningEffortOverLimit)
+		if err != nil {
+			return nil, infraerrors.Newf(http.StatusBadRequest, "INVALID_MAX_REASONING_EFFORT_OVER_LIMIT", "%v", err)
+		}
+		group.MaxReasoningEffortOverLimit = maxReasoningEffortOverLimit
+	}
 	if input.ReasoningEffortMappings != nil {
 		reasoningEffortMappings, err := NormalizeReasoningEffortMappings(group.Platform, *input.ReasoningEffortMappings)
 		if err != nil {
@@ -2837,6 +2891,10 @@ func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *Upd
 		group.ReasoningEffortMappings = reasoningEffortMappings
 	}
 	sanitizeGroupMessagesDispatchFields(group)
+	sanitizeGroupOpenAIFast(group)
+	if group.Platform != PlatformOpenAI && group.Platform != PlatformComposite {
+		group.AllowLive = false
+	}
 	sanitizeGroupReasoningEffortPolicy(group)
 
 	if err := s.groupRepo.Update(ctx, group); err != nil {
@@ -5539,7 +5597,7 @@ func (s *adminServiceImpl) ResetAccountQuota(ctx context.Context, id int64) erro
 		return infraerrors.New(http.StatusBadRequest, "SPARK_SHADOW_NO_QUOTA_RESET",
 			"cannot reset quota for a spark shadow account; manage it on the parent account")
 	}
-	return s.accountRepo.ResetQuotaUsed(ctx, id)
+	return s.accountRepo.ResetQuotaUsedAndClearRateLimitCooldown(ctx, id)
 }
 
 // EnsureOpenAIPrivacy 检查 OpenAI OAuth 账号是否已设置 privacy_mode，

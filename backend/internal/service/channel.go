@@ -134,29 +134,31 @@ type AccountStatsPricingRule struct {
 
 // ChannelModelPricing 渠道模型定价条目
 type ChannelModelPricing struct {
-	ID               int64
-	ChannelID        int64
-	Platform         string            // 所属平台（anthropic/openai/gemini/...）
-	Models           []string          // 绑定的模型列表
-	BillingMode      BillingMode       // 计费模式
-	InputPrice       *float64          // 每 token 输入价格（USD）— 向后兼容 flat 定价
-	ImageInputPrice  *float64          // 图片输入 token 价格（USD）
-	OutputPrice      *float64          // 每 token 输出价格（USD）
-	CacheWritePrice  *float64          // 缓存写入价格
-	CacheReadPrice   *float64          // 缓存读取价格
-	FastMultiplier   *float64          // OpenAI fast service tier 倍率
-	FlexMultiplier   *float64          // OpenAI flex service tier 倍率
-	ImageOutputPrice *float64          // 图片输出价格（向后兼容）
-	PerRequestPrice  *float64          // 默认按次计费价格（USD）
-	Intervals        []PricingInterval // 区间定价列表
-	TimePricing      *ChannelTimePricing
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	ID                int64
+	ChannelID         int64
+	Platform          string            // 所属平台（anthropic/openai/gemini/...）
+	Models            []string          // 绑定的模型列表
+	BillingMode       BillingMode       // 计费模式
+	InputPrice        *float64          // 每 token 输入价格（USD）— 向后兼容 flat 定价
+	ImageInputPrice   *float64          // 图片输入 token 价格（USD）
+	OutputPrice       *float64          // 每 token 输出价格（USD）
+	CacheWritePrice   *float64          // 缓存写入价格
+	CacheWrite1hPrice *float64          // 1 小时缓存写入价格
+	CacheReadPrice    *float64          // 缓存读取价格
+	FastMultiplier    *float64          // OpenAI fast service tier 倍率
+	FlexMultiplier    *float64          // OpenAI flex service tier 倍率
+	ImageOutputPrice  *float64          // 图片输出价格（向后兼容）
+	PerRequestPrice   *float64          // 默认按次计费价格（USD）
+	Intervals         []PricingInterval // 区间定价列表
+	TimePricing       *ChannelTimePricing
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 type ChannelTimePricing struct {
-	Timezone string                     `json:"timezone"`
-	Periods  []ChannelTimePricingPeriod `json:"periods"`
+	Timezone     string                     `json:"timezone"`
+	WeekdaysOnly bool                       `json:"weekdays_only,omitempty"`
+	Periods      []ChannelTimePricingPeriod `json:"periods"`
 }
 
 type ChannelTimePricingPeriod struct {
@@ -175,6 +177,7 @@ type PricingInterval struct {
 	InputPrice           *float64  `json:"input_price"`
 	OutputPrice          *float64  `json:"output_price"`
 	CacheWritePrice      *float64  `json:"cache_write_price"`
+	CacheWrite1hPrice    *float64  `json:"cache_write_1h_price"`
 	CacheReadPrice       *float64  `json:"cache_read_price"`
 	InputMultiplier      *float64  `json:"input_multiplier"`
 	OutputMultiplier     *float64  `json:"output_multiplier"`
@@ -261,7 +264,10 @@ func (p ChannelModelPricing) Clone() ChannelModelPricing {
 		copy(cp.Intervals, p.Intervals)
 	}
 	if p.TimePricing != nil {
-		cp.TimePricing = &ChannelTimePricing{Timezone: p.TimePricing.Timezone}
+		cp.TimePricing = &ChannelTimePricing{
+			Timezone:     p.TimePricing.Timezone,
+			WeekdaysOnly: p.TimePricing.WeekdaysOnly,
+		}
 		if p.TimePricing.Periods != nil {
 			cp.TimePricing.Periods = append([]ChannelTimePricingPeriod(nil), p.TimePricing.Periods...)
 		}
@@ -479,6 +485,7 @@ func validateIntervalPrices(iv *PricingInterval, idx int) error {
 		{"input_price", iv.InputPrice},
 		{"output_price", iv.OutputPrice},
 		{"cache_write_price", iv.CacheWritePrice},
+		{"cache_write_1h_price", iv.CacheWrite1hPrice},
 		{"cache_read_price", iv.CacheReadPrice},
 		{"per_request_price", iv.PerRequestPrice},
 	}

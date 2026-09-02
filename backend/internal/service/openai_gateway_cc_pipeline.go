@@ -161,6 +161,10 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	if err != nil {
 		return nil, fmt.Errorf("build upstream request: %w", err)
 	}
+	// 记录本次实际选择的协议端点，供错误日志和用量日志在没有
+	// OpenAIForwardResult（例如 503/传输失败）时使用。每次发送都覆盖，
+	// 避免 Gin context 在账号 failover 尝试之间残留旧端点。
+	SetActualOpenAIUpstreamEndpoint(c, "/v1/chat/completions")
 	upstreamReq = upstreamReq.WithContext(WithHTTPUpstreamProfile(upstreamReq.Context(), HTTPUpstreamProfileOpenAI))
 	upstreamReq.Header.Set("Content-Type", "application/json")
 	upstreamReq.Header.Set("Authorization", "Bearer "+bearerToken)
@@ -195,7 +199,7 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 	}
@@ -210,6 +214,7 @@ type ccStreamScanState struct {
 }
 
 func (s *OpenAIGatewayService) scanCCStream(
+	c *gin.Context,
 	resp *http.Response,
 	logPrefix string,
 	requestID string,
@@ -230,6 +235,12 @@ func (s *OpenAIGatewayService) scanCCStream(
 		if payload == "[DONE]" {
 			state.SawDone = true
 			break
+		}
+		// Chat Completions chunks have no Responses event type. Treat them as
+		// untyped observations so a declared model/service_tier describes the
+		// actual upstream result rather than the requested outbound tier.
+		if observer := upstreamResponseModelObserverFromContext(c); observer != nil {
+			observer.ObserveOpenAI([]byte(payload), "")
 		}
 		if usage := extractCCStreamUsage(payload); usage != nil {
 			state.Usage = *usage
@@ -274,6 +285,9 @@ func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 	if err := json.Unmarshal(respBody, &response); err != nil {
 		writeError(c, http.StatusBadGateway, "api_error", "Failed to parse upstream response")
 		return nil, OpenAIUsage{}, fmt.Errorf("parse chat completions response: %w", err)
+	}
+	if observer := upstreamResponseModelObserverFromContext(c); observer != nil {
+		observer.ObserveOpenAI(respBody, "")
 	}
 	usage := OpenAIUsage{}
 	if parsed, ok := extractOpenAIUsageFromJSONBytes(respBody); ok {

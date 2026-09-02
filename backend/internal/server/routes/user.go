@@ -55,6 +55,7 @@ func RegisterUserRoutes(
 				totp.POST("/setup", h.Totp.InitiateSetup)
 				totp.POST("/enable", h.Totp.Enable)
 				totp.POST("/disable", h.Totp.Disable)
+				totp.POST("/step-up", h.Totp.StepUp)
 			}
 		}
 

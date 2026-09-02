@@ -109,6 +109,7 @@ func (c *apiKeyCache) SubscribeAuthCacheInvalidation(ctx context.Context, handle
 		_ = pubsub.Close()
 		return fmt.Errorf("subscribe to auth cache invalidation: %w", err)
 	}
+	service.NotifyAuthCacheSubscriptionReady(ctx)
 
 	go func() {
 		defer func() {

@@ -145,23 +145,33 @@
             :github-enabled="githubOAuthEnabled"
             :google-enabled="googleOAuthEnabled"
             :show-divider="false"
+            @start="handleOAuthStart"
           />
 
           <LinuxDoOAuthSection
             v-if="linuxdoOAuthEnabled"
             :disabled="authActionDisabled"
             :show-divider="false"
+            @start="handleOAuthStart"
+          />
+          <DingTalkOAuthSection
+            v-if="dingtalkOAuthEnabled"
+            :disabled="authActionDisabled"
+            :show-divider="false"
+            @start="handleOAuthStart"
           />
           <WechatOAuthSection
             v-if="wechatOAuthEnabled"
             :disabled="authActionDisabled"
             :show-divider="false"
+            @start="handleOAuthStart"
           />
           <OidcOAuthSection
             v-if="oidcOAuthEnabled"
             :disabled="authActionDisabled"
             :provider-name="oidcOAuthProviderName"
             :show-divider="false"
+            @start="handleOAuthStart"
           />
         </div>
       </form>
@@ -198,6 +208,7 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { AuthLayout } from '@/components/layout'
 import LinuxDoOAuthSection from '@/components/auth/LinuxDoOAuthSection.vue'
+import DingTalkOAuthSection from '@/components/auth/DingTalkOAuthSection.vue'
 import OidcOAuthSection from '@/components/auth/OidcOAuthSection.vue'
 import WechatOAuthSection from '@/components/auth/WechatOAuthSection.vue'
 import EmailOAuthButtons from '@/components/auth/EmailOAuthButtons.vue'
@@ -206,7 +217,13 @@ import TotpLoginModal from '@/components/auth/TotpLoginModal.vue'
 import Icon from '@/components/icons/Icon.vue'
 import TurnstileWidget from '@/components/TurnstileWidget.vue'
 import { useAuthStore, useAppStore } from '@/stores'
-import { getPublicSettings, isTotp2FARequired, isWeChatWebOAuthEnabled } from '@/api/auth'
+import {
+  buildOAuthLoginStartURL,
+  getPublicSettings,
+  isTotp2FARequired,
+  isWeChatWebOAuthEnabled,
+  type OAuthLoginStart
+} from '@/api/auth'
 import type { LoginAgreementDocument, TotpLoginResponse } from '@/types'
 import { extractI18nErrorMessage } from '@/utils/apiError'
 import { clearAllAffiliateReferralCodes } from '@/utils/oauthAffiliate'
@@ -231,6 +248,7 @@ const publicSettingsLoaded = ref<boolean>(false)
 const turnstileEnabled = ref<boolean>(false)
 const turnstileSiteKey = ref<string>('')
 const linuxdoOAuthEnabled = ref<boolean>(false)
+const dingtalkOAuthEnabled = ref<boolean>(false)
 const wechatOAuthEnabled = ref<boolean>(false)
 const backendModeEnabled = ref<boolean>(false)
 const oidcOAuthEnabled = ref<boolean>(false)
@@ -283,6 +301,7 @@ const showOAuthLogin = computed(
   () =>
     !backendModeEnabled.value &&
     (linuxdoOAuthEnabled.value ||
+      dingtalkOAuthEnabled.value ||
       wechatOAuthEnabled.value ||
       oidcOAuthEnabled.value ||
       githubOAuthEnabled.value ||
@@ -311,6 +330,7 @@ onMounted(async () => {
     turnstileEnabled.value = settings.turnstile_enabled
     turnstileSiteKey.value = settings.turnstile_site_key || ''
     linuxdoOAuthEnabled.value = settings.linuxdo_oauth_enabled
+    dingtalkOAuthEnabled.value = settings.dingtalk_oauth_enabled ?? false
     wechatOAuthEnabled.value = isWeChatWebOAuthEnabled(settings)
     backendModeEnabled.value = settings.backend_mode_enabled
     oidcOAuthEnabled.value = settings.oidc_oauth_enabled
@@ -454,6 +474,11 @@ function validateForm(): boolean {
 }
 
 // ==================== Form Handlers ====================
+
+function handleOAuthStart(request: OAuthLoginStart): void {
+  if (authActionDisabled.value) return
+  window.location.href = buildOAuthLoginStartURL(request)
+}
 
 async function handleLogin(): Promise<void> {
   // Clear previous error

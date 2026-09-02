@@ -8,6 +8,7 @@ import GroupsView from "@/views/admin/GroupsView.vue";
 const {
   listGroups,
   duplicateGroup,
+  updateGroup,
   getModelsListCandidates,
   getUsageSummary,
   getCapacitySummary,
@@ -16,6 +17,7 @@ const {
 } = vi.hoisted(() => ({
   listGroups: vi.fn(),
   duplicateGroup: vi.fn(),
+  updateGroup: vi.fn(),
   getModelsListCandidates: vi.fn(),
   getUsageSummary: vi.fn(),
   getCapacitySummary: vi.fn(),
@@ -33,7 +35,7 @@ vi.mock("@/api/admin", () => ({
       getCapacitySummary,
       getAll: vi.fn(),
       create: vi.fn(),
-      update: vi.fn(),
+      update: updateGroup,
       delete: vi.fn(),
       updateSortOrder: vi.fn(),
     },
@@ -135,6 +137,13 @@ const DataTableStub = defineComponent({
     '<div><div v-for="row in data" :key="row.id"><slot name="cell-actions" :row="row" /></div></div>',
 });
 
+const BaseDialogStub = defineComponent({
+  props: {
+    show: { type: Boolean, default: false }
+  },
+  template: '<div v-if="show"><slot /><slot name="footer" /></div>'
+})
+
 function mountView() {
   return mount(GroupsView, {
     global: {
@@ -143,7 +152,7 @@ function mountView() {
         TablePageLayout: TablePageLayoutStub,
         DataTable: DataTableStub,
         Pagination: true,
-        BaseDialog: true,
+        BaseDialog: BaseDialogStub,
         ConfirmDialog: true,
         EmptyState: true,
         Select: true,
@@ -165,6 +174,7 @@ describe("GroupsView duplicate action", () => {
     for (const fn of [
       listGroups,
       duplicateGroup,
+      updateGroup,
       getModelsListCandidates,
       getUsageSummary,
       getCapacitySummary,

@@ -276,22 +276,27 @@
         <EmailOAuthButtons
           :disabled="registrationActionDisabled"
           :aff-code="formData.aff_code"
+          :promo-code="formData.promo_code"
           :github-enabled="githubOAuthEnabled"
           :google-enabled="googleOAuthEnabled"
           :show-divider="false"
+          @start="handleOAuthStart"
         />
 
         <LinuxDoOAuthSection
           v-if="linuxdoOAuthEnabled"
           :disabled="registrationActionDisabled"
           :aff-code="formData.aff_code"
+          :promo-code="formData.promo_code"
           :show-divider="false"
+          @start="handleOAuthStart"
         />
         <WechatOAuthSection
           v-if="wechatOAuthEnabled"
           :disabled="registrationActionDisabled"
           :aff-code="formData.aff_code"
           :show-divider="false"
+          @start="handleOAuthStart"
         />
         <OidcOAuthSection
           v-if="oidcOAuthEnabled"
@@ -299,6 +304,7 @@
           :provider-name="oidcOAuthProviderName"
           :aff-code="formData.aff_code"
           :show-divider="false"
+          @start="handleOAuthStart"
         />
       </div>
     </div>
@@ -332,10 +338,12 @@ import Icon from '@/components/icons/Icon.vue'
 import TurnstileWidget from '@/components/TurnstileWidget.vue'
 import { useAuthStore, useAppStore } from '@/stores'
 import {
+  buildOAuthLoginStartURL,
   getPublicSettings,
   isWeChatWebOAuthEnabled,
   validatePromoCode,
-  validateInvitationCode
+  validateInvitationCode,
+  type OAuthLoginStart
 } from '@/api/auth'
 import { buildAuthErrorMessage } from '@/utils/authError'
 import { extractApiErrorCode } from '@/utils/apiError'
@@ -833,6 +841,11 @@ function validateForm(): boolean {
 }
 
 // ==================== Form Handlers ====================
+
+function handleOAuthStart(request: OAuthLoginStart): void {
+  if (registrationActionDisabled.value) return
+  window.location.href = buildOAuthLoginStartURL(request)
+}
 
 async function handleRegister(): Promise<void> {
   // Clear previous error

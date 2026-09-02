@@ -23,6 +23,27 @@ import type {
  */
 export type LoginResponse = AuthResponse | TotpLoginResponse
 
+export type OAuthLoginProvider =
+  | 'github'
+  | 'google'
+  | 'linuxdo'
+  | 'dingtalk'
+  | 'wechat'
+  | 'oidc'
+
+export interface OAuthLoginStart {
+  provider: OAuthLoginProvider
+  params: Record<string, string>
+}
+
+export function buildOAuthLoginStartURL(request: OAuthLoginStart): string {
+  const apiBase = (import.meta.env.VITE_API_BASE_URL as string | undefined) || '/api/v1'
+  const normalized = apiBase.replace(/\/$/, '')
+  const query = new URLSearchParams(request.params).toString()
+  const path = `${normalized}/auth/oauth/${request.provider}/start`
+  return query ? `${path}?${query}` : path
+}
+
 /**
  * Type guard to check if login response requires 2FA
  */

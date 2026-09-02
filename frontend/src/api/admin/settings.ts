@@ -405,6 +405,7 @@ export interface SystemSettings {
   invitation_code_enabled: boolean;
   totp_enabled: boolean; // TOTP 双因素认证
   totp_encryption_key_configured: boolean; // TOTP 加密密钥是否已配置
+  step_up_enabled: boolean; // 敏感操作 step-up 2FA
   login_agreement_enabled: boolean;
   login_agreement_mode: "modal" | "checkbox" | string;
   login_agreement_updated_at: string;
@@ -604,6 +605,7 @@ export interface SystemSettings {
   allow_ungrouped_key_scheduling: boolean;
 
   // Gateway forwarding behavior
+  openai_ttft_mode: string;
   enable_fingerprint_unification: boolean;
   enable_metadata_passthrough: boolean;
   enable_cch_signing: boolean;
@@ -709,6 +711,7 @@ export interface SystemSettings {
   model_plaza_enabled: boolean;
   model_plaza_require_auth: boolean;
   model_plaza_description: string;
+  plugin_management_enabled: boolean;
 
   // Affiliate (邀请返利) feature switch
   affiliate_enabled: boolean;
@@ -730,6 +733,7 @@ export interface UpdateSettingsRequest {
   frontend_url?: string;
   invitation_code_enabled?: boolean;
   totp_enabled?: boolean; // TOTP 双因素认证
+  step_up_enabled?: boolean; // 敏感操作 step-up 2FA
   login_agreement_enabled?: boolean;
   login_agreement_mode?: "modal" | "checkbox" | string;
   login_agreement_updated_at?: string;
@@ -903,6 +907,7 @@ export interface UpdateSettingsRequest {
   min_claude_code_version?: string;
   max_claude_code_version?: string;
   allow_ungrouped_key_scheduling?: boolean;
+  openai_ttft_mode?: string;
   enable_fingerprint_unification?: boolean;
   enable_metadata_passthrough?: boolean;
   enable_cch_signing?: boolean;
@@ -993,6 +998,7 @@ export interface UpdateSettingsRequest {
   model_plaza_enabled?: boolean;
   model_plaza_require_auth?: boolean;
   model_plaza_description?: string;
+  plugin_management_enabled?: boolean;
 
   // Affiliate (邀请返利) feature switch
   affiliate_enabled?: boolean;

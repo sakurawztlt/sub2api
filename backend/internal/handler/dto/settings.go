@@ -37,6 +37,7 @@ type SystemSettings struct {
 	InvitationCodeEnabled               bool                     `json:"invitation_code_enabled"`
 	TotpEnabled                         bool                     `json:"totp_enabled"`                   // TOTP 双因素认证
 	TotpEncryptionKeyConfigured         bool                     `json:"totp_encryption_key_configured"` // TOTP 加密密钥是否已配置
+	StepUpEnabled                       bool                     `json:"step_up_enabled"`                // 敏感操作 step-up 2FA
 	LoginAgreementEnabled               bool                     `json:"login_agreement_enabled"`
 	LoginAgreementMode                  string                   `json:"login_agreement_mode"`
 	LoginAgreementUpdatedAt             string                   `json:"login_agreement_updated_at"`
@@ -184,6 +185,7 @@ type SystemSettings struct {
 	// Backend Mode
 	BackendModeEnabled bool `json:"backend_mode_enabled"`
 
+	OpenAITTFTMode                         string `json:"openai_ttft_mode"`
 	EnableFingerprintUnification           bool   `json:"enable_fingerprint_unification"`
 	EnableMetadataPassthrough              bool   `json:"enable_metadata_passthrough"`
 	EnableCCHSigning                       bool   `json:"enable_cch_signing"`
@@ -300,9 +302,10 @@ type SystemSettings struct {
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
 
 	// Model Plaza feature (public group/model pricing showcase)
-	ModelPlazaEnabled     bool   `json:"model_plaza_enabled"`
-	ModelPlazaRequireAuth bool   `json:"model_plaza_require_auth"`
-	ModelPlazaDescription string `json:"model_plaza_description"`
+	ModelPlazaEnabled       bool   `json:"model_plaza_enabled"`
+	ModelPlazaRequireAuth   bool   `json:"model_plaza_require_auth"`
+	ModelPlazaDescription   string `json:"model_plaza_description"`
+	PluginManagementEnabled bool   `json:"plugin_management_enabled"`
 
 	// 风控中心功能开关
 	RiskControlEnabled bool `json:"risk_control_enabled"`
@@ -394,8 +397,9 @@ type PublicSettings struct {
 
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
 
-	ModelPlazaEnabled     bool `json:"model_plaza_enabled"`
-	ModelPlazaRequireAuth bool `json:"model_plaza_require_auth"`
+	ModelPlazaEnabled       bool `json:"model_plaza_enabled"`
+	ModelPlazaRequireAuth   bool `json:"model_plaza_require_auth"`
+	PluginManagementEnabled bool `json:"plugin_management_enabled"`
 
 	AffiliateEnabled bool `json:"affiliate_enabled"`
 
@@ -420,6 +424,10 @@ type OverloadCooldownSettings struct {
 type RateLimit429CooldownSettings struct {
 	Enabled         bool `json:"enabled"`
 	CooldownSeconds int  `json:"cooldown_seconds"`
+}
+
+type OpenAIImagesOAuthUnavailableCooldownSettings struct {
+	CooldownMinutes int `json:"cooldown_minutes"`
 }
 
 // PanelRateLimitSettings 面板 API 限流配置 DTO

@@ -2619,6 +2619,13 @@ export default {
         targetModelPlaceholder: '例如: gpt-5.4',
         removeExactMapping: '删除精确映射'
       },
+      openaiFast: {
+        title: 'OpenAI Fast 模式',
+        force: '强制使用 Fast（priority）',
+        hint: '开启后，此分组的 OpenAI 请求会强制写入 service_tier=priority；全局 Fast/Flex 策略仍可过滤或拦截。保存后新请求立即生效，已建立的 WebSocket 会话需重连。',
+        free: '免费 Fast',
+        freeHint: '该分组的 Fast 请求仍使用 priority 档位，但客户实际费用按同一请求的 Standard 价格计算。'
+      },
       invalidRequestFallback: {
         title: '无效请求兜底分组',
         hint: '仅当上游明确返回 prompt too long 时才会触发，留空表示不兜底',
@@ -6429,7 +6436,9 @@ export default {
         totp: '双因素认证 (2FA)',
         totpHint: '允许用户使用 Google Authenticator 等应用进行二次验证',
         totpKeyNotConfigured:
-          '请先在环境变量中配置 TOTP_ENCRYPTION_KEY。使用命令 openssl rand -hex 32 生成密钥。'
+          '请先在环境变量中配置 TOTP_ENCRYPTION_KEY。使用命令 openssl rand -hex 32 生成密钥。',
+        stepUp: '敏感操作二次验证',
+        stepUpHint: '上传插件等受保护的管理操作前，要求近期完成一次 TOTP 验证'
       },
       panelRateLimit: {
         title: '面板接口限流',
@@ -7930,7 +7939,7 @@ export default {
     amountTooLow: '最低金额为 {min}',
     amountTooHigh: '最高金额为 {max}',
     amountNoMethod: '该金额没有可用的支付方式',
-    rechargeRatePreview: '当前倍率：1 CNY = {usd} USD',
+    rechargeRatePreview: '当前倍率：1 {currency} = {usd} USD',
     refundReason: '退款原因',
     refundReasonPlaceholder: '请描述您的退款原因',
     stripeLoadFailed: '支付组件加载失败，请刷新页面重试',

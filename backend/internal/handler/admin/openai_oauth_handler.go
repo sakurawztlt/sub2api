@@ -27,6 +27,7 @@ type OpenAIOAuthHandler struct {
 type openAIQuotaService interface {
 	QueryUsage(ctx context.Context, accountID int64) (*service.OpenAIQuotaUsage, error)
 	CacheResetCreditsSnapshot(ctx context.Context, accountID int64, credits *service.OpenAIRateLimitResetCredits) error
+	CachePostResetSnapshot(ctx context.Context, accountID int64, usage *service.OpenAIQuotaUsage) error
 	ResetCredit(ctx context.Context, accountID int64) (*service.OpenAIQuotaResetResult, error)
 }
 
@@ -460,6 +461,7 @@ func (h *OpenAIOAuthHandler) QueryQuota(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	service.NotifyOpenAIAutoResetCredit(accountID)
 	response.Success(c, usage)
 }
 

@@ -179,6 +179,30 @@ func ProvideOpenAIQuotaService(
 	return NewOpenAIQuotaService(accountRepo, proxyRepo, tokenProvider, privacyClientFactory)
 }
 
+// ProvideOpenAIQuotaAutoResetService starts the account-level reset-credit
+// worker and its compensating scan loop.
+func ProvideOpenAIQuotaAutoResetService(
+	accountRepo AccountRepository,
+	quotaService *OpenAIQuotaService,
+	rateLimitService *RateLimitService,
+	idempotency *IdempotencyCoordinator,
+	audit *AuditLogService,
+	settingService *SettingService,
+	leaderLock LeaderLockCache,
+) *OpenAIQuotaAutoResetService {
+	svc := NewOpenAIQuotaAutoResetService(accountRepo, quotaService, rateLimitService, idempotency, audit, settingService, leaderLock)
+	svc.Start()
+	return svc
+}
+
+// ProvideAuditLogService starts asynchronous audit persistence and retention
+// cleanup. Shutdown is coordinated by the server cleanup provider.
+func ProvideAuditLogService(repo AuditLogRepository, settingService *SettingService) *AuditLogService {
+	svc := NewAuditLogService(repo, settingService)
+	svc.Start()
+	return svc
+}
+
 // ProvideGeminiTokenProvider creates GeminiTokenProvider with OAuthRefreshAPI injection
 func ProvideGeminiTokenProvider(
 	accountRepo AccountRepository,
@@ -699,6 +723,7 @@ var ProviderSet = wire.NewSet(
 	ProvideAntigravityTokenProvider,
 	ProvideOpenAITokenProvider,
 	ProvideOpenAIQuotaService,
+	ProvideOpenAIQuotaAutoResetService,
 	ProvideClaudeTokenProvider,
 	NewAntigravityGatewayService,
 	ProvideRateLimitService,
@@ -711,6 +736,7 @@ var ProviderSet = wire.NewSet(
 	ProvideOpsSystemLogSink,
 	ProvideOpsService,
 	ProvideOpsIngressRejectAggregator,
+	ProvideAuditLogService,
 	ProvideOpsMetricsCollector,
 	ProvideOpsAggregationService,
 	ProvideOpsAlertEvaluatorService,
@@ -750,6 +776,7 @@ var ProviderSet = wire.NewSet(
 	NewTotpService,
 	NewErrorPassthroughService,
 	NewTLSFingerprintProfileService,
+	NewPluginManager,
 	NewDigestSessionStore,
 	ProvideIdempotencyCoordinator,
 	ProvideSystemOperationLockService,
@@ -760,6 +787,7 @@ var ProviderSet = wire.NewSet(
 	NewChannelService,
 	wire.Bind(new(ChannelCacheInvalidator), new(*ChannelService)),
 	NewModelPricingResolver,
+	NewModelPlazaService,
 	NewContentModerationService,
 	NewAffiliateService,
 	ProvidePaymentConfigService,

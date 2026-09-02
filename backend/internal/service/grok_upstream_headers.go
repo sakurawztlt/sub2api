@@ -10,10 +10,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
 
-// grokUpstreamUserAgent is kept for compatibility with older Grok request
-// tests. Current requests use the pinned default UA from this package.
-const grokUpstreamUserAgent = "sub2api-grok/1.0"
-
 // Fixed CLI identity aliases — single source of truth is internal/pkg/xai.
 const (
 	grokClientVersionHeader    = xai.CLIStableVersion
@@ -26,6 +22,10 @@ const (
 func defaultGrokUpstreamUserAgent() string {
 	return xai.CLIUserAgent(xai.ResolveCLIVersion())
 }
+
+// grokUpstreamUserAgent keeps the historical package-level test contract while
+// the runtime value continues to come from the xAI identity source of truth.
+var grokUpstreamUserAgent = defaultGrokUpstreamUserAgent()
 
 func applyDefaultGrokUpstreamHeaders(req *http.Request) {
 	if req == nil {

@@ -45,6 +45,7 @@ var (
 const (
 	MaxAPIKeyCredentialBytes     = 128
 	defaultAuthLookupConcurrency = 64
+	defaultNegativeAuthCacheSize = 16384
 	apiKeyMaxErrorsPerHour       = 20
 	apiKeyLastUsedMinTouch       = 30 * time.Second
 	// DB 写失败后的短退避，避免请求路径持续同步重试造成写风暴与高延迟。
@@ -177,6 +178,20 @@ type APIKeyCache interface {
 	SubscribeAuthCacheInvalidation(ctx context.Context, handler func(cacheKey string)) error
 }
 
+type authCacheSubscriptionReadyKey struct{}
+
+func withAuthCacheSubscriptionReady(ctx context.Context, ready func()) context.Context {
+	return context.WithValue(ctx, authCacheSubscriptionReadyKey{}, ready)
+}
+
+// NotifyAuthCacheSubscriptionReady lets cache implementations report that the
+// server acknowledged the subscription without widening the public cache API.
+func NotifyAuthCacheSubscriptionReady(ctx context.Context) {
+	if ready, ok := ctx.Value(authCacheSubscriptionReadyKey{}).(func()); ok && ready != nil {
+		ready()
+	}
+}
+
 // APIKeyAuthCacheInvalidator 提供认证缓存失效能力
 type APIKeyAuthCacheInvalidator interface {
 	InvalidateAuthCacheByKey(ctx context.Context, key string)
@@ -260,24 +275,31 @@ type RateLimitCacheInvalidator interface {
 }
 
 type APIKeyService struct {
-	apiKeyRepo            APIKeyRepository
-	userRepo              UserRepository
-	groupRepo             GroupRepository
-	userSubRepo           UserSubscriptionRepository
-	userGroupRateRepo     UserGroupRateRepository
-	cache                 APIKeyCache
-	rateLimitCacheInvalid RateLimitCacheInvalidator // optional: invalidate Redis rate limit cache
-	cfg                   *config.Config
-	authCacheL1           *ristretto.Cache
-	authCfg               apiKeyAuthCacheConfig
-	authGroup             singleflight.Group
-	authLookupSlots       chan struct{}
-	authLookupTotal       atomic.Uint64
-	authLookupRejected    atomic.Uint64
-	authLookupInFlight    atomic.Int64
-	invalidAuthAbuse      *invalidAuthAbuseLimiter
-	lastUsedTouchL1       sync.Map // keyID -> nextAllowedAt(time.Time)
-	lastUsedTouchSF       singleflight.Group
+	apiKeyRepo                APIKeyRepository
+	userRepo                  UserRepository
+	groupRepo                 GroupRepository
+	userSubRepo               UserSubscriptionRepository
+	userGroupRateRepo         UserGroupRateRepository
+	cache                     APIKeyCache
+	rateLimitCacheInvalid     RateLimitCacheInvalidator // optional: invalidate Redis rate limit cache
+	cfg                       *config.Config
+	authCacheL1               *ristretto.Cache
+	authNegativeCacheL1       *ristretto.Cache
+	authCfg                   apiKeyAuthCacheConfig
+	authGroup                 singleflight.Group
+	authLookupSlots           chan struct{}
+	authLookupTotal           atomic.Uint64
+	authLookupRejected        atomic.Uint64
+	authLookupInFlight        atomic.Int64
+	invalidAuthAbuse          *invalidAuthAbuseLimiter
+	authInvalidationStart     sync.Once
+	authInvalidationStop      sync.Once
+	authInvalidationCancel    context.CancelFunc
+	authInvalidationWG        sync.WaitGroup
+	authInvalidationConnected atomic.Bool
+	authInvalidationFailures  atomic.Uint64
+	lastUsedTouchL1           sync.Map // keyID -> nextAllowedAt(time.Time)
+	lastUsedTouchSF           singleflight.Group
 }
 
 type APIKeyAuthLookupMetrics struct {
@@ -966,20 +988,21 @@ func (s *APIKeyService) SearchAPIKeys(ctx context.Context, userID int64, keyword
 	return keys, nil
 }
 
-// GetUserAllowedGroupIDSet 返回 user_allowed_groups 授权给该用户的专属分组 ID 集合。
+// GetUserGroupVisibility 返回 user_allowed_groups 授权给该用户的分组 ID 集合，
+// 以及该用户是否开启了公开分组限制。开启时公开分组的可见性也要落在该集合内。
 //
 // 与 GetAvailableGroups 的区别：这里是「橱窗」语义（模型广场用），不检查订阅有效性，
 // 也不关心分组是否活跃——仅回答"哪些专属分组对该用户可见"。返回值恒非 nil。
-func (s *APIKeyService) GetUserAllowedGroupIDSet(ctx context.Context, userID int64) (map[int64]struct{}, error) {
+func (s *APIKeyService) GetUserGroupVisibility(ctx context.Context, userID int64) (map[int64]struct{}, bool, error) {
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
-		return nil, fmt.Errorf("get user: %w", err)
+		return nil, false, fmt.Errorf("get user: %w", err)
 	}
 	allowed := make(map[int64]struct{}, len(user.AllowedGroups))
 	for _, id := range user.AllowedGroups {
 		allowed[id] = struct{}{}
 	}
-	return allowed, nil
+	return allowed, user.RestrictPublicGroups, nil
 }
 
 // GetUserGroupRates 获取用户的专属分组倍率配置

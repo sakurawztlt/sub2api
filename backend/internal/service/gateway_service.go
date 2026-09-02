@@ -85,8 +85,9 @@ const (
 )
 
 const (
-	cacheTTLTarget5m = "5m"
-	cacheTTLTarget1h = "1h"
+	cacheTTLTarget5m                   = "5m"
+	cacheTTLTarget1h                   = "1h"
+	compositeModelOwnershipCachePrefix = "composite-owner|"
 )
 
 // ForceCacheBillingContextKey 强制缓存计费上下文键
@@ -514,6 +515,10 @@ func modelsListCacheKey(groupID *int64, platform string) string {
 	return fmt.Sprintf("%d|%s", derefGroupID(groupID), strings.TrimSpace(platform))
 }
 
+func compositeModelOwnershipCacheKey(groupID int64, model string) string {
+	return fmt.Sprintf("%s%d|%s", compositeModelOwnershipCachePrefix, groupID, strings.TrimSpace(model))
+}
+
 func prefetchedStickyGroupIDFromContext(ctx context.Context) (int64, bool) {
 	return PrefetchedStickyGroupIDFromContext(ctx)
 }
@@ -602,6 +607,8 @@ type ForwardResult struct {
 	// response before any client-facing rewrite or protocol conversion.
 	UpstreamResponseModel         string
 	UpstreamResponseModelConflict bool
+	// UpstreamResponseServiceTier is the tier declared by the upstream response.
+	UpstreamResponseServiceTier string
 	// ServiceTier records the billable request tier. OpenAI uses service_tier;
 	// Anthropic speed=fast is normalized to "fast".
 	ServiceTier      *string
@@ -610,6 +617,8 @@ type ForwardResult struct {
 	FirstTokenMs     *int // 首字时间（流式请求）
 	ClientDisconnect bool // 客户端是否在流式传输过程中断开
 	ReasoningEffort  *string
+	// RequestedReasoningEffort is client intent before mapping and policy.
+	RequestedReasoningEffort *string
 
 	// 图片生成计费字段（图片生成模型使用）
 	ImageCount         int            // 生成的图片数量
@@ -842,6 +851,9 @@ func NewGatewayService(
 		compositeResolver:     compositeResolver,
 		balanceNotifyService:  balanceNotifyService,
 		userPlatformQuotaRepo: userPlatformQuotaRepo,
+	}
+	if compositeResolver != nil {
+		compositeResolver.SetModelOwnershipResolver(svc.resolveCompositeModelOwnership)
 	}
 	svc.userGroupRateResolver = newUserGroupRateResolver(
 		userGroupRateRepo,
@@ -1601,6 +1613,7 @@ func (s *GatewayService) applyClaudeCodeOAuthMimicryToBody(
 	systemPromptInjectionEnabled, systemPrompt, systemPromptBlocks := s.claudeOAuthSystemPromptInjectionSettings(ctx)
 	systemRewritten := false
 	if systemPromptInjectionEnabled {
+		systemPromptBlocks = claudeOAuthSystemPromptBlocksForModel(model, systemPromptBlocks)
 		body = rewriteSystemForNonClaudeCodeWithPromptBlocks(body, normalizeSystemParam(systemRaw), systemPrompt, systemPromptBlocks)
 		systemRewritten = true
 	}
@@ -4214,6 +4227,11 @@ func summarizeSelectionFailureStats(stats selectionFailureStats) string {
 // isModelSupportedByAccountWithContext 根据账户平台检查模型支持（带 context）
 // 对于 Antigravity 平台，会先获取映射后的最终模型名（包括 thinking 后缀）再检查支持
 func (s *GatewayService) isModelSupportedByAccountWithContext(ctx context.Context, account *Account, requestedModel string) bool {
+	if source, ok := CompositeRouteSourceFromContext(ctx); ok && source == CompositeRouteSourceAccount {
+		if publicModel, modelOK := RequestedPublicModelFromContext(ctx); modelOK && !explicitModelMappingClaims(*account, publicModel) {
+			return false
+		}
+	}
 	if account.Platform == PlatformAntigravity {
 		if strings.TrimSpace(requestedModel) == "" {
 			return true
@@ -4863,6 +4881,21 @@ type claudeOAuthSystemPromptBlockConfig struct {
 
 type claudeOAuthSystemPromptBlocksEnvelope struct {
 	Blocks []claudeOAuthSystemPromptBlockConfig `json:"blocks"`
+}
+
+// claudeFableOAuthSystemPromptBlocks keeps the Claude Code identity required by
+// OAuth credentials without the generic CLI expansion block. Fable 5 rejects
+// that expansion upstream with stop_reason=refusal and zero output tokens.
+const claudeFableOAuthSystemPromptBlocks = `[
+	{"type":"text","text":"{billing_header}"},
+	{"type":"text","text":"{claude_code_system_prompt}"}
+]`
+
+func claudeOAuthSystemPromptBlocksForModel(model, configured string) string {
+	if isAnthropicFableModel(model) {
+		return claudeFableOAuthSystemPromptBlocks
+	}
+	return configured
 }
 
 func defaultClaudeOAuthExpansionPrompt(expansionPrompt string) string {
@@ -6900,10 +6933,10 @@ func (s *GatewayService) parseSSEUsagePassthrough(data string, usage *ClaudeUsag
 
 			cc5m := deltaUsage.Get("cache_creation.ephemeral_5m_input_tokens")
 			cc1h := deltaUsage.Get("cache_creation.ephemeral_1h_input_tokens")
-			if cc5m.Exists() && cc5m.Int() > 0 {
+			if cc5m.Exists() {
 				usage.CacheCreation5mTokens = int(cc5m.Int())
 			}
-			if cc1h.Exists() && cc1h.Int() > 0 {
+			if cc1h.Exists() {
 				usage.CacheCreation1hTokens = int(cc1h.Int())
 			}
 		}
@@ -6929,6 +6962,12 @@ func (s *GatewayService) parseSSEUsagePassthrough(data string, usage *ClaudeUsag
 			usage.CacheCreationInputTokens = int(total)
 		}
 	}
+
+	usageNode := parsed.Get("usage")
+	if parsed.Get("type").String() == "message_start" {
+		usageNode = parsed.Get("message.usage")
+	}
+	normalizeAnthropicCompatiblePromptUsage(usageNode, usage)
 }
 
 func parseClaudeUsageFromResponseBody(body []byte) *ClaudeUsage {
@@ -6962,6 +7001,7 @@ func parseClaudeUsageFromResponseBody(body []byte) *ClaudeUsage {
 			usage.CacheReadInputTokens = int(cached)
 		}
 	}
+	normalizeAnthropicCompatiblePromptUsage(usageNode, usage)
 	return usage
 }
 
@@ -9422,11 +9462,11 @@ func (s *GatewayService) extractSSEUsagePatch(event map[string]any) *sseUsagePat
 			patch.hasCacheReadInput = true
 		}
 		if cc, ok := usageObj["cache_creation"].(map[string]any); ok {
-			if v, exists := parseSSEUsageInt(cc["ephemeral_5m_input_tokens"]); exists && v > 0 {
+			if v, exists := parseSSEUsageInt(cc["ephemeral_5m_input_tokens"]); exists {
 				patch.cacheCreation5mTokens = v
 				patch.hasCacheCreation5m = true
 			}
-			if v, exists := parseSSEUsageInt(cc["ephemeral_1h_input_tokens"]); exists && v > 0 {
+			if v, exists := parseSSEUsageInt(cc["ephemeral_1h_input_tokens"]); exists {
 				patch.cacheCreation1hTokens = v
 				patch.hasCacheCreation1h = true
 			}
@@ -10377,6 +10417,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	account := input.Account
 	subscription := input.Subscription
 	ApplyForwardImageBillingResolution(result)
+	logServiceTierBillingDowngrade("service.gateway", account, result.RequestID, ApplyForwardServiceTierBillingResolution(result))
 
 	// 强制缓存计费：将 input_tokens 转为 cache_read_input_tokens
 	// 用于粘性会话切换时的特殊计费处理
@@ -10537,8 +10578,13 @@ func (s *GatewayService) calculateRecordUsageCost(
 	multiplier float64,
 	imageMultiplier float64,
 	pricingAt time.Time,
-	opts *recordUsageOpts,
+	optsArg ...*recordUsageOpts,
 ) *CostBreakdown {
+	var opts *recordUsageOpts
+	if len(optsArg) > 0 {
+		opts = optsArg[0]
+	}
+
 	// 图片生成计费
 	if result.ImageCount > 0 {
 		resolved := s.resolveChannelPricing(ctx, billingModel, apiKey)
@@ -11695,6 +11741,59 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 	return cloneStringSlice(models)
 }
 
+func (s *GatewayService) resolveCompositeModelOwnership(ctx context.Context, groupID int64, model string) (CompositeModelOwnership, error) {
+	model = strings.TrimSpace(model)
+	if s == nil || s.accountRepo == nil || groupID <= 0 || model == "" {
+		return CompositeModelOwnership{}, nil
+	}
+
+	cacheKey := compositeModelOwnershipCacheKey(groupID, model)
+	if s.modelsListCache != nil {
+		if cached, found := s.modelsListCache.Get(cacheKey); found {
+			if ownership, ok := cached.(CompositeModelOwnership); ok {
+				return ownership, nil
+			}
+		}
+	}
+
+	accounts, err := s.accountRepo.ListSchedulableByGroupID(ctx, groupID)
+	if err != nil {
+		return CompositeModelOwnership{}, err
+	}
+
+	platforms := make(map[string]struct{})
+	for _, account := range accounts {
+		platform := strings.TrimSpace(account.Platform)
+		if !isConcreteRequestPlatform(platform) || !explicitModelMappingClaims(account, model) {
+			continue
+		}
+		platforms[platform] = struct{}{}
+	}
+
+	ownership := CompositeModelOwnership{}
+	if len(platforms) == 1 {
+		for platform := range platforms {
+			ownership.TargetPlatform = platform
+		}
+		ownership.Matched = true
+	} else if len(platforms) > 1 {
+		ownership.Ambiguous = true
+	}
+
+	if s.modelsListCache != nil {
+		s.modelsListCache.Set(cacheKey, ownership, s.modelsListCacheTTL)
+	}
+	return ownership, nil
+}
+
+func explicitModelMappingClaims(account Account, model string) bool {
+	if account.Credentials == nil || model == "" {
+		return false
+	}
+	mapped, ok := stringMappingFromRaw(account.Credentials["model_mapping"])[model]
+	return ok && strings.TrimSpace(mapped) != ""
+}
+
 // GetSchedulablePlatforms returns the concrete platforms that currently have
 // schedulable accounts in the target group.
 func (s *GatewayService) GetSchedulablePlatforms(ctx context.Context, groupID *int64) map[string]struct{} {
@@ -11723,10 +11822,31 @@ func (s *GatewayService) GetSchedulablePlatforms(ctx context.Context, groupID *i
 	return platforms
 }
 
+func (s *GatewayService) invalidateCompositeModelOwnershipCache(groupID *int64) {
+	for key := range s.modelsListCache.Items() {
+		if !strings.HasPrefix(key, compositeModelOwnershipCachePrefix) {
+			continue
+		}
+		if groupID == nil {
+			s.modelsListCache.Delete(key)
+			continue
+		}
+		parts := strings.SplitN(strings.TrimPrefix(key, compositeModelOwnershipCachePrefix), "|", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		cachedGroupID, err := strconv.ParseInt(parts[0], 10, 64)
+		if err == nil && cachedGroupID == *groupID {
+			s.modelsListCache.Delete(key)
+		}
+	}
+}
+
 func (s *GatewayService) InvalidateAvailableModelsCache(groupID *int64, platform string) {
 	if s == nil || s.modelsListCache == nil {
 		return
 	}
+	s.invalidateCompositeModelOwnershipCache(groupID)
 
 	normalizedPlatform := strings.TrimSpace(platform)
 	// 完整匹配时精准失效；否则按维度批量失效。
@@ -11786,19 +11906,19 @@ func (s *GatewayService) initDebugGatewayBodyFile(path string) {
 	}
 
 	// 如果 path 指向一个已存在的目录，自动追加默认文件名
-	if info, err := os.Stat(path); err == nil && info.IsDir() {
+	if info, err := os.Stat(path); err == nil && info.IsDir() { //nolint:gosec // G703: path 仅来自启动环境变量 SUB2API_DEBUG_GATEWAY_BODY（运维配置），非请求输入
 		path = filepath.Join(path, debugGatewayBodyDefaultFilename)
 	}
 
 	// 确保父目录存在
 	if dir := filepath.Dir(path); dir != "." {
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := os.MkdirAll(dir, 0755); err != nil { //nolint:gosec // G703: 同上
 			slog.Error("failed to create gateway debug log directory", "dir", dir, "error", err)
 			return
 		}
 	}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644) //nolint:gosec // G703: 同上
 	if err != nil {
 		slog.Error("failed to open gateway debug log file", "path", path, "error", err)
 		return

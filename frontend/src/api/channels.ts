@@ -29,6 +29,7 @@ export interface UserPricingInterval {
   input_price: number | null
   output_price: number | null
   cache_write_price: number | null
+  cache_write_1h_price?: number | null
   cache_read_price: number | null
   per_request_price: number | null
 }
@@ -39,6 +40,7 @@ export interface UserSupportedModelPricing {
   image_input_price: number | null
   output_price: number | null
   cache_write_price: number | null
+  cache_write_1h_price?: number | null
   cache_read_price: number | null
   image_output_price: number | null
   per_request_price: number | null
