@@ -286,9 +286,9 @@ func TestShouldFailoverOpenAIUpstreamResponseContextWindow502(t *testing.T) {
 	svc := &OpenAIGatewayService{}
 	body := []byte(`{"error":{"message":"Your input exceeds the context window of this model. Please adjust your input and try again.","type":"upstream_error","code":null}}`)
 
-	require.False(t, svc.shouldFailoverOpenAIUpstreamResponse(http.StatusBadGateway, "", body))
-	require.True(t, svc.shouldFailoverOpenAIUpstreamResponse(http.StatusBadGateway, "temporary upstream outage", []byte(`{"error":{"message":"temporary upstream outage"}}`)))
-	require.True(t, svc.shouldFailoverOpenAIUpstreamResponse(
+	require.False(t, svc.shouldFailoverOpenAIUpstreamResponse(newOpenAIUpstreamErrorTestAccount(), http.StatusBadGateway, "", body))
+	require.True(t, svc.shouldFailoverOpenAIUpstreamResponse(newOpenAIUpstreamErrorTestAccount(), http.StatusBadGateway, "temporary upstream outage", []byte(`{"error":{"message":"temporary upstream outage"}}`)))
+	require.True(t, svc.shouldFailoverOpenAIUpstreamResponse(newOpenAIUpstreamErrorTestAccount(),
 		http.StatusBadGateway,
 		"temporary upstream outage",
 		[]byte(`{"error":{"message":"temporary upstream outage"},"echo":"context_length_exceeded"}`),
@@ -400,4 +400,103 @@ func TestOpenAIGatewayService_Forward_TransientProcessingErrorTriggersFailover(t
 	require.Equal(t, http.StatusBadRequest, failoverErr.StatusCode)
 	require.Contains(t, string(failoverErr.ResponseBody), "An error occurred while processing your request")
 	require.False(t, c.Writer.Written(), "service 层应返回 failover 错误给上层换号，而不是直接向客户端写响应")
+}
+
+func TestOpenAIGatewayService_Forward_ModelCapacityErrorTriggersFailoverAndSameAccountRetry(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
+	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.1.0")
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	upstream := &httpUpstreamRecorder{
+		resp: &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Header: http.Header{
+				"Content-Type": []string{"application/json"},
+				"x-request-id": []string{"rid-capacity-400"},
+			},
+			Body: io.NopCloser(strings.NewReader(`{"error":{"message":"Selected model is at capacity. Please try a different model.","type":"invalid_request_error"}}`)),
+		},
+	}
+	svc := &OpenAIGatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{ForceCodexCLI: false},
+		},
+		httpUpstream: upstream,
+	}
+	account := &Account{
+		ID:          1001,
+		Name:        "codex max套餐",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":   "sk-test",
+			"pool_mode": true,
+		},
+		Status:         StatusActive,
+		Schedulable:    true,
+		RateMultiplier: f64p(1),
+	}
+	body := []byte(`{"model":"gpt-5.4","stream":false,"input":[{"type":"text","text":"hello"}]}`)
+
+	_, err := svc.Forward(context.Background(), c, account, body)
+	require.Error(t, err)
+
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusBadRequest, failoverErr.StatusCode)
+	require.True(t, failoverErr.RetryableOnSameAccount)
+	require.Contains(t, string(failoverErr.ResponseBody), "Selected model is at capacity")
+	require.False(t, c.Writer.Written(), "service 层应返回 failover 错误给上层重试/换号，而不是直接向客户端写响应")
+}
+
+func TestOpenAIGatewayService_Forward_VersionGateMessage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	newCtx := func() (*httptest.ResponseRecorder, *gin.Context) {
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
+		return rec, c
+	}
+	account := func() *Account {
+		return &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth, Extra: map[string]any{"codex_cli_only": true}}
+	}
+	body := []byte(`{"model":"gpt-5.1-codex"}`)
+
+	t.Run("版本太低：保留本地通用文案隐藏门控版本", func(t *testing.T) {
+		rec, c := newCtx()
+		svc := &OpenAIGatewayService{codexDetector: &stubCodexRestrictionDetector{result: CodexClientRestrictionDetectionResult{
+			Enabled:         true,
+			Matched:         false,
+			Reason:          CodexClientRestrictionReasonVersionTooLow,
+			DetectedVersion: "0.39.0",
+			MinCodexVersion: "0.42.0",
+		}}}
+
+		_, err := svc.Forward(context.Background(), c, account(), body)
+		require.Error(t, err)
+		require.Equal(t, http.StatusForbidden, rec.Code)
+		require.Contains(t, rec.Body.String(), "This account only allows Codex official clients")
+		require.NotContains(t, rec.Body.String(), "0.39.0")
+		require.NotContains(t, rec.Body.String(), "0.42.0")
+	})
+
+	t.Run("未命中官方：仍返回通用兜底文案", func(t *testing.T) {
+		rec, c := newCtx()
+		svc := &OpenAIGatewayService{codexDetector: &stubCodexRestrictionDetector{result: CodexClientRestrictionDetectionResult{
+			Enabled: true,
+			Matched: false,
+			Reason:  CodexClientRestrictionReasonNotMatchedUA,
+		}}}
+
+		_, err := svc.Forward(context.Background(), c, account(), body)
+		require.Error(t, err)
+		require.Equal(t, http.StatusForbidden, rec.Code)
+		require.Contains(t, rec.Body.String(), "This account only allows Codex official clients")
+	})
 }

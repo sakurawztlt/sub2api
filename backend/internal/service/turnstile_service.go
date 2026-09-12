@@ -103,3 +103,34 @@ func (s *TurnstileService) ValidateSecretKey(ctx context.Context, secretKey stri
 	// 其他错误（如 invalid-input-response）说明 secret key 是有效的
 	return nil
 }
+
+func (s *TurnstileService) VerifyTokenWithSecret(ctx context.Context, secretKey, token, remoteIP string) error {
+	if secretKey == "" {
+		logger.LegacyPrintf("service.turnstile", "%s", "[Turnstile] Secret key not configured")
+		return ErrTurnstileNotConfigured
+	}
+
+	// 如果 token 为空，返回错误
+	if token == "" {
+		logger.LegacyPrintf("service.turnstile", "%s", "[Turnstile] Token is empty")
+		return ErrTurnstileVerificationFailed
+	}
+
+	logger.LegacyPrintf("service.turnstile", "[Turnstile] Verifying token for IP: %s", remoteIP)
+	if s == nil || s.verifier == nil {
+		return ErrTurnstileNotConfigured
+	}
+	result, err := s.verifier.VerifyToken(ctx, secretKey, token, remoteIP)
+	if err != nil {
+		logger.LegacyPrintf("service.turnstile", "[Turnstile] Request failed: %v", err)
+		return fmt.Errorf("send request: %w", err)
+	}
+
+	if !result.Success {
+		logger.LegacyPrintf("service.turnstile", "[Turnstile] Verification failed, error codes: %v", result.ErrorCodes)
+		return ErrTurnstileVerificationFailed
+	}
+
+	logger.LegacyPrintf("service.turnstile", "%s", "[Turnstile] Verification successful")
+	return nil
+}

@@ -9,6 +9,7 @@ import (
 
 // ProvideAdminHandlers creates the AdminHandlers struct
 func ProvideAdminHandlers(
+	complianceHandler *admin.ComplianceHandler,
 	dashboardHandler *admin.DashboardHandler,
 	userHandler *admin.UserHandler,
 	groupHandler *admin.GroupHandler,
@@ -49,6 +50,7 @@ func ProvideAdminHandlers(
 	accountHandler.SetOllamaCloudUsageService(ollamaCloudUsage)
 	accountHandler.SetUpstreamBillingProbeService(upstreamBillingProbe)
 	return &AdminHandlers{
+		Compliance:             complianceHandler,
 		Dashboard:              dashboardHandler,
 		User:                   userHandler,
 		Group:                  groupHandler,
@@ -103,6 +105,7 @@ func ProvideAdminSettingHandler(
 	notificationEmailService *service.NotificationEmailService,
 	totpService *service.TotpService,
 	userService *service.UserService,
+	aliyunCaptchaService *service.AliyunCaptchaService,
 ) *admin.SettingHandler {
 	h := admin.NewSettingHandler(
 		settingService,
@@ -115,6 +118,7 @@ func ProvideAdminSettingHandler(
 	)
 	h.SetNotificationEmailService(notificationEmailService)
 	h.SetStepUpDeps(totpService, userService)
+	h.SetAliyunCaptchaService(aliyunCaptchaService)
 	return h
 }
 
@@ -130,7 +134,10 @@ func ProvideSettingHandler(settingService *service.SettingService, buildInfo Bui
 
 // ProvideHandlers creates the Handlers struct
 func ProvideHandlers(
+	asyncImageHandler *AsyncImageHandler,
+	batchImageHandler *BatchImageHandler,
 	authHandler *AuthHandler,
+	passkeyHandler *PasskeyHandler,
 	userHandler *UserHandler,
 	apiKeyHandler *APIKeyHandler,
 	usageHandler *UsageHandler,
@@ -153,7 +160,10 @@ func ProvideHandlers(
 	_ *service.OpenAIQuotaAutoResetService,
 ) *Handlers {
 	return &Handlers{
+		AsyncImage:       asyncImageHandler,
+		BatchImage:       batchImageHandler,
 		Auth:             authHandler,
+		Passkey:          passkeyHandler,
 		User:             userHandler,
 		APIKey:           apiKeyHandler,
 		Usage:            usageHandler,
@@ -176,8 +186,12 @@ func ProvideHandlers(
 
 // ProviderSet is the Wire provider set for all handlers
 var ProviderSet = wire.NewSet(
+	NewAsyncImageHandler,
+	ProvideBatchImageHandler,
+	admin.NewComplianceHandler,
 	// Top-level handlers
 	NewAuthHandler,
+	NewPasskeyHandler,
 	NewUserHandler,
 	NewAPIKeyHandler,
 	NewUsageHandler,
@@ -198,7 +212,7 @@ var ProviderSet = wire.NewSet(
 	// Admin handlers
 	admin.NewDashboardHandler,
 	admin.NewUserHandler,
-	admin.NewGroupHandler,
+	admin.NewGroupHandlerWithConfig,
 	admin.ProvideAccountHandler,
 	admin.NewAnnouncementHandler,
 	admin.NewDataManagementHandler,
@@ -235,3 +249,9 @@ var ProviderSet = wire.NewSet(
 	ProvideAdminHandlers,
 	ProvideHandlers,
 )
+
+func ProvideBatchImageHandler(batchService *service.BatchImagePublicService, download *service.BatchImageDownloadService, cleanup *service.BatchImageCleanupService, openAI *OpenAIGatewayHandler) *BatchImageHandler {
+	h := NewBatchImageHandler(batchService, download, cleanup)
+	h.openAI = openAI
+	return h
+}

@@ -114,6 +114,17 @@
                 t('admin.accounts.oauth.openai.codexSessionAuth')
               }}</span>
             </label>
+            <label v-if="showAgentIdentityOption" class="flex cursor-pointer items-center gap-2">
+              <input
+                v-model="inputMethod"
+                type="radio"
+                value="agent_identity"
+                class="text-blue-600 focus:ring-blue-500"
+              />
+              <span class="text-sm text-blue-900 dark:text-blue-200">{{
+                t('admin.accounts.oauth.openai.agentIdentityAuth')
+              }}</span>
+            </label>
             <label v-if="showCodexPatOption" class="flex cursor-pointer items-center gap-2">
               <input
                 v-model="inputMethod"
@@ -213,7 +224,7 @@
         </div>
 
         <!-- Codex auth.json / session credential batch import -->
-        <div v-if="inputMethod === 'codex_session'" class="space-y-4">
+        <div v-if="inputMethod === 'codex_session' || inputMethod === 'agent_identity'" class="space-y-4">
           <div
             class="rounded-lg border border-blue-300 bg-white/80 p-4 dark:border-blue-600 dark:bg-gray-800/80"
           >
@@ -854,6 +865,7 @@ interface Props {
   showSessionTokenOption?: boolean
   showAccessTokenOption?: boolean
   showCodexSessionImportOption?: boolean
+  showAgentIdentityOption?: boolean
   showCodexPatOption?: boolean
   showSsoOption?: boolean
   /** Grok email----password login. The backend never persists the password. */
@@ -881,6 +893,7 @@ const props = withDefaults(defineProps<Props>(), {
   showSessionTokenOption: false,
   showAccessTokenOption: false,
   showCodexSessionImportOption: false,
+  showAgentIdentityOption: false,
   showCodexPatOption: false,
   showSsoOption: false,
   showEmailPasswordOption: false,
@@ -968,6 +981,7 @@ const methodOptionCount = computed(
       props.showSessionTokenOption,
       props.showAccessTokenOption,
       props.showCodexSessionImportOption,
+      props.showAgentIdentityOption,
       props.showCodexPatOption,
       props.showSsoOption,
       emailPasswordOptionEnabled.value

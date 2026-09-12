@@ -123,6 +123,7 @@ type ResponsesEventToChatState struct {
 	OutputIndexToToolIndex map[int]int // Responses output_index → Chat tool_calls index
 	OutputIndexNameSent    map[int]bool
 	OutputIndexArgsSeen    map[int]bool
+	OutputIndexToArguments map[int]string
 	IncludeUsage           bool
 	Usage                  *ChatUsage
 }
@@ -135,6 +136,7 @@ func NewResponsesEventToChatState() *ResponsesEventToChatState {
 		OutputIndexToToolIndex: make(map[int]int),
 		OutputIndexNameSent:    make(map[int]bool),
 		OutputIndexArgsSeen:    make(map[int]bool),
+		OutputIndexToArguments: make(map[int]string),
 	}
 }
 
@@ -150,11 +152,11 @@ func ResponsesEventToChatChunks(evt *ResponsesStreamEvent, state *ResponsesEvent
 		return resToChatHandleOutputItemAdded(evt, state)
 	case "response.function_call_arguments.delta":
 		return resToChatHandleFuncArgsDelta(evt, state)
-	case "response.function_call_arguments.done":
+	case "response.function_call_arguments.done", "response.custom_tool_call_input.done":
 		return resToChatHandleFuncArgsDone(evt, state)
 	case "response.output_item.done":
 		return resToChatHandleOutputItemDone(evt, state)
-	case "response.reasoning_summary_text.delta":
+	case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
 		return resToChatHandleReasoningDelta(evt, state)
 	case "response.reasoning_summary_text.done":
 		return nil
@@ -274,6 +276,7 @@ func resToChatHandleFuncArgsDelta(evt *ResponsesStreamEvent, state *ResponsesEve
 		return nil
 	}
 	state.OutputIndexArgsSeen[evt.OutputIndex] = true
+	state.OutputIndexToArguments[evt.OutputIndex] += evt.Delta
 
 	return []ChatCompletionsChunk{makeChatDeltaChunk(state, ChatDelta{
 		ToolCalls: []ChatToolCall{{
@@ -301,8 +304,14 @@ func resToChatHandleFuncArgsDone(evt *ResponsesStreamEvent, state *ResponsesEven
 		state.OutputIndexNameSent[evt.OutputIndex] = true
 	}
 
-	if evt.Arguments != "" && !state.OutputIndexArgsSeen[evt.OutputIndex] {
-		delta.Function.Arguments = evt.Arguments
+	completed := evt.Arguments
+	if evt.Type == "response.custom_tool_call_input.done" {
+		completed = evt.Input
+	}
+	current := state.OutputIndexToArguments[evt.OutputIndex]
+	if completed != "" && strings.HasPrefix(completed, current) && completed != current {
+		delta.Function.Arguments = completed[len(current):]
+		state.OutputIndexToArguments[evt.OutputIndex] = completed
 		state.OutputIndexArgsSeen[evt.OutputIndex] = true
 	}
 
@@ -316,37 +325,15 @@ func resToChatHandleFuncArgsDone(evt *ResponsesStreamEvent, state *ResponsesEven
 }
 
 func resToChatHandleOutputItemDone(evt *ResponsesStreamEvent, state *ResponsesEventToChatState) []ChatCompletionsChunk {
-	if evt.Item == nil || evt.Item.Type != "function_call" {
+	if evt.Item == nil || (evt.Item.Type != "function_call" && evt.Item.Type != "custom_tool_call") {
 		return nil
 	}
-
-	idx, ok := state.OutputIndexToToolIndex[evt.OutputIndex]
-	if !ok {
-		return nil
+	done := &ResponsesStreamEvent{Type: "response.function_call_arguments.done", OutputIndex: evt.OutputIndex, CallID: evt.Item.CallID, Name: evt.Item.Name, Arguments: evt.Item.Arguments}
+	if evt.Item.Type == "custom_tool_call" {
+		done.Type = "response.custom_tool_call_input.done"
+		done.Input = evt.Item.Input
 	}
-
-	delta := ChatToolCall{Index: &idx}
-	if evt.Item.CallID != "" {
-		delta.ID = evt.Item.CallID
-	}
-
-	if name := strings.TrimSpace(evt.Item.Name); name != "" && !state.OutputIndexNameSent[evt.OutputIndex] {
-		delta.Function.Name = name
-		state.OutputIndexNameSent[evt.OutputIndex] = true
-	}
-
-	if evt.Item.Arguments != "" && !state.OutputIndexArgsSeen[evt.OutputIndex] {
-		delta.Function.Arguments = evt.Item.Arguments
-		state.OutputIndexArgsSeen[evt.OutputIndex] = true
-	}
-
-	if delta.ID == "" && delta.Function.Name == "" && delta.Function.Arguments == "" {
-		return nil
-	}
-
-	return []ChatCompletionsChunk{makeChatDeltaChunk(state, ChatDelta{
-		ToolCalls: []ChatToolCall{delta},
-	})}
+	return resToChatHandleFuncArgsDone(done, state)
 }
 
 func resToChatHandleReasoningDelta(evt *ResponsesStreamEvent, state *ResponsesEventToChatState) []ChatCompletionsChunk {
@@ -509,9 +496,10 @@ func generateChatCmplID() string {
 // ---------------------------------------------------------------------------
 
 type bufferedFuncCall struct {
-	CallID string
-	Name   string
-	Args   strings.Builder
+	OutputIndex int
+	CallID      string
+	Name        string
+	Args        strings.Builder
 }
 
 // BufferedResponseAccumulator collects content from Responses SSE delta events
@@ -545,8 +533,9 @@ func (a *BufferedResponseAccumulator) ProcessEvent(event *ResponsesStreamEvent) 
 			idx := len(a.funcCalls)
 			a.outputIndexToFuncIdx[event.OutputIndex] = idx
 			a.funcCalls = append(a.funcCalls, bufferedFuncCall{
-				CallID: event.Item.CallID,
-				Name:   event.Item.Name,
+				OutputIndex: event.OutputIndex,
+				CallID:      event.Item.CallID,
+				Name:        event.Item.Name,
 			})
 		}
 	case "response.function_call_arguments.delta":
@@ -555,7 +544,18 @@ func (a *BufferedResponseAccumulator) ProcessEvent(event *ResponsesStreamEvent) 
 				_, _ = a.funcCalls[idx].Args.WriteString(event.Delta)
 			}
 		}
-	case "response.reasoning_summary_text.delta":
+	case "response.function_call_arguments.done", "response.custom_tool_call_input.done":
+		completed := event.Arguments
+		if event.Type == "response.custom_tool_call_input.done" {
+			completed = event.Input
+		}
+		if completed != "" {
+			if idx, ok := a.outputIndexToFuncIdx[event.OutputIndex]; ok {
+				a.funcCalls[idx].Args.Reset()
+				_, _ = a.funcCalls[idx].Args.WriteString(completed)
+			}
+		}
+	case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
 		if event.Delta != "" {
 			_, _ = a.reasoning.WriteString(event.Delta)
 		}
@@ -622,15 +622,35 @@ func (a *BufferedResponseAccumulator) BuildOutput() []ResponsesOutput {
 	return out
 }
 
-// SupplementResponseOutput fills resp.Output from accumulated delta content
-// when the terminal event delivered an empty output array. If resp.Output is
-// already populated, this is a no-op (preserves backward compatibility).
+// SupplementResponseOutput fills resp.Output from accumulated stream content
+// when the terminal event delivered an empty output array. It also fills empty
+// function-call arguments from authoritative argument-done events.
 func (a *BufferedResponseAccumulator) SupplementResponseOutput(resp *ResponsesResponse) {
-	if resp == nil || len(resp.Output) > 0 {
+	if resp == nil {
 		return
 	}
-	if !a.HasContent() {
+	if len(resp.Output) == 0 {
+		if a.HasContent() {
+			resp.Output = a.BuildOutput()
+		}
 		return
 	}
-	resp.Output = a.BuildOutput()
+
+	for outputIndex := range resp.Output {
+		item := &resp.Output[outputIndex]
+		if item.Type != "function_call" || item.Arguments != "" {
+			continue
+		}
+		for funcIndex := range a.funcCalls {
+			call := &a.funcCalls[funcIndex]
+			matchesCallID := item.CallID != "" && item.CallID == call.CallID
+			if !matchesCallID && call.OutputIndex != outputIndex {
+				continue
+			}
+			if call.Args.Len() > 0 {
+				item.Arguments = call.Args.String()
+			}
+			break
+		}
+	}
 }

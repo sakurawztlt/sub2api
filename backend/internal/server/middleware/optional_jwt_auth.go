@@ -16,8 +16,10 @@ import (
 func NewOptionalJWTAuthMiddleware(
 	authService *service.AuthService,
 	userService *service.UserService,
+	settingService *service.SettingService,
+	auditService *service.AuditLogService,
 ) OptionalJWTAuthMiddleware {
-	strict := jwtAuth(authService, userService, userService)
+	strict := jwtAuth(authService, userService, userService, settingService, auditService)
 	return OptionalJWTAuthMiddleware(func(c *gin.Context) {
 		if strings.TrimSpace(c.GetHeader("Authorization")) == "" {
 			c.Next()

@@ -386,15 +386,18 @@ func (s *AntigravityGatewayService) consumeAntigravityCompatResponse(
 	}
 
 	return &ForwardResult{
-		RequestID:        requestID,
-		Usage:            *streamResult.usage,
-		Model:            call.request.originalModel,
-		UpstreamModel:    call.billingModel,
-		Stream:           call.request.clientStream,
-		Duration:         time.Since(call.request.startTime),
-		FirstTokenMs:     streamResult.firstTokenMs,
-		ReasoningEffort:  call.request.reasoningEffort,
-		ClientDisconnect: streamResult.clientDisconnect,
+		RequestID:                     requestID,
+		UpstreamHeaders:               resp.Header,
+		Usage:                         *streamResult.usage,
+		Model:                         call.request.originalModel,
+		UpstreamModel:                 call.billingModel,
+		UpstreamResponseModel:         observedUpstreamResponseModel(c),
+		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
+		Stream:                        call.request.clientStream,
+		Duration:                      time.Since(call.request.startTime),
+		FirstTokenMs:                  streamResult.firstTokenMs,
+		ReasoningEffort:               call.request.reasoningEffort,
+		ClientDisconnect:              streamResult.clientDisconnect,
 	}, nil
 }
 
@@ -445,6 +448,8 @@ func (s *AntigravityGatewayService) handleAntigravityCompatHTTPError(
 	if s.shouldFailoverUpstreamError(resp.StatusCode) {
 		message := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractAntigravityErrorMessage(body)))
 		event := OpsUpstreamErrorEvent{
+			ProxyID:            opsUpstreamProxyID(account),
+			ProxyName:          opsUpstreamProxyName(account),
 			Platform:           account.Platform,
 			AccountID:          account.ID,
 			AccountName:        account.Name,
@@ -514,6 +519,8 @@ func (s *AntigravityGatewayService) writeMappedAntigravityCompatError(
 	message := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractAntigravityErrorMessage(body)))
 	setOpsUpstreamError(c, upstreamStatus, message, s.getUpstreamErrorDetail(body))
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		ProxyID:            opsUpstreamProxyID(account),
+		ProxyName:          opsUpstreamProxyName(account),
 		Platform:           account.Platform,
 		AccountID:          account.ID,
 		AccountName:        account.Name,

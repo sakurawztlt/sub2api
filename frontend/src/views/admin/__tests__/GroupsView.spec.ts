@@ -5,12 +5,12 @@ const {
   listMock,
   getUsageSummaryMock,
   getCapacitySummaryMock,
-  getModelsListCandidatesMock
+  getModelAllowlistCandidatesMock
 } = vi.hoisted(() => ({
   listMock: vi.fn(),
   getUsageSummaryMock: vi.fn(),
   getCapacitySummaryMock: vi.fn(),
-  getModelsListCandidatesMock: vi.fn()
+  getModelAllowlistCandidatesMock: vi.fn()
 }))
 
 vi.mock('@/api/admin', () => ({
@@ -19,10 +19,13 @@ vi.mock('@/api/admin', () => ({
       list: listMock,
       getUsageSummary: getUsageSummaryMock,
       getCapacitySummary: getCapacitySummaryMock,
-      getModelsListCandidates: getModelsListCandidatesMock
+      getLiveCapability: vi.fn().mockResolvedValue({ supported: false }),
+      getModelAllowlistCandidates: getModelAllowlistCandidatesMock
     }
   }
 }))
+
+vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ isSimpleMode: false }) }))
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
@@ -106,7 +109,7 @@ describe('GroupsView quota summary entry', () => {
     listMock.mockReset()
     getUsageSummaryMock.mockReset()
     getCapacitySummaryMock.mockReset()
-    getModelsListCandidatesMock.mockReset()
+    getModelAllowlistCandidatesMock.mockReset()
 
     listMock.mockResolvedValue({
       items: groups,
@@ -117,7 +120,7 @@ describe('GroupsView quota summary entry', () => {
     })
     getUsageSummaryMock.mockResolvedValue([])
     getCapacitySummaryMock.mockResolvedValue([])
-    getModelsListCandidatesMock.mockResolvedValue([])
+    getModelAllowlistCandidatesMock.mockResolvedValue([])
   })
 
   it('分组操作栏显示查询额度按钮并传递选中的分组', async () => {

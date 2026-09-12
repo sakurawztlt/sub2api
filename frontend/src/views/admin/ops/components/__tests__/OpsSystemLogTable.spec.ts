@@ -1,3 +1,5 @@
+import zhLocale from '@/i18n/locales/zh'
+import enLocale from '@/i18n/locales/en'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent, ref } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
@@ -46,6 +48,31 @@ const SelectStub = defineComponent({
   template: '<div class="select-stub" />'
 })
 
+const PaginationStub = defineComponent({
+  name: 'PaginationStub',
+  template: '<div class="pagination-stub" />',
+})
+
+const runtimeConfig = {
+  level: 'info',
+  persist_access_logs: false,
+  enable_sampling: false,
+  sampling_initial: 100,
+  sampling_thereafter: 100,
+  caller: true,
+  stacktrace_level: 'error',
+  retention_days: 30,
+}
+
+const sinkHealth = {
+  queue_depth: 0,
+  queue_capacity: 5000,
+  dropped_count: 0,
+  write_failed_count: 0,
+  written_count: 1,
+  avg_write_delay_ms: 0,
+}
+
 describe('OpsSystemLogTable host support', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -82,5 +109,28 @@ describe('OpsSystemLogTable host support', () => {
     await wrapper.findAll('button').find((button) => button.text() === '按当前筛选清理')!.trigger('click')
     await flushPromises()
     expect(mockCleanupSystemLogs).toHaveBeenCalledWith(expect.objectContaining({ host: 'api-node-2' }))
+  })
+
+  it('keeps database access-log persistence opt-in', async () => {
+    const wrapper = mount(OpsSystemLogTable, {
+      global: {
+        stubs: {
+          Select: SelectStub,
+          Pagination: PaginationStub,
+        },
+      },
+    })
+    await flushPromises()
+
+    const label = wrapper.findAll('label').find((item) => item.text().includes('admin.ops.systemLogs.persistAccessLogs'))
+    expect(label).toBeDefined()
+    expect((label!.find('input').element as HTMLInputElement).checked).toBe(false)
+  })
+
+  it.each([
+    ['zh', zhLocale],
+    ['en', enLocale],
+  ])('defines the Host translation for %s', (_name, locale) => {
+    expect(locale.admin.ops.systemLogs.host).toBe('Host')
   })
 })

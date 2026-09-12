@@ -302,6 +302,20 @@ func (_c *GroupCreate) SetNillableAllowImageGeneration(v *bool) *GroupCreate {
 	return _c
 }
 
+// SetAllowBatchImageGeneration sets the "allow_batch_image_generation" field.
+func (_c *GroupCreate) SetAllowBatchImageGeneration(v bool) *GroupCreate {
+	_c.mutation.SetAllowBatchImageGeneration(v)
+	return _c
+}
+
+// SetNillableAllowBatchImageGeneration sets the "allow_batch_image_generation" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableAllowBatchImageGeneration(v *bool) *GroupCreate {
+	if v != nil {
+		_c.SetAllowBatchImageGeneration(*v)
+	}
+	return _c
+}
+
 // SetImageRateIndependent sets the "image_rate_independent" field.
 func (_c *GroupCreate) SetImageRateIndependent(v bool) *GroupCreate {
 	_c.mutation.SetImageRateIndependent(v)
@@ -368,6 +382,34 @@ func (_c *GroupCreate) SetImagePrice4k(v float64) *GroupCreate {
 func (_c *GroupCreate) SetNillableImagePrice4k(v *float64) *GroupCreate {
 	if v != nil {
 		_c.SetImagePrice4k(*v)
+	}
+	return _c
+}
+
+// SetBatchImageDiscountMultiplier sets the "batch_image_discount_multiplier" field.
+func (_c *GroupCreate) SetBatchImageDiscountMultiplier(v float64) *GroupCreate {
+	_c.mutation.SetBatchImageDiscountMultiplier(v)
+	return _c
+}
+
+// SetNillableBatchImageDiscountMultiplier sets the "batch_image_discount_multiplier" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableBatchImageDiscountMultiplier(v *float64) *GroupCreate {
+	if v != nil {
+		_c.SetBatchImageDiscountMultiplier(*v)
+	}
+	return _c
+}
+
+// SetBatchImageHoldMultiplier sets the "batch_image_hold_multiplier" field.
+func (_c *GroupCreate) SetBatchImageHoldMultiplier(v float64) *GroupCreate {
+	_c.mutation.SetBatchImageHoldMultiplier(v)
+	return _c
+}
+
+// SetNillableBatchImageHoldMultiplier sets the "batch_image_hold_multiplier" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableBatchImageHoldMultiplier(v *float64) *GroupCreate {
+	if v != nil {
+		_c.SetBatchImageHoldMultiplier(*v)
 	}
 	return _c
 }
@@ -445,6 +487,20 @@ func (_c *GroupCreate) SetNillableVideoPrice1080p(v *float64) *GroupCreate {
 // SetVideoModelPrices sets the "video_model_prices" field.
 func (_c *GroupCreate) SetVideoModelPrices(v map[string]map[string]float64) *GroupCreate {
 	_c.mutation.SetVideoModelPrices(v)
+	return _c
+}
+
+// SetWebSearchPricePerCall sets the "web_search_price_per_call" field.
+func (_c *GroupCreate) SetWebSearchPricePerCall(v float64) *GroupCreate {
+	_c.mutation.SetWebSearchPricePerCall(v)
+	return _c
+}
+
+// SetNillableWebSearchPricePerCall sets the "web_search_price_per_call" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableWebSearchPricePerCall(v *float64) *GroupCreate {
+	if v != nil {
+		_c.SetWebSearchPricePerCall(*v)
+	}
 	return _c
 }
 
@@ -634,6 +690,20 @@ func (_c *GroupCreate) SetNillableAllowMessagesDispatch(v *bool) *GroupCreate {
 	return _c
 }
 
+// SetAllowLive sets the "allow_live" field.
+func (_c *GroupCreate) SetAllowLive(v bool) *GroupCreate {
+	_c.mutation.SetAllowLive(v)
+	return _c
+}
+
+// SetNillableAllowLive sets the "allow_live" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableAllowLive(v *bool) *GroupCreate {
+	if v != nil {
+		_c.SetAllowLive(*v)
+	}
+	return _c
+}
+
 // SetForceOpenaiFast sets the "force_openai_fast" field.
 func (_c *GroupCreate) SetForceOpenaiFast(v bool) *GroupCreate {
 	_c.mutation.SetForceOpenaiFast(v)
@@ -718,16 +788,30 @@ func (_c *GroupCreate) SetNillableMessagesDispatchModelConfig(v *domain.OpenAIMe
 	return _c
 }
 
-// SetModelsListConfig sets the "models_list_config" field.
-func (_c *GroupCreate) SetModelsListConfig(v domain.GroupModelsListConfig) *GroupCreate {
-	_c.mutation.SetModelsListConfig(v)
+// SetModelAllowlist sets the "model_allowlist" field.
+func (_c *GroupCreate) SetModelAllowlist(v domain.GroupModelAllowlist) *GroupCreate {
+	_c.mutation.SetModelAllowlist(v)
 	return _c
 }
 
-// SetNillableModelsListConfig sets the "models_list_config" field if the given value is not nil.
-func (_c *GroupCreate) SetNillableModelsListConfig(v *domain.GroupModelsListConfig) *GroupCreate {
+// SetNillableModelAllowlist sets the "model_allowlist" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableModelAllowlist(v *domain.GroupModelAllowlist) *GroupCreate {
 	if v != nil {
-		_c.SetModelsListConfig(*v)
+		_c.SetModelAllowlist(*v)
+	}
+	return _c
+}
+
+// SetCodexModelsManifestConfig sets the "codex_models_manifest_config" field.
+func (_c *GroupCreate) SetCodexModelsManifestConfig(v domain.GroupCodexModelsManifestConfig) *GroupCreate {
+	_c.mutation.SetCodexModelsManifestConfig(v)
+	return _c
+}
+
+// SetNillableCodexModelsManifestConfig sets the "codex_models_manifest_config" field if the given value is not nil.
+func (_c *GroupCreate) SetNillableCodexModelsManifestConfig(v *domain.GroupCodexModelsManifestConfig) *GroupCreate {
+	if v != nil {
+		_c.SetCodexModelsManifestConfig(*v)
 	}
 	return _c
 }
@@ -1007,6 +1091,10 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultAllowImageGeneration
 		_c.mutation.SetAllowImageGeneration(v)
 	}
+	if _, ok := _c.mutation.AllowBatchImageGeneration(); !ok {
+		v := group.DefaultAllowBatchImageGeneration
+		_c.mutation.SetAllowBatchImageGeneration(v)
+	}
 	if _, ok := _c.mutation.ImageRateIndependent(); !ok {
 		v := group.DefaultImageRateIndependent
 		_c.mutation.SetImageRateIndependent(v)
@@ -1014,6 +1102,14 @@ func (_c *GroupCreate) defaults() error {
 	if _, ok := _c.mutation.ImageRateMultiplier(); !ok {
 		v := group.DefaultImageRateMultiplier
 		_c.mutation.SetImageRateMultiplier(v)
+	}
+	if _, ok := _c.mutation.BatchImageDiscountMultiplier(); !ok {
+		v := group.DefaultBatchImageDiscountMultiplier
+		_c.mutation.SetBatchImageDiscountMultiplier(v)
+	}
+	if _, ok := _c.mutation.BatchImageHoldMultiplier(); !ok {
+		v := group.DefaultBatchImageHoldMultiplier
+		_c.mutation.SetBatchImageHoldMultiplier(v)
 	}
 	if _, ok := _c.mutation.VideoRateIndependent(); !ok {
 		v := group.DefaultVideoRateIndependent
@@ -1051,6 +1147,10 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultAllowMessagesDispatch
 		_c.mutation.SetAllowMessagesDispatch(v)
 	}
+	if _, ok := _c.mutation.AllowLive(); !ok {
+		v := group.DefaultAllowLive
+		_c.mutation.SetAllowLive(v)
+	}
 	if _, ok := _c.mutation.ForceOpenaiFast(); !ok {
 		v := group.DefaultForceOpenaiFast
 		_c.mutation.SetForceOpenaiFast(v)
@@ -1075,9 +1175,13 @@ func (_c *GroupCreate) defaults() error {
 		v := group.DefaultMessagesDispatchModelConfig
 		_c.mutation.SetMessagesDispatchModelConfig(v)
 	}
-	if _, ok := _c.mutation.ModelsListConfig(); !ok {
-		v := group.DefaultModelsListConfig
-		_c.mutation.SetModelsListConfig(v)
+	if _, ok := _c.mutation.ModelAllowlist(); !ok {
+		v := group.DefaultModelAllowlist
+		_c.mutation.SetModelAllowlist(v)
+	}
+	if _, ok := _c.mutation.CodexModelsManifestConfig(); !ok {
+		v := group.DefaultCodexModelsManifestConfig
+		_c.mutation.SetCodexModelsManifestConfig(v)
 	}
 	if _, ok := _c.mutation.RpmLimit(); !ok {
 		v := group.DefaultRpmLimit
@@ -1189,11 +1293,20 @@ func (_c *GroupCreate) check() error {
 	if _, ok := _c.mutation.AllowImageGeneration(); !ok {
 		return &ValidationError{Name: "allow_image_generation", err: errors.New(`ent: missing required field "Group.allow_image_generation"`)}
 	}
+	if _, ok := _c.mutation.AllowBatchImageGeneration(); !ok {
+		return &ValidationError{Name: "allow_batch_image_generation", err: errors.New(`ent: missing required field "Group.allow_batch_image_generation"`)}
+	}
 	if _, ok := _c.mutation.ImageRateIndependent(); !ok {
 		return &ValidationError{Name: "image_rate_independent", err: errors.New(`ent: missing required field "Group.image_rate_independent"`)}
 	}
 	if _, ok := _c.mutation.ImageRateMultiplier(); !ok {
 		return &ValidationError{Name: "image_rate_multiplier", err: errors.New(`ent: missing required field "Group.image_rate_multiplier"`)}
+	}
+	if _, ok := _c.mutation.BatchImageDiscountMultiplier(); !ok {
+		return &ValidationError{Name: "batch_image_discount_multiplier", err: errors.New(`ent: missing required field "Group.batch_image_discount_multiplier"`)}
+	}
+	if _, ok := _c.mutation.BatchImageHoldMultiplier(); !ok {
+		return &ValidationError{Name: "batch_image_hold_multiplier", err: errors.New(`ent: missing required field "Group.batch_image_hold_multiplier"`)}
 	}
 	if _, ok := _c.mutation.VideoRateIndependent(); !ok {
 		return &ValidationError{Name: "video_rate_independent", err: errors.New(`ent: missing required field "Group.video_rate_independent"`)}
@@ -1242,6 +1355,9 @@ func (_c *GroupCreate) check() error {
 	if _, ok := _c.mutation.AllowMessagesDispatch(); !ok {
 		return &ValidationError{Name: "allow_messages_dispatch", err: errors.New(`ent: missing required field "Group.allow_messages_dispatch"`)}
 	}
+	if _, ok := _c.mutation.AllowLive(); !ok {
+		return &ValidationError{Name: "allow_live", err: errors.New(`ent: missing required field "Group.allow_live"`)}
+	}
 	if _, ok := _c.mutation.ForceOpenaiFast(); !ok {
 		return &ValidationError{Name: "force_openai_fast", err: errors.New(`ent: missing required field "Group.force_openai_fast"`)}
 	}
@@ -1265,8 +1381,11 @@ func (_c *GroupCreate) check() error {
 	if _, ok := _c.mutation.MessagesDispatchModelConfig(); !ok {
 		return &ValidationError{Name: "messages_dispatch_model_config", err: errors.New(`ent: missing required field "Group.messages_dispatch_model_config"`)}
 	}
-	if _, ok := _c.mutation.ModelsListConfig(); !ok {
-		return &ValidationError{Name: "models_list_config", err: errors.New(`ent: missing required field "Group.models_list_config"`)}
+	if _, ok := _c.mutation.ModelAllowlist(); !ok {
+		return &ValidationError{Name: "model_allowlist", err: errors.New(`ent: missing required field "Group.model_allowlist"`)}
+	}
+	if _, ok := _c.mutation.CodexModelsManifestConfig(); !ok {
+		return &ValidationError{Name: "codex_models_manifest_config", err: errors.New(`ent: missing required field "Group.codex_models_manifest_config"`)}
 	}
 	if _, ok := _c.mutation.RpmLimit(); !ok {
 		return &ValidationError{Name: "rpm_limit", err: errors.New(`ent: missing required field "Group.rpm_limit"`)}
@@ -1406,6 +1525,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 		_spec.SetField(group.FieldAllowImageGeneration, field.TypeBool, value)
 		_node.AllowImageGeneration = value
 	}
+	if value, ok := _c.mutation.AllowBatchImageGeneration(); ok {
+		_spec.SetField(group.FieldAllowBatchImageGeneration, field.TypeBool, value)
+		_node.AllowBatchImageGeneration = value
+	}
 	if value, ok := _c.mutation.ImageRateIndependent(); ok {
 		_spec.SetField(group.FieldImageRateIndependent, field.TypeBool, value)
 		_node.ImageRateIndependent = value
@@ -1425,6 +1548,14 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.ImagePrice4k(); ok {
 		_spec.SetField(group.FieldImagePrice4k, field.TypeFloat64, value)
 		_node.ImagePrice4k = &value
+	}
+	if value, ok := _c.mutation.BatchImageDiscountMultiplier(); ok {
+		_spec.SetField(group.FieldBatchImageDiscountMultiplier, field.TypeFloat64, value)
+		_node.BatchImageDiscountMultiplier = value
+	}
+	if value, ok := _c.mutation.BatchImageHoldMultiplier(); ok {
+		_spec.SetField(group.FieldBatchImageHoldMultiplier, field.TypeFloat64, value)
+		_node.BatchImageHoldMultiplier = value
 	}
 	if value, ok := _c.mutation.VideoRateIndependent(); ok {
 		_spec.SetField(group.FieldVideoRateIndependent, field.TypeBool, value)
@@ -1449,6 +1580,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.VideoModelPrices(); ok {
 		_spec.SetField(group.FieldVideoModelPrices, field.TypeJSON, value)
 		_node.VideoModelPrices = value
+	}
+	if value, ok := _c.mutation.WebSearchPricePerCall(); ok {
+		_spec.SetField(group.FieldWebSearchPricePerCall, field.TypeFloat64, value)
+		_node.WebSearchPricePerCall = &value
 	}
 	if value, ok := _c.mutation.SearchPricePer1k(); ok {
 		_spec.SetField(group.FieldSearchPricePer1k, field.TypeFloat64, value)
@@ -1510,6 +1645,10 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 		_spec.SetField(group.FieldAllowMessagesDispatch, field.TypeBool, value)
 		_node.AllowMessagesDispatch = value
 	}
+	if value, ok := _c.mutation.AllowLive(); ok {
+		_spec.SetField(group.FieldAllowLive, field.TypeBool, value)
+		_node.AllowLive = value
+	}
 	if value, ok := _c.mutation.ForceOpenaiFast(); ok {
 		_spec.SetField(group.FieldForceOpenaiFast, field.TypeBool, value)
 		_node.ForceOpenaiFast = value
@@ -1534,9 +1673,13 @@ func (_c *GroupCreate) createSpec() (*Group, *sqlgraph.CreateSpec) {
 		_spec.SetField(group.FieldMessagesDispatchModelConfig, field.TypeJSON, value)
 		_node.MessagesDispatchModelConfig = value
 	}
-	if value, ok := _c.mutation.ModelsListConfig(); ok {
-		_spec.SetField(group.FieldModelsListConfig, field.TypeJSON, value)
-		_node.ModelsListConfig = value
+	if value, ok := _c.mutation.ModelAllowlist(); ok {
+		_spec.SetField(group.FieldModelAllowlist, field.TypeJSON, value)
+		_node.ModelAllowlist = value
+	}
+	if value, ok := _c.mutation.CodexModelsManifestConfig(); ok {
+		_spec.SetField(group.FieldCodexModelsManifestConfig, field.TypeJSON, value)
+		_node.CodexModelsManifestConfig = value
 	}
 	if value, ok := _c.mutation.RpmLimit(); ok {
 		_spec.SetField(group.FieldRpmLimit, field.TypeInt, value)
@@ -2004,6 +2147,18 @@ func (u *GroupUpsert) UpdateAllowImageGeneration() *GroupUpsert {
 	return u
 }
 
+// SetAllowBatchImageGeneration sets the "allow_batch_image_generation" field.
+func (u *GroupUpsert) SetAllowBatchImageGeneration(v bool) *GroupUpsert {
+	u.Set(group.FieldAllowBatchImageGeneration, v)
+	return u
+}
+
+// UpdateAllowBatchImageGeneration sets the "allow_batch_image_generation" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateAllowBatchImageGeneration() *GroupUpsert {
+	u.SetExcluded(group.FieldAllowBatchImageGeneration)
+	return u
+}
+
 // SetImageRateIndependent sets the "image_rate_independent" field.
 func (u *GroupUpsert) SetImageRateIndependent(v bool) *GroupUpsert {
 	u.Set(group.FieldImageRateIndependent, v)
@@ -2103,6 +2258,42 @@ func (u *GroupUpsert) AddImagePrice4k(v float64) *GroupUpsert {
 // ClearImagePrice4k clears the value of the "image_price_4k" field.
 func (u *GroupUpsert) ClearImagePrice4k() *GroupUpsert {
 	u.SetNull(group.FieldImagePrice4k)
+	return u
+}
+
+// SetBatchImageDiscountMultiplier sets the "batch_image_discount_multiplier" field.
+func (u *GroupUpsert) SetBatchImageDiscountMultiplier(v float64) *GroupUpsert {
+	u.Set(group.FieldBatchImageDiscountMultiplier, v)
+	return u
+}
+
+// UpdateBatchImageDiscountMultiplier sets the "batch_image_discount_multiplier" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateBatchImageDiscountMultiplier() *GroupUpsert {
+	u.SetExcluded(group.FieldBatchImageDiscountMultiplier)
+	return u
+}
+
+// AddBatchImageDiscountMultiplier adds v to the "batch_image_discount_multiplier" field.
+func (u *GroupUpsert) AddBatchImageDiscountMultiplier(v float64) *GroupUpsert {
+	u.Add(group.FieldBatchImageDiscountMultiplier, v)
+	return u
+}
+
+// SetBatchImageHoldMultiplier sets the "batch_image_hold_multiplier" field.
+func (u *GroupUpsert) SetBatchImageHoldMultiplier(v float64) *GroupUpsert {
+	u.Set(group.FieldBatchImageHoldMultiplier, v)
+	return u
+}
+
+// UpdateBatchImageHoldMultiplier sets the "batch_image_hold_multiplier" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateBatchImageHoldMultiplier() *GroupUpsert {
+	u.SetExcluded(group.FieldBatchImageHoldMultiplier)
+	return u
+}
+
+// AddBatchImageHoldMultiplier adds v to the "batch_image_hold_multiplier" field.
+func (u *GroupUpsert) AddBatchImageHoldMultiplier(v float64) *GroupUpsert {
+	u.Add(group.FieldBatchImageHoldMultiplier, v)
 	return u
 }
 
@@ -2223,6 +2414,30 @@ func (u *GroupUpsert) UpdateVideoModelPrices() *GroupUpsert {
 // ClearVideoModelPrices clears the value of the "video_model_prices" field.
 func (u *GroupUpsert) ClearVideoModelPrices() *GroupUpsert {
 	u.SetNull(group.FieldVideoModelPrices)
+	return u
+}
+
+// SetWebSearchPricePerCall sets the "web_search_price_per_call" field.
+func (u *GroupUpsert) SetWebSearchPricePerCall(v float64) *GroupUpsert {
+	u.Set(group.FieldWebSearchPricePerCall, v)
+	return u
+}
+
+// UpdateWebSearchPricePerCall sets the "web_search_price_per_call" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateWebSearchPricePerCall() *GroupUpsert {
+	u.SetExcluded(group.FieldWebSearchPricePerCall)
+	return u
+}
+
+// AddWebSearchPricePerCall adds v to the "web_search_price_per_call" field.
+func (u *GroupUpsert) AddWebSearchPricePerCall(v float64) *GroupUpsert {
+	u.Add(group.FieldWebSearchPricePerCall, v)
+	return u
+}
+
+// ClearWebSearchPricePerCall clears the value of the "web_search_price_per_call" field.
+func (u *GroupUpsert) ClearWebSearchPricePerCall() *GroupUpsert {
+	u.SetNull(group.FieldWebSearchPricePerCall)
 	return u
 }
 
@@ -2496,6 +2711,18 @@ func (u *GroupUpsert) UpdateAllowMessagesDispatch() *GroupUpsert {
 	return u
 }
 
+// SetAllowLive sets the "allow_live" field.
+func (u *GroupUpsert) SetAllowLive(v bool) *GroupUpsert {
+	u.Set(group.FieldAllowLive, v)
+	return u
+}
+
+// UpdateAllowLive sets the "allow_live" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateAllowLive() *GroupUpsert {
+	u.SetExcluded(group.FieldAllowLive)
+	return u
+}
+
 // SetForceOpenaiFast sets the "force_openai_fast" field.
 func (u *GroupUpsert) SetForceOpenaiFast(v bool) *GroupUpsert {
 	u.Set(group.FieldForceOpenaiFast, v)
@@ -2568,15 +2795,27 @@ func (u *GroupUpsert) UpdateMessagesDispatchModelConfig() *GroupUpsert {
 	return u
 }
 
-// SetModelsListConfig sets the "models_list_config" field.
-func (u *GroupUpsert) SetModelsListConfig(v domain.GroupModelsListConfig) *GroupUpsert {
-	u.Set(group.FieldModelsListConfig, v)
+// SetModelAllowlist sets the "model_allowlist" field.
+func (u *GroupUpsert) SetModelAllowlist(v domain.GroupModelAllowlist) *GroupUpsert {
+	u.Set(group.FieldModelAllowlist, v)
 	return u
 }
 
-// UpdateModelsListConfig sets the "models_list_config" field to the value that was provided on create.
-func (u *GroupUpsert) UpdateModelsListConfig() *GroupUpsert {
-	u.SetExcluded(group.FieldModelsListConfig)
+// UpdateModelAllowlist sets the "model_allowlist" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateModelAllowlist() *GroupUpsert {
+	u.SetExcluded(group.FieldModelAllowlist)
+	return u
+}
+
+// SetCodexModelsManifestConfig sets the "codex_models_manifest_config" field.
+func (u *GroupUpsert) SetCodexModelsManifestConfig(v domain.GroupCodexModelsManifestConfig) *GroupUpsert {
+	u.Set(group.FieldCodexModelsManifestConfig, v)
+	return u
+}
+
+// UpdateCodexModelsManifestConfig sets the "codex_models_manifest_config" field to the value that was provided on create.
+func (u *GroupUpsert) UpdateCodexModelsManifestConfig() *GroupUpsert {
+	u.SetExcluded(group.FieldCodexModelsManifestConfig)
 	return u
 }
 
@@ -3059,6 +3298,20 @@ func (u *GroupUpsertOne) UpdateAllowImageGeneration() *GroupUpsertOne {
 	})
 }
 
+// SetAllowBatchImageGeneration sets the "allow_batch_image_generation" field.
+func (u *GroupUpsertOne) SetAllowBatchImageGeneration(v bool) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetAllowBatchImageGeneration(v)
+	})
+}
+
+// UpdateAllowBatchImageGeneration sets the "allow_batch_image_generation" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateAllowBatchImageGeneration() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateAllowBatchImageGeneration()
+	})
+}
+
 // SetImageRateIndependent sets the "image_rate_independent" field.
 func (u *GroupUpsertOne) SetImageRateIndependent(v bool) *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
@@ -3175,6 +3428,48 @@ func (u *GroupUpsertOne) UpdateImagePrice4k() *GroupUpsertOne {
 func (u *GroupUpsertOne) ClearImagePrice4k() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.ClearImagePrice4k()
+	})
+}
+
+// SetBatchImageDiscountMultiplier sets the "batch_image_discount_multiplier" field.
+func (u *GroupUpsertOne) SetBatchImageDiscountMultiplier(v float64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetBatchImageDiscountMultiplier(v)
+	})
+}
+
+// AddBatchImageDiscountMultiplier adds v to the "batch_image_discount_multiplier" field.
+func (u *GroupUpsertOne) AddBatchImageDiscountMultiplier(v float64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddBatchImageDiscountMultiplier(v)
+	})
+}
+
+// UpdateBatchImageDiscountMultiplier sets the "batch_image_discount_multiplier" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateBatchImageDiscountMultiplier() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateBatchImageDiscountMultiplier()
+	})
+}
+
+// SetBatchImageHoldMultiplier sets the "batch_image_hold_multiplier" field.
+func (u *GroupUpsertOne) SetBatchImageHoldMultiplier(v float64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetBatchImageHoldMultiplier(v)
+	})
+}
+
+// AddBatchImageHoldMultiplier adds v to the "batch_image_hold_multiplier" field.
+func (u *GroupUpsertOne) AddBatchImageHoldMultiplier(v float64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddBatchImageHoldMultiplier(v)
+	})
+}
+
+// UpdateBatchImageHoldMultiplier sets the "batch_image_hold_multiplier" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateBatchImageHoldMultiplier() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateBatchImageHoldMultiplier()
 	})
 }
 
@@ -3315,6 +3610,34 @@ func (u *GroupUpsertOne) UpdateVideoModelPrices() *GroupUpsertOne {
 func (u *GroupUpsertOne) ClearVideoModelPrices() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
 		s.ClearVideoModelPrices()
+	})
+}
+
+// SetWebSearchPricePerCall sets the "web_search_price_per_call" field.
+func (u *GroupUpsertOne) SetWebSearchPricePerCall(v float64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetWebSearchPricePerCall(v)
+	})
+}
+
+// AddWebSearchPricePerCall adds v to the "web_search_price_per_call" field.
+func (u *GroupUpsertOne) AddWebSearchPricePerCall(v float64) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddWebSearchPricePerCall(v)
+	})
+}
+
+// UpdateWebSearchPricePerCall sets the "web_search_price_per_call" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateWebSearchPricePerCall() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateWebSearchPricePerCall()
+	})
+}
+
+// ClearWebSearchPricePerCall clears the value of the "web_search_price_per_call" field.
+func (u *GroupUpsertOne) ClearWebSearchPricePerCall() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearWebSearchPricePerCall()
 	})
 }
 
@@ -3633,6 +3956,20 @@ func (u *GroupUpsertOne) UpdateAllowMessagesDispatch() *GroupUpsertOne {
 	})
 }
 
+// SetAllowLive sets the "allow_live" field.
+func (u *GroupUpsertOne) SetAllowLive(v bool) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetAllowLive(v)
+	})
+}
+
+// UpdateAllowLive sets the "allow_live" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateAllowLive() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateAllowLive()
+	})
+}
+
 // SetForceOpenaiFast sets the "force_openai_fast" field.
 func (u *GroupUpsertOne) SetForceOpenaiFast(v bool) *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
@@ -3717,17 +4054,31 @@ func (u *GroupUpsertOne) UpdateMessagesDispatchModelConfig() *GroupUpsertOne {
 	})
 }
 
-// SetModelsListConfig sets the "models_list_config" field.
-func (u *GroupUpsertOne) SetModelsListConfig(v domain.GroupModelsListConfig) *GroupUpsertOne {
+// SetModelAllowlist sets the "model_allowlist" field.
+func (u *GroupUpsertOne) SetModelAllowlist(v domain.GroupModelAllowlist) *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
-		s.SetModelsListConfig(v)
+		s.SetModelAllowlist(v)
 	})
 }
 
-// UpdateModelsListConfig sets the "models_list_config" field to the value that was provided on create.
-func (u *GroupUpsertOne) UpdateModelsListConfig() *GroupUpsertOne {
+// UpdateModelAllowlist sets the "model_allowlist" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateModelAllowlist() *GroupUpsertOne {
 	return u.Update(func(s *GroupUpsert) {
-		s.UpdateModelsListConfig()
+		s.UpdateModelAllowlist()
+	})
+}
+
+// SetCodexModelsManifestConfig sets the "codex_models_manifest_config" field.
+func (u *GroupUpsertOne) SetCodexModelsManifestConfig(v domain.GroupCodexModelsManifestConfig) *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetCodexModelsManifestConfig(v)
+	})
+}
+
+// UpdateCodexModelsManifestConfig sets the "codex_models_manifest_config" field to the value that was provided on create.
+func (u *GroupUpsertOne) UpdateCodexModelsManifestConfig() *GroupUpsertOne {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateCodexModelsManifestConfig()
 	})
 }
 
@@ -4393,6 +4744,20 @@ func (u *GroupUpsertBulk) UpdateAllowImageGeneration() *GroupUpsertBulk {
 	})
 }
 
+// SetAllowBatchImageGeneration sets the "allow_batch_image_generation" field.
+func (u *GroupUpsertBulk) SetAllowBatchImageGeneration(v bool) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetAllowBatchImageGeneration(v)
+	})
+}
+
+// UpdateAllowBatchImageGeneration sets the "allow_batch_image_generation" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateAllowBatchImageGeneration() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateAllowBatchImageGeneration()
+	})
+}
+
 // SetImageRateIndependent sets the "image_rate_independent" field.
 func (u *GroupUpsertBulk) SetImageRateIndependent(v bool) *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
@@ -4509,6 +4874,48 @@ func (u *GroupUpsertBulk) UpdateImagePrice4k() *GroupUpsertBulk {
 func (u *GroupUpsertBulk) ClearImagePrice4k() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.ClearImagePrice4k()
+	})
+}
+
+// SetBatchImageDiscountMultiplier sets the "batch_image_discount_multiplier" field.
+func (u *GroupUpsertBulk) SetBatchImageDiscountMultiplier(v float64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetBatchImageDiscountMultiplier(v)
+	})
+}
+
+// AddBatchImageDiscountMultiplier adds v to the "batch_image_discount_multiplier" field.
+func (u *GroupUpsertBulk) AddBatchImageDiscountMultiplier(v float64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddBatchImageDiscountMultiplier(v)
+	})
+}
+
+// UpdateBatchImageDiscountMultiplier sets the "batch_image_discount_multiplier" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateBatchImageDiscountMultiplier() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateBatchImageDiscountMultiplier()
+	})
+}
+
+// SetBatchImageHoldMultiplier sets the "batch_image_hold_multiplier" field.
+func (u *GroupUpsertBulk) SetBatchImageHoldMultiplier(v float64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetBatchImageHoldMultiplier(v)
+	})
+}
+
+// AddBatchImageHoldMultiplier adds v to the "batch_image_hold_multiplier" field.
+func (u *GroupUpsertBulk) AddBatchImageHoldMultiplier(v float64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddBatchImageHoldMultiplier(v)
+	})
+}
+
+// UpdateBatchImageHoldMultiplier sets the "batch_image_hold_multiplier" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateBatchImageHoldMultiplier() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateBatchImageHoldMultiplier()
 	})
 }
 
@@ -4649,6 +5056,34 @@ func (u *GroupUpsertBulk) UpdateVideoModelPrices() *GroupUpsertBulk {
 func (u *GroupUpsertBulk) ClearVideoModelPrices() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
 		s.ClearVideoModelPrices()
+	})
+}
+
+// SetWebSearchPricePerCall sets the "web_search_price_per_call" field.
+func (u *GroupUpsertBulk) SetWebSearchPricePerCall(v float64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetWebSearchPricePerCall(v)
+	})
+}
+
+// AddWebSearchPricePerCall adds v to the "web_search_price_per_call" field.
+func (u *GroupUpsertBulk) AddWebSearchPricePerCall(v float64) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.AddWebSearchPricePerCall(v)
+	})
+}
+
+// UpdateWebSearchPricePerCall sets the "web_search_price_per_call" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateWebSearchPricePerCall() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateWebSearchPricePerCall()
+	})
+}
+
+// ClearWebSearchPricePerCall clears the value of the "web_search_price_per_call" field.
+func (u *GroupUpsertBulk) ClearWebSearchPricePerCall() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.ClearWebSearchPricePerCall()
 	})
 }
 
@@ -4967,6 +5402,20 @@ func (u *GroupUpsertBulk) UpdateAllowMessagesDispatch() *GroupUpsertBulk {
 	})
 }
 
+// SetAllowLive sets the "allow_live" field.
+func (u *GroupUpsertBulk) SetAllowLive(v bool) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetAllowLive(v)
+	})
+}
+
+// UpdateAllowLive sets the "allow_live" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateAllowLive() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateAllowLive()
+	})
+}
+
 // SetForceOpenaiFast sets the "force_openai_fast" field.
 func (u *GroupUpsertBulk) SetForceOpenaiFast(v bool) *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
@@ -5051,17 +5500,31 @@ func (u *GroupUpsertBulk) UpdateMessagesDispatchModelConfig() *GroupUpsertBulk {
 	})
 }
 
-// SetModelsListConfig sets the "models_list_config" field.
-func (u *GroupUpsertBulk) SetModelsListConfig(v domain.GroupModelsListConfig) *GroupUpsertBulk {
+// SetModelAllowlist sets the "model_allowlist" field.
+func (u *GroupUpsertBulk) SetModelAllowlist(v domain.GroupModelAllowlist) *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
-		s.SetModelsListConfig(v)
+		s.SetModelAllowlist(v)
 	})
 }
 
-// UpdateModelsListConfig sets the "models_list_config" field to the value that was provided on create.
-func (u *GroupUpsertBulk) UpdateModelsListConfig() *GroupUpsertBulk {
+// UpdateModelAllowlist sets the "model_allowlist" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateModelAllowlist() *GroupUpsertBulk {
 	return u.Update(func(s *GroupUpsert) {
-		s.UpdateModelsListConfig()
+		s.UpdateModelAllowlist()
+	})
+}
+
+// SetCodexModelsManifestConfig sets the "codex_models_manifest_config" field.
+func (u *GroupUpsertBulk) SetCodexModelsManifestConfig(v domain.GroupCodexModelsManifestConfig) *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.SetCodexModelsManifestConfig(v)
+	})
+}
+
+// UpdateCodexModelsManifestConfig sets the "codex_models_manifest_config" field to the value that was provided on create.
+func (u *GroupUpsertBulk) UpdateCodexModelsManifestConfig() *GroupUpsertBulk {
+	return u.Update(func(s *GroupUpsert) {
+		s.UpdateCodexModelsManifestConfig()
 	})
 }
 

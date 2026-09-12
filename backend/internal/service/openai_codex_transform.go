@@ -11,6 +11,7 @@ import (
 )
 
 var codexModelMap = map[string]string{
+	"gpt-6-astra":                "gpt-6-astra",
 	"gpt-5.6-sol":                "gpt-5.6-sol",
 	"gpt-5.6-terra":              "gpt-5.6-terra",
 	"gpt-5.6-luna":               "gpt-5.6-luna",
@@ -480,6 +481,12 @@ func normalizeCodexToolChoice(reqBody map[string]any) bool {
 	}
 	choiceType := strings.TrimSpace(firstNonEmptyString(choiceMap["type"]))
 	if choiceType == "" {
+		return false
+	}
+	if choiceType == "allowed_tools" {
+		// This is a selection policy, not a declared tool type. Preserve it for
+		// upstream validation (including references to input.additional_tools);
+		// falling back to auto would silently discard the caller's restriction.
 		return false
 	}
 	modified := false
@@ -1490,10 +1497,11 @@ func normalizeOpenAIResponsesImageOnlyModel(reqBody map[string]any) bool {
 		reqBody["tool_choice"] = map[string]any{"type": "image_generation"}
 		modified = true
 	}
-	if imageModel != openAIImagesResponsesMainModel {
+	mainModel := openAIImagesResponsesMainModelValue()
+	if imageModel != mainModel {
 		modified = true
 	}
-	reqBody["model"] = openAIImagesResponsesMainModel
+	reqBody["model"] = mainModel
 	return modified
 }
 
@@ -1567,23 +1575,26 @@ func extractTextFromContent(content any) string {
 	}
 }
 
-// extractSystemMessagesFromInput scans the input array for items with
-// role=="system" or role=="developer", removes them, and merges their
-// content into reqBody["instructions"]. 058 step 2: the Anthropic→Responses
-// bridge maps Anthropic `system` to a developer message; Codex OAuth still
-// expects the prompt to live in the instructions field, and fork's forced-
-// template feature reads the rendered text out of `reqBody["instructions"]`.
-// If instructions is already non-empty, extracted content is prepended with
-// "\n\n". Returns true if any system/developer messages were extracted.
+// extractSystemMessagesFromInput promotes system/developer text into instructions.
+// Plain text is removed from input for the local Anthropic/Codex bridge. JSON
+// mode keeps its instruction in input as required upstream, and mixed content
+// must remain intact so images and other non-text parts are never discarded.
 func extractSystemMessagesFromInput(reqBody map[string]any) bool {
 	input, ok := reqBody["input"].([]any)
 	if !ok || len(input) == 0 {
 		return false
 	}
+	keepJSONInstruction := false
+	if text, ok := reqBody["text"].(map[string]any); ok {
+		if format, ok := text["format"].(map[string]any); ok {
+			kind, _ := format["type"].(string)
+			keepJSONInstruction = strings.EqualFold(strings.TrimSpace(kind), "json_object")
+		}
+	}
 
 	var systemTexts []string
 	remaining := make([]any, 0, len(input))
-
+	modified := false
 	for _, item := range input {
 		m, ok := item.(map[string]any)
 		if !ok {
@@ -1595,27 +1606,38 @@ func extractSystemMessagesFromInput(reqBody map[string]any) bool {
 			remaining = append(remaining, item)
 			continue
 		}
-		if text := extractTextFromContent(m["content"]); text != "" {
-			if strings.Contains(text, openAICompatClaudeCodeTodoGuardMarker) {
-				remaining = append(remaining, item)
-				continue
-			}
+		text := extractTextFromContent(m["content"])
+		if strings.Contains(text, openAICompatClaudeCodeTodoGuardMarker) {
+			remaining = append(remaining, item)
+			continue
+		}
+		if text != "" {
 			systemTexts = append(systemTexts, text)
+			modified = true
+		}
+		_, lossless := extractLosslessTextFromContent(m["content"])
+		if !keepJSONInstruction && lossless {
+			modified = true
+			continue
+		}
+		if role == "system" {
+			m["role"] = "developer"
+			modified = true
+		}
+		remaining = append(remaining, item)
+	}
+	if len(systemTexts) > 0 {
+		extracted := strings.Join(systemTexts, "\n\n")
+		if existing, ok := reqBody["instructions"].(string); ok && strings.TrimSpace(existing) != "" {
+			reqBody["instructions"] = extracted + "\n\n" + existing
+		} else {
+			reqBody["instructions"] = extracted
 		}
 	}
-
-	if len(systemTexts) == 0 {
-		return false
+	if modified {
+		reqBody["input"] = remaining
 	}
-
-	extracted := strings.Join(systemTexts, "\n\n")
-	if existing, ok := reqBody["instructions"].(string); ok && strings.TrimSpace(existing) != "" {
-		reqBody["instructions"] = extracted + "\n\n" + existing
-	} else {
-		reqBody["instructions"] = extracted
-	}
-	reqBody["input"] = remaining
-	return true
+	return modified
 }
 
 // extractPromptLikeInstructionsFromInput collects developer/system message
@@ -1644,8 +1666,10 @@ func extractPromptLikeInstructionsFromInput(reqBody map[string]any) string {
 	return strings.Join(texts, "\n\n")
 }
 
-// defaultCodexSynthInstructions returns the closest captured Codex CLI base
-// prompt for synthesized requests whose instructions field is empty.
+// defaultCodexSynthInstructions 返回合成路径在 instructions 为空时应填入的默认提示词。
+//
+// 按 model 选择真实 Codex CLI 的 base instructions，使合成请求在提示词层面贴近真实 Codex 行为；
+// 若内嵌 prompt 意外为空，回退到最小占位符以保证字段非空。
 func defaultCodexSynthInstructions(model string) string {
 	if instructions := strings.TrimSpace(openai.CodexBaseInstructionsForModel(model)); instructions != "" {
 		return instructions
@@ -2099,4 +2123,33 @@ func normalizeCodexTools(reqBody map[string]any) bool {
 	}
 
 	return modified
+}
+
+// extractLosslessTextFromContent returns text only when the entire content can
+// be represented by an instructions string without dropping non-text parts.
+func extractLosslessTextFromContent(content any) (string, bool) {
+	switch v := content.(type) {
+	case string:
+		return v, true
+	case []any:
+		var b strings.Builder
+		for _, part := range v {
+			m, ok := part.(map[string]any)
+			if !ok {
+				return "", false
+			}
+			typeName, ok := m["type"].(string)
+			if !ok || (typeName != "text" && typeName != "input_text" && typeName != "output_text") {
+				return "", false
+			}
+			text, ok := m["text"].(string)
+			if !ok {
+				return "", false
+			}
+			_, _ = b.WriteString(text)
+		}
+		return b.String(), true
+	default:
+		return "", false
+	}
 }

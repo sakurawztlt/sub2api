@@ -794,10 +794,12 @@ func (c *concurrencyCache) reconcileExpiredIndexCandidates(ctx context.Context, 
 	if err != nil {
 		return err
 	}
-	members, err := c.rdb.ZRangeByScore(ctx, spec.indexKey, &redis.ZRangeBy{
-		Min:   "-inf",
-		Max:   strconv.FormatInt(now, 10),
-		Count: activeIndexCleanupBatchSize,
+	members, err := c.rdb.ZRangeArgs(ctx, redis.ZRangeArgs{
+		Key:     spec.indexKey,
+		Start:   "-inf",
+		Stop:    strconv.FormatInt(now, 10),
+		ByScore: true,
+		Count:   activeIndexCleanupBatchSize,
 	}).Result()
 	if err != nil {
 		return fmt.Errorf("read expired index %s: %w", spec.indexKey, err)
@@ -950,3 +952,263 @@ func (c *concurrencyCache) cleanupStaleProcessSlotsForIndex(
 	c.removeActiveIndexMembers(ctx, spec.indexKey, staleMembers)
 	return nil
 }
+
+// 并发控制缓存常量定义
+//
+// 性能优化说明：
+// 原实现使用 SCAN 命令遍历独立的槽位键（concurrency:account:{id}:{requestID}），
+// 在高并发场景下 SCAN 需要多次往返，且遍历大量键时性能下降明显。
+//
+// 新实现改用 Redis 有序集合（Sorted Set）：
+// 1. 每个账号/用户只有一个键，成员为 requestID，分数为时间戳
+// 2. 使用 ZCARD 原子获取并发数，时间复杂度 O(1)
+// 3. 使用 ZREMRANGEBYSCORE 清理过期槽位，避免手动管理 TTL
+// 4. 单次 Redis 调用完成计数，减少网络往返
+const (
+	// 并发槽位键前缀（有序集合）
+	// 格式: concurrency:account:{accountID}
+
+	// 格式: concurrency:user:{userID}
+
+	// 格式: concurrency:api_key:{apiKeyID}
+	apiKeySlotKeyPrefix      = "concurrency:api_key:"
+	liveAccountSlotKeyPrefix = "concurrency:live:account:"
+	liveUserSlotKeyPrefix    = "concurrency:live:user:"
+	liveAPIKeySlotKeyPrefix  = "concurrency:live:api_key:"
+	// API-key-scoped client WebSocket ingress leases use a shorter TTL than
+	// ordinary request slots, because idle ingress sessions do not hold a turn slot.
+	openAIWSIngressLeaseKeyPrefix  = "concurrency:openai_ws_ingress:api_key:"
+	openAIWSIngressLeaseTTLSeconds = 60
+	liveLeaseTTLSeconds            = 60
+	// 等待队列计数器格式: concurrency:wait:{userID}
+
+	// 账号级等待队列计数器格式: wait:account:{accountID}
+
+	// 默认槽位过期时间（分钟），可通过配置覆盖
+
+	// 活跃索引用来替代后台任务全量 SCAN 槽位键。
+	// member 是账号/用户 ID，score 是“预计仍需关注到”的 Redis Unix 秒时间戳。
+	// ZSET member=accountID, score=expireAtUnixSeconds
+	// ZSET member=userID, score=expireAtUnixSeconds
+
+	// 后台清理只按批处理索引候选，避免单次任务占用 Redis 太久。
+
+	// 一次性迁移 marker：活跃索引机制上线前遗留的等待计数键无法被索引发现，
+	// 且有流量时 TTL 会被不断刷新，必须清扫一次。marker 存在即代表已完成。
+
+)
+
+func (c *concurrencyCache) AcquireLiveLease(
+	ctx context.Context,
+	accountID int64,
+	accountMax int,
+	userID int64,
+	userMax int,
+	apiKeyID int64,
+	leaseID string,
+	replacingRegularSlots bool,
+) (bool, error) {
+	if c == nil || c.rdb == nil || accountID <= 0 || userID <= 0 || apiKeyID <= 0 || leaseID == "" {
+		return false, nil
+	}
+	replacing := 0
+	if replacingRegularSlots {
+		replacing = 1
+	}
+	result, err := acquireLiveLeaseScript.Run(ctx, c.rdb, []string{
+		accountSlotKey(accountID),
+		liveAccountSlotKey(accountID),
+		userSlotKey(userID),
+		liveUserSlotKey(userID),
+		liveAPIKeySlotKey(apiKeyID),
+	}, accountMax, userMax, liveLeaseTTLSeconds, leaseID, replacing).Int()
+	return result == 1, err
+}
+
+func (c *concurrencyCache) RefreshLiveLease(ctx context.Context, accountID, userID, apiKeyID int64, leaseID string) (bool, error) {
+	if c == nil || c.rdb == nil || leaseID == "" {
+		return false, nil
+	}
+	result, err := refreshLiveLeaseScript.Run(ctx, c.rdb, []string{
+		liveAccountSlotKey(accountID),
+		liveUserSlotKey(userID),
+		liveAPIKeySlotKey(apiKeyID),
+	}, liveLeaseTTLSeconds, leaseID).Int()
+	return result == 1, err
+}
+
+func (c *concurrencyCache) ReleaseLiveLease(ctx context.Context, accountID, userID, apiKeyID int64, leaseID string) error {
+	if c == nil || c.rdb == nil || leaseID == "" {
+		return nil
+	}
+	pipe := c.rdb.TxPipeline()
+	pipe.ZRem(ctx, liveAccountSlotKey(accountID), leaseID)
+	pipe.ZRem(ctx, liveUserSlotKey(userID), leaseID)
+	pipe.ZRem(ctx, liveAPIKeySlotKey(apiKeyID), leaseID)
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+func liveAPIKeySlotKey(apiKeyID int64) string {
+	return fmt.Sprintf("%s%d", liveAPIKeySlotKeyPrefix, apiKeyID)
+}
+
+func liveAccountSlotKey(accountID int64) string {
+	return fmt.Sprintf("%s%d", liveAccountSlotKeyPrefix, accountID)
+}
+
+func liveUserSlotKey(userID int64) string {
+	return fmt.Sprintf("%s%d", liveUserSlotKeyPrefix, userID)
+}
+
+var (
+	// acquireScript 使用有序集合计数并在未达上限时添加槽位
+	// 使用 Redis TIME 命令获取服务器时间，避免多实例时钟不同步问题
+	// KEYS[1] = 普通槽位键，KEYS[2] = 对应 Live 槽位键
+	// ARGV[1] = maxConcurrency
+	// ARGV[2] = TTL（秒）
+	// ARGV[3] = requestID
+	// 返回 {是否成功, Redis 当前秒}，Go 侧复用同一时间源写活跃索引，省去额外 TIME 往返。
+
+	// getCountScript 统计有序集合中的槽位数量并清理过期条目
+	// 使用 Redis TIME 命令获取服务器时间
+	// KEYS[1] = 普通槽位键，KEYS[2] = 对应 Live 槽位键
+	// ARGV[1] = TTL（秒）
+
+	acquireLiveLeaseScript = redis.NewScript(`
+		redis.replicate_commands()
+		local accountRegular = KEYS[1]
+		local accountLive = KEYS[2]
+		local userRegular = KEYS[3]
+		local userLive = KEYS[4]
+		local apiLive = KEYS[5]
+		local accountMax = tonumber(ARGV[1])
+		local userMax = tonumber(ARGV[2])
+		local ttl = tonumber(ARGV[3])
+		local leaseID = ARGV[4]
+		local replacing = tonumber(ARGV[5])
+		local now = tonumber(redis.call('TIME')[1])
+		local liveExpireBefore = now - ttl
+		redis.call('ZREMRANGEBYSCORE', accountLive, '-inf', liveExpireBefore)
+		redis.call('ZREMRANGEBYSCORE', userLive, '-inf', liveExpireBefore)
+		redis.call('ZREMRANGEBYSCORE', apiLive, '-inf', liveExpireBefore)
+		if redis.call('ZSCORE', accountLive, leaseID) ~= false then
+			return 1
+		end
+		local accountCount = redis.call('ZCARD', accountRegular) + redis.call('ZCARD', accountLive)
+		local userCount = redis.call('ZCARD', userRegular) + redis.call('ZCARD', userLive)
+		local allowance = 0
+		if replacing == 1 then allowance = 1 end
+		if accountMax > 0 and accountCount >= accountMax + allowance then return 0 end
+		if userMax > 0 and userCount >= userMax + allowance then return 0 end
+		redis.call('ZADD', accountLive, now, leaseID)
+		redis.call('ZADD', userLive, now, leaseID)
+		redis.call('ZADD', apiLive, now, leaseID)
+		redis.call('EXPIRE', accountLive, ttl)
+		redis.call('EXPIRE', userLive, ttl)
+		redis.call('EXPIRE', apiLive, ttl)
+		return 1
+	`)
+
+	refreshLiveLeaseScript = redis.NewScript(`
+		redis.replicate_commands()
+		local ttl = tonumber(ARGV[1])
+		local leaseID = ARGV[2]
+		local now = tonumber(redis.call('TIME')[1])
+		local expireBefore = now - ttl
+		for _, key in ipairs(KEYS) do
+			redis.call('ZREMRANGEBYSCORE', key, '-inf', expireBefore)
+			if redis.call('ZSCORE', key, leaseID) == false then return 0 end
+		end
+		for _, key in ipairs(KEYS) do
+			redis.call('ZADD', key, now, leaseID)
+			redis.call('EXPIRE', key, ttl)
+		end
+		return 1
+	`)
+
+	// trackSlotScript 记录 stats-only 槽位，不做并发上限判断。
+	// KEYS[1] = 有序集合键
+	// ARGV[1] = TTL（秒）
+	// ARGV[2] = requestID
+	trackSlotScript = redis.NewScript(`
+		-- Redis 3.2-4.x compat: opt into effects replication so redis.call('TIME')
+		-- replicates correctly. No-op on Redis 5.0+ (effects replication is default).
+		redis.replicate_commands()
+		local key = KEYS[1]
+		local ttl = tonumber(ARGV[1])
+		local requestID = ARGV[2]
+
+		local timeResult = redis.call('TIME')
+		local now = tonumber(timeResult[1])
+		local expireBefore = now - ttl
+
+		redis.call('ZREMRANGEBYSCORE', key, '-inf', expireBefore)
+		redis.call('ZADD', key, now, requestID)
+		redis.call('EXPIRE', key, ttl)
+		return 1
+	`)
+
+	// acquireOpenAIWSIngressLeaseScript atomically reaps crashed members and
+	// acquires or refreshes one API-key-scoped ingress lease using Redis TIME.
+	acquireOpenAIWSIngressLeaseScript = redis.NewScript(`
+		redis.replicate_commands()
+		local key = KEYS[1]
+		local maxConnections = tonumber(ARGV[1])
+		local ttl = tonumber(ARGV[2])
+		local leaseID = ARGV[3]
+		local now = tonumber(redis.call('TIME')[1])
+		local expireBefore = now - ttl
+		redis.call('ZREMRANGEBYSCORE', key, '-inf', expireBefore)
+		if redis.call('ZSCORE', key, leaseID) ~= false then
+			redis.call('ZADD', key, now, leaseID)
+			redis.call('EXPIRE', key, ttl)
+			return 1
+		end
+		if redis.call('ZCARD', key) < maxConnections then
+			redis.call('ZADD', key, now, leaseID)
+			redis.call('EXPIRE', key, ttl)
+			return 1
+		end
+		return 0
+	`)
+
+	// refreshOpenAIWSIngressLeaseScript does not recreate a missing member: a
+	// process that lost its lease must terminate its local WebSocket instead of
+	// silently continuing beyond the distributed cap.
+	refreshOpenAIWSIngressLeaseScript = redis.NewScript(`
+		redis.replicate_commands()
+		local key = KEYS[1]
+		local ttl = tonumber(ARGV[1])
+		local leaseID = ARGV[2]
+		local now = tonumber(redis.call('TIME')[1])
+		local expireBefore = now - ttl
+		redis.call('ZREMRANGEBYSCORE', key, '-inf', expireBefore)
+		if redis.call('ZSCORE', key, leaseID) == false then
+			return 0
+		end
+		redis.call('ZADD', key, now, leaseID)
+		redis.call('EXPIRE', key, ttl)
+		return 1
+	`)
+
+	// incrementWaitScript - refreshes TTL on each increment to keep queue depth accurate
+	// KEYS[1] = wait queue key
+	// ARGV[1] = maxWait
+	// ARGV[2] = TTL in seconds
+	// 返回 {是否成功, Redis 当前秒}，供 Go 侧免额外 TIME 往返写活跃索引。
+
+	// incrementAccountWaitScript - account-level wait queue count (refresh TTL on each increment)
+	// 返回值同 incrementWaitScript：{是否成功, Redis 当前秒}。
+
+	// decrementWaitScript - same as before
+
+	// cleanupExpiredSlotsScript 清理单个账号/用户有序集合中过期槽位
+	// KEYS[1] = 有序集合键
+	// ARGV[1] = TTL（秒）
+
+	// startupCleanupSlotScript 清理单个槽位 key 中非当前进程前缀的成员，避免 Redis Cluster CROSSSLOT。
+	// KEYS[1] 是有序集合键，ARGV[1] 是当前进程前缀，ARGV[2] 是槽位 TTL。
+	// 返回 {清除数量, 剩余成员数}，Go 侧据剩余数决定索引 member 去留，无需再回读槽位。
+
+)

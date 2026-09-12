@@ -88,11 +88,9 @@ func (c *openAIWSPolicyEnforcingFrameConn) Close() error {
 	return c.inner.Close()
 }
 
-// openAIWSPassthroughPolicyModelForFrame returns the upstream-perspective
-// model name that should be passed to evaluateOpenAIFastPolicy for a single
-// passthrough WS frame. Mirrors the HTTP-side normalization
-// (account.GetMappedModel + normalizeOpenAIModelForUpstream) so the WS path
-// matches model whitelists identically.
+// openAIWSPassthroughPolicyModelForFrame returns the model actually forwarded
+// by a passthrough WS frame. Passthrough only replaces authentication, so an
+// account's ordinary model_mapping and Codex aliases must not rewrite it.
 func openAIWSPassthroughPolicyModelForFrame(account *Account, payload []byte) string {
 	if account == nil || len(payload) == 0 {
 		return ""
@@ -101,7 +99,7 @@ func openAIWSPassthroughPolicyModelForFrame(account *Account, payload []byte) st
 	if original == "" {
 		return ""
 	}
-	return normalizeOpenAIModelForUpstream(account, account.GetMappedModel(original))
+	return original
 }
 
 // openAIWSPassthroughPolicyModelFromSessionFrame returns the upstream model
@@ -133,7 +131,7 @@ func openAIWSPassthroughPolicyModelFromSessionFrame(account *Account, payload []
 	if original == "" {
 		return ""
 	}
-	return normalizeOpenAIModelForUpstream(account, account.GetMappedModel(original))
+	return original
 }
 
 type openAIWSPassthroughUsageMeta struct {
@@ -1069,6 +1067,11 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 						return payload, nil, err
 					}
 				}
+				if hooks != nil && hooks.BeforeTurn != nil {
+					if err := hooks.BeforeTurn(turnNo); err != nil {
+						return payload, nil, err
+					}
+				}
 				if hooks != nil && hooks.MapRequestModel != nil {
 					mappedModel, err := hooks.MapRequestModel(turnNo, requestModelForThisFrame)
 					if err != nil {
@@ -1325,6 +1328,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					truncateOpenAIWSLogValue(errTypeRaw, openAIWSLogValueMaxLen),
 					truncateOpenAIWSLogValue(errMsgRaw, openAIWSLogValueMaxLen),
 				)
+				if completedTurns.Load() > 0 {
+					return NewOpenAIWSClientCloseError(
+						coderws.StatusTryAgainLater,
+						"upstream rate limit exceeded; please reconnect",
+						errors.New("later passthrough turn was rate limited before output"),
+					)
+				}
 				return s.newOpenAIWSRateLimitFailoverError(account, handshakeHeaders, payload, errMsgRaw)
 			},
 			RewriteClientPayload: func(msgType coderws.MessageType, payload []byte, _ bool) []byte {
@@ -1436,10 +1446,15 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	var firstOutputTimeoutErr *openAIWSPassthroughFirstOutputTimeoutError
 	if errors.As(relayErr, &firstOutputTimeoutErr) {
 		deadline := firstOutputTimeoutErr.deadline
+		// The relay ran over the WebSocket transport, so a missing managed
+		// proxy is an unknown route (http.DefaultClient), not a direct one.
+		wsProxyID, wsProxyName := opsUpstreamWSProxyAttribution(account)
 		failoverErr := s.newOpenAIFirstOutputTimeoutError(
 			ctx,
 			c,
 			account,
+			wsProxyID,
+			wsProxyName,
 			deadline.startedAt,
 			deadline.requestModel,
 			deadline.reasoningEffort,
@@ -1517,21 +1532,9 @@ func openAIWSPassthroughRelayClientClose(exit openaiwsv2.RelayExit, completedTur
 }
 
 func markOpenAIWSV2PassthroughCyberPolicy(c *gin.Context, payload []byte) bool {
-	hit, code, message := detectOpenAICyberPolicy(payload)
-	if !hit {
-		return false
-	}
 	usage := OpenAIUsage{}
 	parseOpenAIWSResponseUsageFromCompletedEvent(payload, &usage)
-	MarkOpsCyberPolicy(c, CyberPolicyMark{
-		Code:           code,
-		Message:        message,
-		Body:           truncateString(string(payload), 4096),
-		UpstreamStatus: http.StatusOK,
-		UpstreamInTok:  usage.InputTokens,
-		UpstreamOutTok: usage.OutputTokens,
-	})
-	return true
+	return markOpenAICyberPolicyEvent(c, payload, http.StatusOK, &usage)
 }
 
 func (s *OpenAIGatewayService) mapOpenAIWSPassthroughDialError(
@@ -1618,3 +1621,5 @@ func logOpenAIWSV2Passthrough(format string, args ...any) {
 		append([]any{openaiWSV2PassthroughModeFields}, args...)...,
 	)
 }
+
+var _ openaiwsv2.FrameConn = (*openAIWSPassthroughFirstOutputFrameConn)(nil)

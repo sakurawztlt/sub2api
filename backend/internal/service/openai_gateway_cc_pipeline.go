@@ -89,6 +89,8 @@ func (s *OpenAIGatewayService) failoverOpenAIUpstreamHTTPError(
 		upstreamDetail = truncateString(string(respBody), maxBytes)
 	}
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		ProxyID:            opsUpstreamProxyID(account),
+		ProxyName:          opsUpstreamProxyName(account),
 		Platform:           account.Platform,
 		AccountID:          account.ID,
 		AccountName:        account.Name,
@@ -194,6 +196,7 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 		applyGrokCacheHeaders(upstreamReq.Header, grokCacheIdentity)
 	}
 	account.ApplyHeaderOverrides(upstreamReq.Header)
+	applyOpenCodeSessionHeader(c, account, targetURL, upstreamReq.Header, body)
 
 	proxyURL := ""
 	if account.Proxy != nil {

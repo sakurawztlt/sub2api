@@ -276,3 +276,31 @@ func TestDeriveAnthropicCompatPromptCacheKey_UsesCacheControlAnchors(t *testing.
 	require.True(t, strings.HasPrefix(k1, "anthropic-cache-"))
 	require.False(t, strings.HasPrefix(k1, compatPromptCacheKeyPrefix))
 }
+
+func TestShouldAutoInjectPromptCacheKeyForCompat_GPT6AstraForms(t *testing.T) {
+	for _, model := range []string{
+		"gpt-6",
+		"gpt-6-astra",
+		"openai/gpt-6",
+		"openai/gpt-6-astra",
+		"OPENAI/GPT-6_ASTRA",
+		"provider/gpt-6-astra",
+	} {
+		require.True(t, shouldAutoInjectPromptCacheKeyForCompat(model), model)
+	}
+
+	for _, model := range []string{
+		"gpt-6-terra",
+		"gpt-6.1",
+		"gpt-6-astra-preview",
+		"gpt-6-astra-unrelated-name",
+		"gpt-6-astra-2026-09-01",
+		"gpt-6-astra-2026-09-01-extra",
+		"gpt-6-astra-v",
+		"gpt-6-astra-v1.beta",
+		"claude-sonnet-4-5",
+		"gpt-4o",
+	} {
+		require.False(t, shouldAutoInjectPromptCacheKeyForCompat(model), model)
+	}
+}

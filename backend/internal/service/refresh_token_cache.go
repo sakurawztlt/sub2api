@@ -12,6 +12,7 @@ var ErrRefreshTokenNotFound = errors.New("refresh token not found")
 
 // RefreshTokenData 存储在Redis中的Refresh Token数据
 type RefreshTokenData struct {
+	BindingHash  string    `json:"binding_hash,omitempty"`
 	UserID       int64     `json:"user_id"`
 	TokenVersion int64     `json:"token_version"` // 用于检测密码更改后的Token失效
 	FamilyID     string    `json:"family_id"`     // Token家族ID，用于防重放攻击

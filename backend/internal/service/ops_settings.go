@@ -6,6 +6,9 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 )
 
 const (
@@ -359,8 +362,10 @@ func (s *OpsService) UpdateOpsAlertRuntimeSettings(ctx context.Context, cfg *Ops
 func defaultOpsAdvancedSettings() *OpsAdvancedSettings {
 	return &OpsAdvancedSettings{
 		DataRetention: OpsDataRetentionSettings{
-			CleanupEnabled:             false,
-			CleanupSchedule:            "0 2 * * *",
+			// Keep the DB-backed default aligned with ops.cleanup.enabled so a
+			// first settings read cannot silently disable configured retention.
+			CleanupEnabled:             true,
+			CleanupSchedule:            opsCleanupDefaultSchedule,
 			ErrorLogRetentionDays:      30,
 			MinuteMetricsRetentionDays: 30,
 			HourlyMetricsRetentionDays: 30,
@@ -378,6 +383,14 @@ func defaultOpsAdvancedSettings() *OpsAdvancedSettings {
 		AutoRefreshEnabled:              false,
 		AutoRefreshIntervalSec:          30,
 	}
+}
+
+func defaultOpsAdvancedSettingsForConfig(cfg *config.Config) *OpsAdvancedSettings {
+	defaults := defaultOpsAdvancedSettings()
+	if cfg != nil {
+		defaults.DataRetention.CleanupEnabled = cfg.Ops.Cleanup.Enabled
+	}
+	return defaults
 }
 
 func normalizeOpsAdvancedSettings(cfg *OpsAdvancedSettings) {
@@ -438,32 +451,21 @@ func validateOpsAdvancedSettings(cfg *OpsAdvancedSettings) error {
 }
 
 func (s *OpsService) GetOpsAdvancedSettings(ctx context.Context) (*OpsAdvancedSettings, error) {
-	defaultCfg := defaultOpsAdvancedSettings()
-	if s == nil || s.settingRepo == nil {
-		return defaultCfg, nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	_ = ctx
+	cfg := s.OpsAdvancedSettingsSnapshot()
+	return &cfg, nil
+}
 
-	raw, err := s.settingRepo.GetValue(ctx, SettingKeyOpsAdvancedSettings)
-	if err != nil {
-		if errors.Is(err, ErrSettingNotFound) {
-			if b, mErr := json.Marshal(defaultCfg); mErr == nil {
-				_ = s.settingRepo.Set(ctx, SettingKeyOpsAdvancedSettings, string(b))
-			}
-			return defaultCfg, nil
+// OpsAdvancedSettingsSnapshot returns a value copy for request hot paths. It
+// avoids both repository I/O and pointer escape/allocation.
+func (s *OpsService) OpsAdvancedSettingsSnapshot() OpsAdvancedSettings {
+	if s != nil {
+		if snapshot := s.runtimeSettings.Load(); snapshot != nil {
+			return snapshot.advanced
 		}
-		return nil, err
+		return *defaultOpsAdvancedSettingsForConfig(s.cfg)
 	}
-
-	cfg := defaultOpsAdvancedSettings()
-	if err := json.Unmarshal([]byte(raw), cfg); err != nil {
-		return defaultCfg, nil
-	}
-
-	normalizeOpsAdvancedSettings(cfg)
-	return cfg, nil
+	return *defaultOpsAdvancedSettings()
 }
 
 func (s *OpsService) UpdateOpsAdvancedSettings(ctx context.Context, cfg *OpsAdvancedSettings) (*OpsAdvancedSettings, error) {
@@ -489,11 +491,20 @@ func (s *OpsService) UpdateOpsAdvancedSettings(ctx context.Context, cfg *OpsAdva
 	if err := s.settingRepo.Set(ctx, SettingKeyOpsAdvancedSettings, string(raw)); err != nil {
 		return nil, err
 	}
+	s.storeAdvancedSettingsSnapshot(cfg)
 	// Push the new quota auto-pause settings straight into the in-memory cache that
 	// the OpenAI scheduling hot path reads, so the next request observes the new value
 	// without waiting for the background refresher's TTL.
 	if s.quotaAutoPauseSink != nil {
 		s.quotaAutoPauseSink(cfg.OpenAIAccountQuotaAutoPause)
+	}
+
+	// notify cleanup service to reload schedule/enabled.
+	if s.cleanupReloader != nil {
+		if rerr := s.cleanupReloader.Reload(ctx); rerr != nil {
+			logger.LegacyPrintf("service.ops_settings",
+				"[OpsSettings] cleanup reload after advanced-settings update failed: %v", rerr)
+		}
 	}
 
 	updated := &OpsAdvancedSettings{}

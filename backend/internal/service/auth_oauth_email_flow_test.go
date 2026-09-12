@@ -438,3 +438,55 @@ func TestRollbackOAuthEmailAccountCreationPropagatesDeleteError(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "delete created oauth user")
 }
+
+func TestFinalizeOAuthEmailAccount_SnapshotsPlatformQuotaDefaults(t *testing.T) {
+	userRepo := &userRepoStub{nextID: 99}
+	quotaRepo := &userPlatformQuotaRepoStub{}
+
+	authService := newOAuthEmailFlowAuthService(
+		userRepo,
+		nil,
+		&refreshTokenCacheStub{},
+		map[string]string{
+			SettingKeyRegistrationEnabled:   "true",
+			SettingKeyEmailVerifyEnabled:    "true",
+			SettingKeyDefaultPlatformQuotas: `{"anthropic": {"daily": 5.5}}`,
+		},
+		&emailCacheStub{},
+		quotaRepo,
+	)
+
+	user := &User{
+		ID:           99,
+		Email:        "newuser@example.com",
+		Role:         RoleUser,
+		Status:       StatusActive,
+		SignupSource: "oidc",
+	}
+
+	err := authService.FinalizeOAuthEmailAccount(
+		context.Background(),
+		user,
+		"",
+		"oidc",
+		"",
+	)
+
+	require.NoError(t, err)
+
+	require.Len(t, quotaRepo.bulkInsertCalls, 1, "snapshotPlatformQuotaDefaults must call BulkInsertInitial once on successful OAuth signup")
+
+	records := quotaRepo.bulkInsertCalls[0]
+	require.Len(t, records, 1, "only platforms with a configured limit get a row")
+	var anthropicRecord *UserPlatformQuotaRecord
+	for i := range records {
+		if records[i].Platform == "anthropic" {
+			anthropicRecord = &records[i]
+			break
+		}
+	}
+	require.NotNil(t, anthropicRecord, "expected anthropic platform record")
+	require.Equal(t, int64(99), anthropicRecord.UserID)
+	require.NotNil(t, anthropicRecord.DailyLimitUSD)
+	require.InDelta(t, 5.5, *anthropicRecord.DailyLimitUSD, 0.0001)
+}

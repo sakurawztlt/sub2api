@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"net/textproto"
 	"net/url"
 	"os"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/spf13/viper"
+	"golang.org/x/net/http/httpguts"
 )
 
 const (
@@ -72,6 +74,9 @@ const DefaultUpstreamResponseReadMaxBytes int64 = 128 * 1024 * 1024
 const DefaultModelsListReadMaxBytes int64 = 8 * 1024 * 1024
 
 type Config struct {
+	WebAuthn                WebAuthnConfig                `mapstructure:"webauthn"`
+	BatchImage              BatchImageConfig              `mapstructure:"batch_image"`
+	ImageStorage            ImageStorageConfig            `mapstructure:"image_storage"`
 	Server                  ServerConfig                  `mapstructure:"server"`
 	Log                     LogConfig                     `mapstructure:"log"`
 	CORS                    CORSConfig                    `mapstructure:"cors"`
@@ -597,41 +602,32 @@ type CORSConfig struct {
 }
 
 type SecurityConfig struct {
-	URLAllowlist                        URLAllowlistConfig   `mapstructure:"url_allowlist"`
-	ResponseHeaders                     ResponseHeaderConfig `mapstructure:"response_headers"`
-	CSP                                 CSPConfig            `mapstructure:"csp"`
-	ProxyFallback                       ProxyFallbackConfig  `mapstructure:"proxy_fallback"`
-	ProxyProbe                          ProxyProbeConfig     `mapstructure:"proxy_probe"`
-	TrustForwardedIPForAPIKeyACL        bool                 `mapstructure:"trust_forwarded_ip_for_api_key_acl"`
-	APIRequestIPBlocklist               []string             `mapstructure:"api_request_ip_blocklist"`
-	APIRequestIPBlockAction             string               `mapstructure:"api_request_ip_block_action"`
-	APIRequestIPBlockTrustForwardedIP   bool                 `mapstructure:"api_request_ip_block_trust_forwarded_ip"`
-	trustForwardedIPForAPIKeyACLLive    *atomic.Bool         `mapstructure:"-"`
-	apiRequestIPBlockRulesLive          atomic.Value         `mapstructure:"-"`
-	apiRequestIPBlockActionLive         atomic.Value         `mapstructure:"-"`
-	apiRequestIPBlockTrustForwardedLive *atomic.Bool         `mapstructure:"-"`
+	forwardedClientIPSettingsLive       *atomic.Pointer[ForwardedClientIPSettings] `mapstructure:"-" json:"-" yaml:"-"`
+	ForwardedClientIPHeaders            []string                                   `mapstructure:"forwarded_client_ip_headers" json:"forwarded_client_ip_headers" yaml:"forwarded_client_ip_headers"`
+	URLAllowlist                        URLAllowlistConfig                         `mapstructure:"url_allowlist"`
+	ResponseHeaders                     ResponseHeaderConfig                       `mapstructure:"response_headers"`
+	CSP                                 CSPConfig                                  `mapstructure:"csp"`
+	ProxyFallback                       ProxyFallbackConfig                        `mapstructure:"proxy_fallback"`
+	ProxyProbe                          ProxyProbeConfig                           `mapstructure:"proxy_probe"`
+	TrustForwardedIPForAPIKeyACL        bool                                       `mapstructure:"trust_forwarded_ip_for_api_key_acl"`
+	APIRequestIPBlocklist               []string                                   `mapstructure:"api_request_ip_blocklist"`
+	APIRequestIPBlockAction             string                                     `mapstructure:"api_request_ip_block_action"`
+	APIRequestIPBlockTrustForwardedIP   bool                                       `mapstructure:"api_request_ip_block_trust_forwarded_ip"`
+	trustForwardedIPForAPIKeyACLLive    *atomic.Bool                               `mapstructure:"-"`
+	apiRequestIPBlockRulesLive          atomic.Value                               `mapstructure:"-"`
+	apiRequestIPBlockActionLive         atomic.Value                               `mapstructure:"-"`
+	apiRequestIPBlockTrustForwardedLive *atomic.Bool                               `mapstructure:"-"`
 }
 
 func (c *Config) TrustForwardedIPForAPIKeyACL() bool {
-	if c == nil {
-		return false
-	}
-	live := c.Security.trustForwardedIPForAPIKeyACLLive
-	if live == nil {
-		return c.Security.TrustForwardedIPForAPIKeyACL
-	}
-	return live.Load()
+	return c.ForwardedClientIPSettings().TrustForwardedIP
 }
 
 func (c *Config) SetTrustForwardedIPForAPIKeyACL(enabled bool) {
 	if c == nil {
 		return
 	}
-	c.Security.TrustForwardedIPForAPIKeyACL = enabled
-	if c.Security.trustForwardedIPForAPIKeyACLLive == nil {
-		c.Security.trustForwardedIPForAPIKeyACLLive = &atomic.Bool{}
-	}
-	c.Security.trustForwardedIPForAPIKeyACLLive.Store(enabled)
+	c.SetForwardedClientIPSettings(enabled, c.ForwardedClientIPSettings().Headers)
 }
 
 func (c *Config) APIRequestIPBlocklistRules() *ip.CompiledIPRules {
@@ -840,7 +836,8 @@ const (
 type GatewayConfig struct {
 	// 等待上游响应头的超时时间（秒），0表示无超时
 	// 注意：这不影响流式数据传输，只控制等待响应头的时间
-	ResponseHeaderTimeout int `mapstructure:"response_header_timeout"`
+	Live                  GatewayLiveConfig `mapstructure:"live"`
+	ResponseHeaderTimeout int               `mapstructure:"response_header_timeout"`
 	// OpenAIResponseHeaderTimeout: OpenAI/Codex 上游等待响应头的超时时间（秒），0表示无超时
 	// OpenAI/Codex 请求可能在上游排队较久；默认不使用通用响应头超时截断。
 	OpenAIResponseHeaderTimeout int `mapstructure:"openai_response_header_timeout"`
@@ -1561,10 +1558,10 @@ type OpsCleanupConfig struct {
 	Enabled  bool   `mapstructure:"enabled"`
 	Schedule string `mapstructure:"schedule"`
 
-	// Retention days (0 disables that cleanup target).
-	//
-	// vNext requirement: default 30 days across ops datasets.
+	// Retention days. Error and metrics targets accept 0 as an explicit truncate;
+	// system logs require a positive value because their runtime setting is bounded.
 	ErrorLogRetentionDays      int `mapstructure:"error_log_retention_days"`
+	SystemLogRetentionDays     int `mapstructure:"system_log_retention_days"`
 	MinuteMetricsRetentionDays int `mapstructure:"minute_metrics_retention_days"`
 	HourlyMetricsRetentionDays int `mapstructure:"hourly_metrics_retention_days"`
 }
@@ -1827,6 +1824,9 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	cfg.Security.ResponseHeaders.AdditionalAllowed = normalizeStringSlice(cfg.Security.ResponseHeaders.AdditionalAllowed)
 	cfg.Security.ResponseHeaders.ForceRemove = normalizeStringSlice(cfg.Security.ResponseHeaders.ForceRemove)
 	cfg.Security.CSP.Policy = strings.TrimSpace(cfg.Security.CSP.Policy)
+	if forwardedHeaders, configured := os.LookupEnv("SECURITY_FORWARDED_CLIENT_IP_HEADERS"); configured {
+		cfg.Security.ForwardedClientIPHeaders = normalizeStringSlice(strings.Split(forwardedHeaders, ","))
+	}
 	cfg.SetTrustForwardedIPForAPIKeyACL(cfg.Security.TrustForwardedIPForAPIKeyACL)
 	cfg.SetAPIRequestIPBlocklist(cfg.Security.APIRequestIPBlocklist)
 	cfg.SetAPIRequestIPBlockAction(cfg.Security.APIRequestIPBlockAction)
@@ -1932,9 +1932,70 @@ func configureConfigSource(setConfigFile, addConfigPath func(string)) {
 }
 
 func setDefaults() {
+	viper.SetDefault("batch_image.enabled", false)
+	viper.SetDefault("batch_image.max_items_per_job_default", 200)
+	viper.SetDefault("batch_image.max_items_per_job_trial", 50)
+	viper.SetDefault("batch_image.max_output_images_per_job", 200)
+	viper.SetDefault("batch_image.max_output_images_per_item", 4)
+	viper.SetDefault("batch_image.max_prompt_chars_per_item", 8000)
+	viper.SetDefault("batch_image.max_reference_images_per_job", 1000)
+	viper.SetDefault("batch_image.max_reference_inline_bytes_per_job", 134217728)
+	viper.SetDefault("batch_image.default_response_mime_type", "image/png")
+	viper.SetDefault("batch_image.default_image_size", "1K")
+	viper.SetDefault("batch_image.max_download_items_zip", 200)
+	viper.SetDefault("batch_image.max_download_bytes_per_request", 536870912)
+	viper.SetDefault("batch_image.max_download_duration_seconds", 600)
+	viper.SetDefault("batch_image.max_download_concurrency_per_user", 1)
+	viper.SetDefault("batch_image.input_retention_after_terminal_hours", 24)
+	viper.SetDefault("batch_image.output_retention_after_terminal_hours", 72)
+	viper.SetDefault("batch_image.output_retention_max_days", 7)
+	viper.SetDefault("batch_image.cleanup_interval_minutes", 30)
+	viper.SetDefault("batch_image.cleanup_batch_size", 100)
+	viper.SetDefault("batch_image.queue_enabled", false)
+	viper.SetDefault("batch_image.queue_ready_key", "batch_image:queue:ready")
+	viper.SetDefault("batch_image.queue_delayed_key", "batch_image:queue:delayed")
+	viper.SetDefault("batch_image.queue_active_key", "batch_image:queue:active")
+	viper.SetDefault("batch_image.inflight_key_prefix", "batch_image:queue:inflight:")
+	viper.SetDefault("batch_image.lock_key_prefix", "batch_image:queue:lock:")
+	viper.SetDefault("batch_image.idempotency_key_prefix", "batch_image:queue:idem:")
+	viper.SetDefault("batch_image.inflight_ttl_seconds", 604800)
+	viper.SetDefault("batch_image.job_lock_ttl_seconds", 300)
+	viper.SetDefault("batch_image.default_requeue_delay_seconds", 30)
+	viper.SetDefault("batch_image.error_retry_delay_seconds", 60)
+	viper.SetDefault("batch_image.lock_conflict_delay_seconds", 5)
+	viper.SetDefault("batch_image.stale_active_after_seconds", 600)
+	viper.SetDefault("batch_image.delayed_mover_interval_seconds", 5)
+	viper.SetDefault("batch_image.recovery_interval_seconds", 300)
+	viper.SetDefault("batch_image.delayed_move_limit", 100)
+	viper.SetDefault("batch_image.recover_limit", 100)
+	viper.SetDefault("batch_image.vertex_enabled", false)
+	viper.SetDefault("batch_image.vertex_project_id", "")
+	viper.SetDefault("batch_image.vertex_location", "global")
+	viper.SetDefault("batch_image.vertex_managed_gcs_bucket", "")
+	viper.SetDefault("batch_image.vertex_managed_gcs_prefix", "batch-image/{env}/{batch_id}")
+	viper.SetDefault("batch_image.vertex_input_retention_hours", 24)
+	viper.SetDefault("batch_image.vertex_output_retention_hours", 72)
+	viper.SetDefault("batch_image.vertex_batch_prediction_base_url", "")
+	viper.SetDefault("batch_image.vertex_gcs_base_url", "")
+	viper.SetDefault("image_storage.enabled", false)
+	viper.SetDefault("image_storage.region", "auto")
+	viper.SetDefault("image_storage.prefix", "images/")
+	viper.SetDefault("image_storage.force_path_style", false)
+	viper.SetDefault("image_storage.presign_expiry_hours", 24)
+	viper.SetDefault("image_storage.max_download_bytes", 33554432)
+	viper.SetDefault("image_storage.endpoint", "")
+	viper.SetDefault("image_storage.bucket", "")
+	viper.SetDefault("image_storage.access_key_id", "")
+	viper.SetDefault("image_storage.secret_access_key", "")
+	viper.SetDefault("image_storage.public_base_url", "")
+	viper.SetDefault("gateway.live.max_session_duration_seconds", 3600)
 	viper.SetDefault("run_mode", RunModeStandard)
 
 	// Server
+	viper.SetDefault("webauthn.enabled", false)
+	viper.SetDefault("webauthn.rp_display_name", "Sub2API")
+	viper.SetDefault("webauthn.rp_id", "")
+	viper.SetDefault("webauthn.rp_origins", []string{})
 	viper.SetDefault("server.host", "0.0.0.0")
 	viper.SetDefault("server.port", 8080)
 	viper.SetDefault("server.mode", "release")
@@ -1983,7 +2044,9 @@ func setDefaults() {
 		"api.moonshot.ai",
 		"api.moonshot.cn",
 		"open.bigmodel.cn",
-		"api.minimaxi.com",
+		"api.minimaxi.com", // MiniMax CN quota + inference
+		"api.minimax.io",   // MiniMax intl; frozen allowlists must add this host to use the intl site
+		"opencode.ai",
 		"generativelanguage.googleapis.com",
 		"cloudcode-pa.googleapis.com",
 		"*.openai.azure.com",
@@ -2001,6 +2064,7 @@ func setDefaults() {
 	viper.SetDefault("security.csp.policy", DefaultCSPPolicy)
 	viper.SetDefault("security.proxy_probe.insecure_skip_verify", false)
 	viper.SetDefault("security.trust_forwarded_ip_for_api_key_acl", false)
+	viper.SetDefault("security.forwarded_client_ip_headers", []string{})
 	viper.SetDefault("security.api_request_ip_blocklist", []string{})
 	viper.SetDefault("security.api_request_ip_block_action", "block")
 	viper.SetDefault("security.api_request_ip_block_trust_forwarded_ip", false)
@@ -2126,6 +2190,7 @@ func setDefaults() {
 	viper.SetDefault("ops.cleanup.schedule", "0 2 * * *")
 	// Retention days: vNext defaults to 30 days across ops datasets.
 	viper.SetDefault("ops.cleanup.error_log_retention_days", 30)
+	viper.SetDefault("ops.cleanup.system_log_retention_days", 30)
 	viper.SetDefault("ops.cleanup.minute_metrics_retention_days", 30)
 	viper.SetDefault("ops.cleanup.hourly_metrics_retention_days", 30)
 	viper.SetDefault("ops.aggregation.enabled", true)
@@ -2462,6 +2527,7 @@ func setDefaults() {
 // without these registrations, environment-only deployments silently discard
 // the corresponding values during Unmarshal.
 func setEnvReachableDefaults() {
+
 	viper.SetDefault("gateway.buffered_first_meaningful_timeout", 0)
 	viper.SetDefault("gateway.buffered_total_timeout", 0)
 	viper.SetDefault("gateway.forced_codex_instructions_template_file", "")
@@ -2514,6 +2580,108 @@ func setEnvReachableDefaults() {
 }
 
 func (c *Config) Validate() error {
+	if c.WebAuthn.Enabled {
+		c.WebAuthn.RPDisplayName = strings.TrimSpace(c.WebAuthn.RPDisplayName)
+		c.WebAuthn.RPID = strings.ToLower(strings.TrimSpace(c.WebAuthn.RPID))
+		c.WebAuthn.RPOrigins = normalizeStringSlice(c.WebAuthn.RPOrigins)
+		if c.WebAuthn.RPDisplayName == "" {
+			return fmt.Errorf("webauthn.rp_display_name is required when passkeys are enabled")
+		}
+		if c.WebAuthn.RPID == "" {
+			return fmt.Errorf("webauthn.rp_id is required when passkeys are enabled")
+		}
+		if strings.Contains(c.WebAuthn.RPID, "://") || strings.ContainsAny(c.WebAuthn.RPID, "/:") {
+			return fmt.Errorf("webauthn.rp_id must be a domain without scheme, port, or path")
+		}
+		if len(c.WebAuthn.RPOrigins) == 0 {
+			return fmt.Errorf("webauthn.rp_origins must contain at least one origin when passkeys are enabled")
+		}
+		for i, origin := range c.WebAuthn.RPOrigins {
+			u, err := url.Parse(origin)
+			if err != nil || u.Scheme == "" || u.Host == "" {
+				return fmt.Errorf("webauthn.rp_origins contains invalid origin %q", origin)
+			}
+			if u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" {
+				return fmt.Errorf("webauthn.rp_origins entry %q must not include userinfo, path, query, or fragment", origin)
+			}
+			u.Scheme = strings.ToLower(u.Scheme)
+			u.Host = strings.ToLower(u.Host)
+			host := strings.ToLower(u.Hostname())
+			localDevelopment := host == "localhost" || host == "127.0.0.1" || host == "::1"
+			if u.Scheme != "https" && (u.Scheme != "http" || !localDevelopment) {
+				return fmt.Errorf("webauthn.rp_origins entry %q must use HTTPS (HTTP is allowed only for localhost)", origin)
+			}
+			if host != c.WebAuthn.RPID && !strings.HasSuffix(host, "."+c.WebAuthn.RPID) {
+				return fmt.Errorf("webauthn.rp_origins entry %q is not within relying party ID %q", origin, c.WebAuthn.RPID)
+			}
+			c.WebAuthn.RPOrigins[i] = u.Scheme + "://" + u.Host
+		}
+	}
+	forwardedClientIPHeaders, err := NormalizeForwardedClientIPHeaders(c.Security.ForwardedClientIPHeaders)
+	if err != nil {
+		return fmt.Errorf("security.forwarded_client_ip_headers: %w", err)
+	}
+	c.Security.ForwardedClientIPHeaders = forwardedClientIPHeaders
+	c.SetForwardedClientIPSettings(c.Security.TrustForwardedIPForAPIKeyACL, forwardedClientIPHeaders)
+
+	if c.BatchImage.QueueEnabled {
+		if strings.TrimSpace(c.BatchImage.QueueReadyKey) == "" {
+			return fmt.Errorf("batch_image.queue_ready_key must not be empty")
+		}
+		if strings.TrimSpace(c.BatchImage.QueueDelayedKey) == "" {
+			return fmt.Errorf("batch_image.queue_delayed_key must not be empty")
+		}
+		if strings.TrimSpace(c.BatchImage.QueueActiveKey) == "" {
+			return fmt.Errorf("batch_image.queue_active_key must not be empty")
+		}
+		if strings.TrimSpace(c.BatchImage.InflightKeyPrefix) == "" {
+			return fmt.Errorf("batch_image.inflight_key_prefix must not be empty")
+		}
+		if strings.TrimSpace(c.BatchImage.LockKeyPrefix) == "" {
+			return fmt.Errorf("batch_image.lock_key_prefix must not be empty")
+		}
+		if c.BatchImage.InflightTTLSeconds <= 0 {
+			return fmt.Errorf("batch_image.inflight_ttl_seconds must be positive")
+		}
+		if c.BatchImage.JobLockTTLSeconds <= 0 {
+			return fmt.Errorf("batch_image.job_lock_ttl_seconds must be positive")
+		}
+		if c.BatchImage.StaleActiveAfterSeconds <= 0 {
+			return fmt.Errorf("batch_image.stale_active_after_seconds must be positive")
+		}
+		if c.BatchImage.DelayedMoveLimit <= 0 {
+			return fmt.Errorf("batch_image.delayed_move_limit must be positive")
+		}
+		if c.BatchImage.RecoverLimit <= 0 {
+			return fmt.Errorf("batch_image.recover_limit must be positive")
+		}
+	}
+	if c.BatchImage.VertexEnabled {
+		if strings.TrimSpace(c.BatchImage.VertexManagedGCSBucket) == "" {
+			return fmt.Errorf("batch_image.vertex_managed_gcs_bucket must not be empty when vertex is enabled")
+		}
+		if strings.Contains(c.BatchImage.VertexManagedGCSBucket, "://") {
+			return fmt.Errorf("batch_image.vertex_managed_gcs_bucket must be a bucket name, not a URI")
+		}
+		if strings.TrimSpace(c.BatchImage.VertexLocation) == "" {
+			return fmt.Errorf("batch_image.vertex_location must not be empty when vertex is enabled")
+		}
+		if strings.TrimSpace(c.BatchImage.VertexManagedGCSPrefix) == "" {
+			return fmt.Errorf("batch_image.vertex_managed_gcs_prefix must not be empty when vertex is enabled")
+		}
+		if !strings.Contains(c.BatchImage.VertexManagedGCSPrefix, "{batch_id}") {
+			return fmt.Errorf("batch_image.vertex_managed_gcs_prefix must contain {batch_id}")
+		}
+		if c.BatchImage.VertexInputRetentionHours <= 0 {
+			return fmt.Errorf("batch_image.vertex_input_retention_hours must be positive")
+		}
+		if c.BatchImage.VertexOutputRetentionHours <= 0 {
+			return fmt.Errorf("batch_image.vertex_output_retention_hours must be positive")
+		}
+	}
+	if c.Gateway.Live.MaxSessionDurationSeconds <= 0 {
+		c.Gateway.Live.MaxSessionDurationSeconds = 3600
+	}
 	if c.APIKeyAuth.InvalidAbuse.Enabled {
 		if c.APIKeyAuth.InvalidAbuse.Threshold < 10 {
 			return fmt.Errorf("api_key_auth_cache.invalid_abuse.threshold must be at least 10")
@@ -3468,6 +3636,9 @@ func (c *Config) Validate() error {
 	if c.Ops.Cleanup.ErrorLogRetentionDays < 0 {
 		return fmt.Errorf("ops.cleanup.error_log_retention_days must be non-negative")
 	}
+	if c.Ops.Cleanup.Enabled && c.Ops.Cleanup.SystemLogRetentionDays <= 0 {
+		return fmt.Errorf("ops.cleanup.system_log_retention_days must be positive when ops cleanup is enabled")
+	}
 	if c.Ops.Cleanup.MinuteMetricsRetentionDays < 0 {
 		return fmt.Errorf("ops.cleanup.minute_metrics_retention_days must be non-negative")
 	}
@@ -3650,4 +3821,187 @@ func warnIfInsecureURL(field, raw string) {
 	if strings.EqualFold(u.Scheme, "http") {
 		slog.Warn("url uses http scheme; use https in production to avoid token leakage", "field", field)
 	}
+}
+
+type BatchImageConfig struct {
+	Enabled                           bool   `mapstructure:"enabled"`
+	MaxItemsPerJobDefault             int    `mapstructure:"max_items_per_job_default"`
+	MaxItemsPerJobTrial               int    `mapstructure:"max_items_per_job_trial"`
+	MaxOutputImagesPerJob             int    `mapstructure:"max_output_images_per_job"`
+	MaxOutputImagesPerItem            int    `mapstructure:"max_output_images_per_item"`
+	MaxPromptCharsPerItem             int    `mapstructure:"max_prompt_chars_per_item"`
+	MaxReferenceImagesPerJob          int    `mapstructure:"max_reference_images_per_job"`
+	MaxReferenceInlineBytesPerJob     int    `mapstructure:"max_reference_inline_bytes_per_job"`
+	DefaultResponseMimeType           string `mapstructure:"default_response_mime_type"`
+	DefaultImageSize                  string `mapstructure:"default_image_size"`
+	MaxDownloadItemsZip               int    `mapstructure:"max_download_items_zip"`
+	MaxDownloadBytesPerRequest        int64  `mapstructure:"max_download_bytes_per_request"`
+	MaxDownloadDurationSeconds        int    `mapstructure:"max_download_duration_seconds"`
+	MaxDownloadConcurrencyPerUser     int    `mapstructure:"max_download_concurrency_per_user"`
+	InputRetentionAfterTerminalHours  int    `mapstructure:"input_retention_after_terminal_hours"`
+	OutputRetentionAfterTerminalHours int    `mapstructure:"output_retention_after_terminal_hours"`
+	OutputRetentionMaxDays            int    `mapstructure:"output_retention_max_days"`
+	CleanupIntervalMinutes            int    `mapstructure:"cleanup_interval_minutes"`
+	CleanupBatchSize                  int    `mapstructure:"cleanup_batch_size"`
+	QueueEnabled                      bool   `mapstructure:"queue_enabled"`
+	QueueReadyKey                     string `mapstructure:"queue_ready_key"`
+	QueueDelayedKey                   string `mapstructure:"queue_delayed_key"`
+	QueueActiveKey                    string `mapstructure:"queue_active_key"`
+	InflightKeyPrefix                 string `mapstructure:"inflight_key_prefix"`
+	LockKeyPrefix                     string `mapstructure:"lock_key_prefix"`
+	IdempotencyKeyPrefix              string `mapstructure:"idempotency_key_prefix"`
+	InflightTTLSeconds                int    `mapstructure:"inflight_ttl_seconds"`
+	JobLockTTLSeconds                 int    `mapstructure:"job_lock_ttl_seconds"`
+	DefaultRequeueDelaySeconds        int    `mapstructure:"default_requeue_delay_seconds"`
+	ErrorRetryDelaySeconds            int    `mapstructure:"error_retry_delay_seconds"`
+	LockConflictDelaySeconds          int    `mapstructure:"lock_conflict_delay_seconds"`
+	StaleActiveAfterSeconds           int    `mapstructure:"stale_active_after_seconds"`
+	DelayedMoverIntervalSeconds       int    `mapstructure:"delayed_mover_interval_seconds"`
+	RecoveryIntervalSeconds           int    `mapstructure:"recovery_interval_seconds"`
+	DelayedMoveLimit                  int    `mapstructure:"delayed_move_limit"`
+	RecoverLimit                      int    `mapstructure:"recover_limit"`
+	VertexEnabled                     bool   `mapstructure:"vertex_enabled"`
+	VertexProjectID                   string `mapstructure:"vertex_project_id"`
+	VertexLocation                    string `mapstructure:"vertex_location"`
+	// VertexManagedGCSBucket is a server-owned bucket for batch JSONL input/output.
+	// Disable Cloud Storage soft delete on this bucket to avoid retaining deleted batch objects.
+	VertexManagedGCSBucket       string `mapstructure:"vertex_managed_gcs_bucket"`
+	VertexManagedGCSPrefix       string `mapstructure:"vertex_managed_gcs_prefix"`
+	VertexInputRetentionHours    int    `mapstructure:"vertex_input_retention_hours"`
+	VertexOutputRetentionHours   int    `mapstructure:"vertex_output_retention_hours"`
+	VertexBatchPredictionBaseURL string `mapstructure:"vertex_batch_prediction_base_url"`
+	VertexGCSBaseURL             string `mapstructure:"vertex_gcs_base_url"`
+}
+
+// ImageStorageConfig 配置异步图片任务结果上传的 S3 兼容对象存储。
+// Enabled 同时作为异步图片任务功能的总开关：未启用或未配置完整凭证时，
+// 异步生图接口整体禁用，避免把上游返回的大 base64 结果塞进 Redis。
+type ImageStorageConfig struct {
+	Enabled         bool   `mapstructure:"enabled"`
+	Endpoint        string `mapstructure:"endpoint"` // e.g. https://<account_id>.r2.cloudflarestorage.com
+	Region          string `mapstructure:"region"`   // R2 用 "auto"
+	Bucket          string `mapstructure:"bucket"`
+	AccessKeyID     string `mapstructure:"access_key_id"`
+	SecretAccessKey string `mapstructure:"secret_access_key"`
+	Prefix          string `mapstructure:"prefix"`               // S3 key 前缀，如 "images/"
+	ForcePathStyle  bool   `mapstructure:"force_path_style"`     // MinIO/路径风格桶
+	PublicBaseURL   string `mapstructure:"public_base_url"`      // 配了则返回 public_base_url/key 直链；否则 presigned
+	PresignExpiry   int    `mapstructure:"presign_expiry_hours"` // public_base_url 为空时的 presigned 过期时长(小时)
+	MaxDownloadByte int64  `mapstructure:"max_download_bytes"`   // 下载上游 url 图片的字节上限
+}
+
+// IsConfigured 检查对象存储必要字段是否已配置
+func (c *ImageStorageConfig) IsConfigured() bool {
+	return c.Bucket != "" && c.AccessKeyID != "" && c.SecretAccessKey != ""
+}
+
+// Active 返回异步图片任务是否可用：开关打开且凭证齐全
+func (c *ImageStorageConfig) Active() bool {
+	return c.Enabled && c.IsConfigured()
+}
+
+// MissingCredentialKeys 返回 IsConfigured 所缺的配置键名。
+// 用于启动日志：只说"凭证不完整"会让运维以为自己漏填了，而实际可能是值填了却没被读到。
+func (c *ImageStorageConfig) MissingCredentialKeys() []string {
+	var missing []string
+	if c.Bucket == "" {
+		missing = append(missing, "image_storage.bucket")
+	}
+	if c.AccessKeyID == "" {
+		missing = append(missing, "image_storage.access_key_id")
+	}
+	if c.SecretAccessKey == "" {
+		missing = append(missing, "image_storage.secret_access_key")
+	}
+	return missing
+}
+
+type GatewayLiveConfig struct {
+	// MaxSessionDurationSeconds 是 Live 会话的硬上限。
+	MaxSessionDurationSeconds int `mapstructure:"max_session_duration_seconds"`
+}
+
+// WebAuthnConfig configures this deployment as a WebAuthn relying party.
+// RPID and RPOrigins are security boundaries and must never be inferred from
+// untrusted request Host or Origin headers.
+type WebAuthnConfig struct {
+	Enabled       bool     `mapstructure:"enabled"`
+	RPDisplayName string   `mapstructure:"rp_display_name"`
+	RPID          string   `mapstructure:"rp_id"`
+	RPOrigins     []string `mapstructure:"rp_origins"`
+}
+
+const MaxForwardedClientIPHeaders = 16
+
+func NormalizeForwardedClientIPHeaders(headers []string) ([]string, error) {
+	normalized := make([]string, 0, len(headers))
+	seen := make(map[string]struct{}, len(headers))
+	for _, header := range headers {
+		header = strings.TrimSpace(header)
+		if !httpguts.ValidHeaderFieldName(header) {
+			return nil, fmt.Errorf("invalid HTTP header field name %q", header)
+		}
+		canonical := textproto.CanonicalMIMEHeaderKey(header)
+		key := strings.ToLower(canonical)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		if len(normalized) == MaxForwardedClientIPHeaders {
+			return nil, fmt.Errorf("forwarded client IP headers must contain at most %d unique names", MaxForwardedClientIPHeaders)
+		}
+		seen[key] = struct{}{}
+		normalized = append(normalized, canonical)
+	}
+	return normalized, nil
+}
+
+type ForwardedClientIPSettings struct {
+	TrustForwardedIP bool
+	Headers          []string
+}
+
+func cloneForwardedClientIPHeaders(headers []string) []string {
+	if len(headers) == 0 {
+		return []string{}
+	}
+	return append([]string(nil), headers...)
+}
+
+func (c *Config) ForwardedClientIPSettings() ForwardedClientIPSettings {
+	if c == nil {
+		return ForwardedClientIPSettings{Headers: []string{}}
+	}
+	live := c.Security.forwardedClientIPSettingsLive
+	if live != nil {
+		if snapshot := live.Load(); snapshot != nil {
+			return ForwardedClientIPSettings{
+				TrustForwardedIP: snapshot.TrustForwardedIP,
+				Headers:          cloneForwardedClientIPHeaders(snapshot.Headers),
+			}
+		}
+	}
+	return ForwardedClientIPSettings{
+		TrustForwardedIP: c.Security.TrustForwardedIPForAPIKeyACL,
+		Headers:          cloneForwardedClientIPHeaders(c.Security.ForwardedClientIPHeaders),
+	}
+}
+
+// ForwardedClientIPTrustEnabled reports whether the legacy forwarded-header
+// compatibility mode currently overrides server.trusted_proxies.
+func (c *Config) ForwardedClientIPTrustEnabled() bool {
+	return c != nil && c.TrustForwardedIPForAPIKeyACL()
+}
+
+func (c *Config) SetForwardedClientIPSettings(enabled bool, headers []string) {
+	if c == nil {
+		return
+	}
+	headers = cloneForwardedClientIPHeaders(headers)
+	if c.Security.forwardedClientIPSettingsLive == nil {
+		c.Security.forwardedClientIPSettingsLive = &atomic.Pointer[ForwardedClientIPSettings]{}
+	}
+	c.Security.forwardedClientIPSettingsLive.Store(&ForwardedClientIPSettings{
+		TrustForwardedIP: enabled,
+		Headers:          headers,
+	})
 }

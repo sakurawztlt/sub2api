@@ -52,7 +52,7 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 	}
 
 	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
+	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
 	if err := s.ensureOpenAIAlphaSearchAuthMetadata(ctx, account, token, proxyURL); err != nil {
@@ -84,7 +84,7 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 
 	if resp.StatusCode >= http.StatusBadRequest {
 		upstreamMessage := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
-		if s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMessage, respBody) ||
+		if s.shouldFailoverOpenAIUpstreamResponse(account, resp.StatusCode, upstreamMessage, respBody) ||
 			isOpenAIAlphaSearchEndpointUnsupported(account, resp.StatusCode) {
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
 			shouldDisable := false
@@ -115,11 +115,12 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 		return nil, nil
 	}
 	return &OpenAIForwardResult{
-		RequestID:      strings.TrimSpace(resp.Header.Get("x-request-id")),
-		Model:          requestedModel,
-		UpstreamModel:  upstreamModel,
-		Duration:       time.Since(upstreamStart),
-		WebSearchCalls: 1,
+		RequestID:       strings.TrimSpace(resp.Header.Get("x-request-id")),
+		UpstreamHeaders: resp.Header,
+		Model:           requestedModel,
+		UpstreamModel:   upstreamModel,
+		Duration:        time.Since(upstreamStart),
+		WebSearchCalls:  1,
 	}, nil
 }
 
@@ -160,7 +161,7 @@ func (s *OpenAIGatewayService) forwardAlphaSearchViaResponsesWebSearch(
 	}
 	if resp.StatusCode >= http.StatusBadRequest {
 		upstreamMessage := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
-		if s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMessage, respBody) {
+		if s.shouldFailoverOpenAIUpstreamResponse(account, resp.StatusCode, upstreamMessage, respBody) {
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
 			shouldDisable := false
 			if shouldApplyOpenAIAlphaSearchAccountErrorSideEffects(resp.StatusCode) {
@@ -195,6 +196,7 @@ func (s *OpenAIGatewayService) forwardAlphaSearchViaResponsesWebSearch(
 	c.Data(http.StatusOK, "application/json", alphaRespBody)
 	return &OpenAIForwardResult{
 		RequestID:        strings.TrimSpace(resp.Header.Get("x-request-id")),
+		UpstreamHeaders:  resp.Header,
 		Model:            requestedModel,
 		UpstreamModel:    upstreamModel,
 		UpstreamEndpoint: "/v1/responses",

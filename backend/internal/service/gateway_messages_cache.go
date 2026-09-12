@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
@@ -134,5 +135,8 @@ func injectCacheControlOnLastContentBlock(body []byte, idx int, msg *gjson.Resul
 }
 
 func mustJSONString(s string) string {
-	return fmt.Sprintf("%q", s)
+	// Go string quoting can emit non-JSON escapes such as \x7f or \a.
+	// Marshaling a string cannot fail.
+	encoded, _ := json.Marshal(s)
+	return string(encoded)
 }

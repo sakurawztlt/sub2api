@@ -296,3 +296,64 @@ func TestWriteOpenAIUpstreamClientError_PayloadShape(t *testing.T) {
 		})
 	}
 }
+
+func TestFailoverOpenAIUpstreamHTTPError_ModelNotFoundIsNextAccountEligible(t *testing.T) {
+	c, _ := newOpenAIUpstreamErrorTestContext(t)
+	svc := &OpenAIGatewayService{cfg: &config.Config{}, accountRepo: &modelNotFoundManagedAccountRepo{}}
+	account := &Account{ID: 42, Name: "compatible", Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+	body := []byte(`{"error":{"code":"model_not_found","message":"model not found"}}`)
+	resp := newOpenAIUpstreamErrorResponse(http.StatusBadRequest, string(body))
+
+	failoverErr := svc.failoverOpenAIUpstreamHTTPError(
+		context.Background(), c, account, resp, body, "model not found", "missing-model",
+	)
+
+	require.NotNil(t, failoverErr)
+	require.Equal(t, http.StatusBadRequest, failoverErr.StatusCode)
+	require.Equal(t, body, failoverErr.ResponseBody)
+	require.True(t, failoverErr.ShouldRetryNextAccount())
+	require.False(t, IsResponseCommitted(c), "failover must remain eligible before writing downstream")
+}
+
+func TestOpenAICompatibleModelNotFound400FailoverScope(t *testing.T) {
+	svc := &OpenAIGatewayService{accountRepo: &modelNotFoundManagedAccountRepo{}}
+	body := []byte(`{"error":{"code":"model_not_found","message":"model not found"}}`)
+
+	for _, tc := range []struct {
+		name    string
+		account *Account
+		want    bool
+	}{
+		{name: "openai api key", account: &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, want: true},
+		{name: "compatible provider", account: &Account{Platform: PlatformDeepseek, Type: AccountTypeAPIKey}, want: true},
+		{name: "anthropic account", account: &Account{Platform: PlatformAnthropic, Type: AccountTypeAPIKey}, want: false},
+		{name: "missing account", account: nil, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, svc.shouldFailoverOpenAIUpstreamResponse(
+				tc.account, http.StatusBadRequest, "model not found", body,
+			))
+		})
+	}
+
+	require.False(t, svc.shouldFailoverOpenAIUpstreamResponse(
+		&Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey},
+		http.StatusBadRequest,
+		"Invalid value for temperature",
+		[]byte(`{"error":{"code":"invalid_request_error","message":"Invalid value for temperature"}}`),
+	))
+}
+
+func TestOpenAICompatibleModelNotFound400WithoutManagedCandidatesRemainsTerminal(t *testing.T) {
+	svc := &OpenAIGatewayService{}
+	body := []byte(`{"error":{"code":"model_not_found","message":"model not found"}}`)
+
+	require.False(t, svc.shouldFailoverOpenAIUpstreamResponse(
+		&Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+		http.StatusBadRequest,
+		"model not found",
+		body,
+	))
+}
+
+type modelNotFoundManagedAccountRepo struct{ AccountRepository }

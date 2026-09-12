@@ -67,7 +67,7 @@ func TestShouldFailoverOpenAIUpstreamResponseForAccount_404APIKeyNoFailover(t *t
 // internal paths where account scope isn't known).
 func TestShouldFailoverOpenAIUpstreamResponse_404StillNotFailover(t *testing.T) {
 	s := &OpenAIGatewayService{}
-	if s.shouldFailoverOpenAIUpstreamResponse(404, "Not Found", []byte(`{"error":{"message":"Not Found"}}`)) {
+	if s.shouldFailoverOpenAIUpstreamResponse(nil, 404, "Not Found", []byte(`{"error":{"message":"Not Found"}}`)) {
 		t.Errorf("legacy shouldFailoverOpenAIUpstreamResponse 404: regression — must NOT failover (account-aware variant handles 404)")
 	}
 }

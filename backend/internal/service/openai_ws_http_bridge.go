@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -310,12 +312,14 @@ func (c *openAIWSToolCallReplayCollector) AddEvent(eventType string, message []b
 	}
 }
 
+// Items/AllItems 返回浅拷贝头数组；正文由 collector 独立分配且此后不可变，
+// 调用方按 replay 所有权不变式共享持有。
 func (c *openAIWSToolCallReplayCollector) Items() []json.RawMessage {
-	return cloneOpenAIWSRawMessages(c.items)
+	return slices.Clone(c.items)
 }
 
 func (c *openAIWSToolCallReplayCollector) AllItems() []json.RawMessage {
-	return cloneOpenAIWSRawMessages(c.allItems)
+	return slices.Clone(c.allItems)
 }
 
 func (c *openAIWSToolCallReplayCollector) addAllItem(item gjson.Result) {
@@ -554,7 +558,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	SetOpsUpstreamModel(c, actualModel)
 
 	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
+	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
 	if c != nil {
@@ -588,6 +592,13 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, openAIWSHTTPBridgeErrorBodyLimitBytes))
 		_ = resp.Body.Close()
+		markOpenAICyberPolicyEvent(c, respBody, resp.StatusCode, nil)
+		if resp.StatusCode == http.StatusBadRequest &&
+			extractUpstreamErrorCode(respBody) == openAIWSFallbackReasonInvalidEncryptedContent {
+			s.markOpenAIWSInvalidEncryptedContentLineageFromPayload(
+				c, body, "ingress_ws_http_bridge_invalid_encrypted_lineage_mark", account.ID, turn,
+			)
+		}
 		retryBody, retryReason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, body, respBody)
 		if retryErr != nil {
 			return nil, fmt.Errorf("normalize websocket http bridge rejected field retry: %w", retryErr)
@@ -810,6 +821,9 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		if openAIWSMessageShouldParseUsage(eventType, upstreamMessage) {
 			parseOpenAIWSResponseUsageFromCompletedEvent(upstreamMessage, &usage)
 		}
+		if eventType == "error" || eventType == "response.failed" {
+			markOpenAICyberPolicyEvent(c, upstreamMessage, http.StatusOK, &usage)
+		}
 		imageCounter.AddSSEData(upstreamMessage)
 
 		if needModelReplace && len(mappedModelBytes) > 0 && openAIWSEventMayContainModel(eventType) && strings.Contains(trimmedData, mappedModel) {
@@ -844,6 +858,11 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 				shouldFailover = openAIStreamErrorEventShouldFailover(upstreamMessage, errMessage)
 				if account.Platform == PlatformGrok {
 					statusCode = openAIWSErrorHTTPStatusFromRaw(errCodeRaw, errTypeRaw)
+				}
+				if reason, _ := classifyOpenAIWSErrorEventFromRaw(errCodeRaw, errTypeRaw, errMessage); reason == openAIWSFallbackReasonInvalidEncryptedContent {
+					s.markOpenAIWSInvalidEncryptedContentLineageFromPayload(
+						c, body, "ingress_ws_http_bridge_invalid_encrypted_lineage_mark", account.ID, turn,
+					)
 				}
 			}
 			requestScopedCapacity := isOpenAIRequestScopedCapacityShed(errMessage, upstreamMessage)
@@ -1028,4 +1047,13 @@ func resolveGrokWSUpstreamModel(account *Account, body []byte, originalModel str
 		upstreamModel = grokDefaultResponsesModel
 	}
 	return upstreamModel
+}
+
+// ResolveOpenAIWSClientFirstMessageTimeout returns the effective client ingress deadline.
+func ResolveOpenAIWSClientFirstMessageTimeout(cfg *config.Config) time.Duration {
+	seconds := config.DefaultOpenAIWSClientFirstMessageTimeoutSeconds
+	if cfg != nil && cfg.Gateway.OpenAIWS.ClientFirstMessageTimeoutSeconds > 0 {
+		seconds = cfg.Gateway.OpenAIWS.ClientFirstMessageTimeoutSeconds
+	}
+	return time.Duration(seconds) * time.Second
 }

@@ -56,6 +56,8 @@ const (
 	FieldDefaultValidityDays = "default_validity_days"
 	// FieldAllowImageGeneration holds the string denoting the allow_image_generation field in the database.
 	FieldAllowImageGeneration = "allow_image_generation"
+	// FieldAllowBatchImageGeneration holds the string denoting the allow_batch_image_generation field in the database.
+	FieldAllowBatchImageGeneration = "allow_batch_image_generation"
 	// FieldImageRateIndependent holds the string denoting the image_rate_independent field in the database.
 	FieldImageRateIndependent = "image_rate_independent"
 	// FieldImageRateMultiplier holds the string denoting the image_rate_multiplier field in the database.
@@ -66,6 +68,10 @@ const (
 	FieldImagePrice2k = "image_price_2k"
 	// FieldImagePrice4k holds the string denoting the image_price_4k field in the database.
 	FieldImagePrice4k = "image_price_4k"
+	// FieldBatchImageDiscountMultiplier holds the string denoting the batch_image_discount_multiplier field in the database.
+	FieldBatchImageDiscountMultiplier = "batch_image_discount_multiplier"
+	// FieldBatchImageHoldMultiplier holds the string denoting the batch_image_hold_multiplier field in the database.
+	FieldBatchImageHoldMultiplier = "batch_image_hold_multiplier"
 	// FieldVideoRateIndependent holds the string denoting the video_rate_independent field in the database.
 	FieldVideoRateIndependent = "video_rate_independent"
 	// FieldVideoRateMultiplier holds the string denoting the video_rate_multiplier field in the database.
@@ -78,6 +84,8 @@ const (
 	FieldVideoPrice1080p = "video_price_1080p"
 	// FieldVideoModelPrices holds the string denoting the video_model_prices field in the database.
 	FieldVideoModelPrices = "video_model_prices"
+	// FieldWebSearchPricePerCall holds the string denoting the web_search_price_per_call field in the database.
+	FieldWebSearchPricePerCall = "web_search_price_per_call"
 	// FieldSearchPricePer1k holds the string denoting the search_price_per_1k field in the database.
 	FieldSearchPricePer1k = "search_price_per_1k"
 	// FieldAudioRealtimePricePerMin holds the string denoting the audio_realtime_price_per_min field in the database.
@@ -108,6 +116,8 @@ const (
 	FieldSortOrder = "sort_order"
 	// FieldAllowMessagesDispatch holds the string denoting the allow_messages_dispatch field in the database.
 	FieldAllowMessagesDispatch = "allow_messages_dispatch"
+	// FieldAllowLive holds the string denoting the allow_live field in the database.
+	FieldAllowLive = "allow_live"
 	// FieldForceOpenaiFast holds the string denoting the force_openai_fast field in the database.
 	FieldForceOpenaiFast = "force_openai_fast"
 	// FieldFreeOpenaiFast holds the string denoting the free_openai_fast field in the database.
@@ -120,8 +130,10 @@ const (
 	FieldDefaultMappedModel = "default_mapped_model"
 	// FieldMessagesDispatchModelConfig holds the string denoting the messages_dispatch_model_config field in the database.
 	FieldMessagesDispatchModelConfig = "messages_dispatch_model_config"
-	// FieldModelsListConfig holds the string denoting the models_list_config field in the database.
-	FieldModelsListConfig = "models_list_config"
+	// FieldModelAllowlist holds the string denoting the model_allowlist field in the database.
+	FieldModelAllowlist = "model_allowlist"
+	// FieldCodexModelsManifestConfig holds the string denoting the codex_models_manifest_config field in the database.
+	FieldCodexModelsManifestConfig = "codex_models_manifest_config"
 	// FieldRpmLimit holds the string denoting the rpm_limit field in the database.
 	FieldRpmLimit = "rpm_limit"
 	// FieldMaxReasoningEffort holds the string denoting the max_reasoning_effort field in the database.
@@ -231,17 +243,21 @@ var Columns = []string{
 	FieldMonthlyLimitUsd,
 	FieldDefaultValidityDays,
 	FieldAllowImageGeneration,
+	FieldAllowBatchImageGeneration,
 	FieldImageRateIndependent,
 	FieldImageRateMultiplier,
 	FieldImagePrice1k,
 	FieldImagePrice2k,
 	FieldImagePrice4k,
+	FieldBatchImageDiscountMultiplier,
+	FieldBatchImageHoldMultiplier,
 	FieldVideoRateIndependent,
 	FieldVideoRateMultiplier,
 	FieldVideoPrice480p,
 	FieldVideoPrice720p,
 	FieldVideoPrice1080p,
 	FieldVideoModelPrices,
+	FieldWebSearchPricePerCall,
 	FieldSearchPricePer1k,
 	FieldAudioRealtimePricePerMin,
 	FieldAudioTtsPricePerMillionChars,
@@ -257,13 +273,15 @@ var Columns = []string{
 	FieldSupportedModelScopes,
 	FieldSortOrder,
 	FieldAllowMessagesDispatch,
+	FieldAllowLive,
 	FieldForceOpenaiFast,
 	FieldFreeOpenaiFast,
 	FieldRequireOauthOnly,
 	FieldRequirePrivacySet,
 	FieldDefaultMappedModel,
 	FieldMessagesDispatchModelConfig,
-	FieldModelsListConfig,
+	FieldModelAllowlist,
+	FieldCodexModelsManifestConfig,
 	FieldRpmLimit,
 	FieldMaxReasoningEffort,
 	FieldMaxReasoningEffortOverLimit,
@@ -342,10 +360,16 @@ var (
 	DefaultDefaultValidityDays int
 	// DefaultAllowImageGeneration holds the default value on creation for the "allow_image_generation" field.
 	DefaultAllowImageGeneration bool
+	// DefaultAllowBatchImageGeneration holds the default value on creation for the "allow_batch_image_generation" field.
+	DefaultAllowBatchImageGeneration bool
 	// DefaultImageRateIndependent holds the default value on creation for the "image_rate_independent" field.
 	DefaultImageRateIndependent bool
 	// DefaultImageRateMultiplier holds the default value on creation for the "image_rate_multiplier" field.
 	DefaultImageRateMultiplier float64
+	// DefaultBatchImageDiscountMultiplier holds the default value on creation for the "batch_image_discount_multiplier" field.
+	DefaultBatchImageDiscountMultiplier float64
+	// DefaultBatchImageHoldMultiplier holds the default value on creation for the "batch_image_hold_multiplier" field.
+	DefaultBatchImageHoldMultiplier float64
 	// DefaultVideoRateIndependent holds the default value on creation for the "video_rate_independent" field.
 	DefaultVideoRateIndependent bool
 	// DefaultVideoRateMultiplier holds the default value on creation for the "video_rate_multiplier" field.
@@ -372,6 +396,8 @@ var (
 	DefaultSortOrder int
 	// DefaultAllowMessagesDispatch holds the default value on creation for the "allow_messages_dispatch" field.
 	DefaultAllowMessagesDispatch bool
+	// DefaultAllowLive holds the default value on creation for the "allow_live" field.
+	DefaultAllowLive bool
 	// DefaultForceOpenaiFast holds the default value on creation for the "force_openai_fast" field.
 	DefaultForceOpenaiFast bool
 	// DefaultFreeOpenaiFast holds the default value on creation for the "free_openai_fast" field.
@@ -386,8 +412,10 @@ var (
 	DefaultMappedModelValidator func(string) error
 	// DefaultMessagesDispatchModelConfig holds the default value on creation for the "messages_dispatch_model_config" field.
 	DefaultMessagesDispatchModelConfig domain.OpenAIMessagesDispatchModelConfig
-	// DefaultModelsListConfig holds the default value on creation for the "models_list_config" field.
-	DefaultModelsListConfig domain.GroupModelsListConfig
+	// DefaultModelAllowlist holds the default value on creation for the "model_allowlist" field.
+	DefaultModelAllowlist domain.GroupModelAllowlist
+	// DefaultCodexModelsManifestConfig holds the default value on creation for the "codex_models_manifest_config" field.
+	DefaultCodexModelsManifestConfig domain.GroupCodexModelsManifestConfig
 	// DefaultRpmLimit holds the default value on creation for the "rpm_limit" field.
 	DefaultRpmLimit int
 	// DefaultMaxReasoningEffort holds the default value on creation for the "max_reasoning_effort" field.
@@ -516,6 +544,11 @@ func ByAllowImageGeneration(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldAllowImageGeneration, opts...).ToFunc()
 }
 
+// ByAllowBatchImageGeneration orders the results by the allow_batch_image_generation field.
+func ByAllowBatchImageGeneration(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAllowBatchImageGeneration, opts...).ToFunc()
+}
+
 // ByImageRateIndependent orders the results by the image_rate_independent field.
 func ByImageRateIndependent(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldImageRateIndependent, opts...).ToFunc()
@@ -541,6 +574,16 @@ func ByImagePrice4k(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldImagePrice4k, opts...).ToFunc()
 }
 
+// ByBatchImageDiscountMultiplier orders the results by the batch_image_discount_multiplier field.
+func ByBatchImageDiscountMultiplier(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBatchImageDiscountMultiplier, opts...).ToFunc()
+}
+
+// ByBatchImageHoldMultiplier orders the results by the batch_image_hold_multiplier field.
+func ByBatchImageHoldMultiplier(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldBatchImageHoldMultiplier, opts...).ToFunc()
+}
+
 // ByVideoRateIndependent orders the results by the video_rate_independent field.
 func ByVideoRateIndependent(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldVideoRateIndependent, opts...).ToFunc()
@@ -564,6 +607,11 @@ func ByVideoPrice720p(opts ...sql.OrderTermOption) OrderOption {
 // ByVideoPrice1080p orders the results by the video_price_1080p field.
 func ByVideoPrice1080p(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldVideoPrice1080p, opts...).ToFunc()
+}
+
+// ByWebSearchPricePerCall orders the results by the web_search_price_per_call field.
+func ByWebSearchPricePerCall(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldWebSearchPricePerCall, opts...).ToFunc()
 }
 
 // BySearchPricePer1k orders the results by the search_price_per_1k field.
@@ -624,6 +672,11 @@ func BySortOrder(opts ...sql.OrderTermOption) OrderOption {
 // ByAllowMessagesDispatch orders the results by the allow_messages_dispatch field.
 func ByAllowMessagesDispatch(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldAllowMessagesDispatch, opts...).ToFunc()
+}
+
+// ByAllowLive orders the results by the allow_live field.
+func ByAllowLive(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldAllowLive, opts...).ToFunc()
 }
 
 // ByForceOpenaiFast orders the results by the force_openai_fast field.

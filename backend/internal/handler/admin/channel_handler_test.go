@@ -3,10 +3,14 @@
 package admin
 
 import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -449,10 +453,11 @@ func TestPricingRequestToService_TimePricingNil(t *testing.T) {
 // 避免渠道倍率意外污染账号成本口径。
 func TestPricingRequestToService_MultipliersGatedByFlag(t *testing.T) {
 	req := channelModelPricingRequest{
-		Models:         []string{"gpt-5"},
-		BillingMode:    "token",
-		FastMultiplier: float64Ptr(2.5),
-		FlexMultiplier: float64Ptr(0.5),
+		Models:                       []string{"gpt-5"},
+		BillingMode:                  "token",
+		FastMultiplier:               float64Ptr(2.5),
+		FlexMultiplier:               float64Ptr(0.5),
+		MaxReasoningEffortMultiplier: float64Ptr(3),
 		Intervals: []pricingIntervalRequest{{
 			MinTokens:            272000,
 			InputMultiplier:      float64Ptr(2),
@@ -465,6 +470,7 @@ func TestPricingRequestToService_MultipliersGatedByFlag(t *testing.T) {
 	allowed := pricingRequestToService([]channelModelPricingRequest{req}, true)
 	require.Equal(t, float64Ptr(2.5), allowed[0].FastMultiplier)
 	require.Equal(t, float64Ptr(0.5), allowed[0].FlexMultiplier)
+	require.Equal(t, float64Ptr(3), allowed[0].MaxReasoningEffortMultiplier)
 	require.Equal(t, float64Ptr(2), allowed[0].Intervals[0].InputMultiplier)
 	require.Equal(t, float64Ptr(1.5), allowed[0].Intervals[0].OutputMultiplier)
 	require.Equal(t, float64Ptr(2), allowed[0].Intervals[0].CacheWriteMultiplier)
@@ -473,6 +479,7 @@ func TestPricingRequestToService_MultipliersGatedByFlag(t *testing.T) {
 	dropped := pricingRequestToService([]channelModelPricingRequest{req}, false)
 	require.Nil(t, dropped[0].FastMultiplier)
 	require.Nil(t, dropped[0].FlexMultiplier)
+	require.Nil(t, dropped[0].MaxReasoningEffortMultiplier)
 	require.Nil(t, dropped[0].Intervals[0].InputMultiplier)
 	require.Nil(t, dropped[0].Intervals[0].OutputMultiplier)
 	require.Nil(t, dropped[0].Intervals[0].CacheWriteMultiplier)
@@ -501,4 +508,109 @@ func TestPricingToResponse_TimePricing(t *testing.T) {
 func TestPricingToResponse_TimePricingNil(t *testing.T) {
 	got := pricingToResponse(&service.ChannelModelPricing{})
 	require.Nil(t, got.TimePricing)
+}
+
+// ---------------------------------------------------------------------------
+// 3. SyncPricingModels handler
+// ---------------------------------------------------------------------------
+
+func setupSyncPricingModelsRouter(pricingSvc *service.PricingService) *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	h := &ChannelHandler{pricingService: pricingSvc}
+	router.GET("/channels/pricing/sync-models", h.SyncPricingModels)
+	return router
+}
+
+func TestSyncPricingModels_MissingPlatform(t *testing.T) {
+	svc := service.NewPricingService(nil, nil)
+	router := setupSyncPricingModelsRouter(svc)
+
+	req := httptest.NewRequest(http.MethodGet, "/channels/pricing/sync-models", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestSyncPricingModels_UnsupportedPlatform(t *testing.T) {
+	svc := service.NewPricingService(nil, nil)
+	router := setupSyncPricingModelsRouter(svc)
+
+	req := httptest.NewRequest(http.MethodGet, "/channels/pricing/sync-models?platform=unknown", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestSyncPricingModels_ValidPlatform_EmptyService(t *testing.T) {
+	svc := service.NewPricingService(nil, nil)
+	router := setupSyncPricingModelsRouter(svc)
+
+	for _, platform := range []string{"anthropic", "openai", "gemini", "antigravity", "grok", "kimi", "zhipu", "deepseek", "minimax"} {
+		req := httptest.NewRequest(http.MethodGet, "/channels/pricing/sync-models?platform="+platform, nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code, "platform=%s", platform)
+
+		var body struct {
+			Data struct {
+				Models []string `json:"models"`
+			} `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+		require.NotNil(t, body.Data.Models, "models must not be null for platform=%s", platform)
+	}
+}
+
+func setupModelDefaultPricingRouter() *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	h := &ChannelHandler{billingService: service.NewBillingService(nil, nil)}
+	router.GET("/channels/model-pricing", h.GetModelDefaultPricing)
+	return router
+}
+
+func TestGetModelDefaultPricing_ReturnsFable51CacheTTLs(t *testing.T) {
+	router := setupModelDefaultPricingRouter()
+	req := httptest.NewRequest(http.MethodGet, "/channels/model-pricing?model=claude-fable-5-1", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var body struct {
+		Data struct {
+			Found                        bool     `json:"found"`
+			CacheWritePrice              float64  `json:"cache_write_price"`
+			CacheWrite1hPrice            *float64 `json:"cache_write_1h_price"`
+			MaxReasoningEffortMultiplier *float64 `json:"max_reasoning_effort_multiplier"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	require.True(t, body.Data.Found)
+	require.InDelta(t, 12.5e-6, body.Data.CacheWritePrice, 1e-12)
+	require.NotNil(t, body.Data.CacheWrite1hPrice)
+	require.InDelta(t, 20e-6, *body.Data.CacheWrite1hPrice, 1e-12)
+	require.NotNil(t, body.Data.MaxReasoningEffortMultiplier)
+	require.Equal(t, 3.0, *body.Data.MaxReasoningEffortMultiplier)
+}
+
+func TestGetModelDefaultPricing_OmitsUnsupportedCache1hPrice(t *testing.T) {
+	router := setupModelDefaultPricingRouter()
+	req := httptest.NewRequest(http.MethodGet, "/channels/model-pricing?model=claude-sonnet-4", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+	var body struct {
+		Data struct {
+			Found             bool     `json:"found"`
+			CacheWrite1hPrice *float64 `json:"cache_write_1h_price"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+	require.True(t, body.Data.Found)
+	require.Nil(t, body.Data.CacheWrite1hPrice)
 }

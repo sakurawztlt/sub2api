@@ -167,7 +167,57 @@ describe('BulkEditAccountModal', () => {
     })
   })
 
-  it.each(['kimi', 'zhipu', 'deepseek'])('全部目标为 %s API Key 时展示请求头覆写', (platform) => {
+  it('全部目标为 Grok OAuth 时，官方主机 base_url 作为手动端点切换正常提交', async () => {
+    const wrapper = mountModal({
+      selectedPlatforms: ['grok'],
+      selectedTypes: ['oauth']
+    })
+
+    await wrapper.get('#bulk-edit-base-url-enabled').setValue(true)
+    await wrapper.get('#bulk-edit-base-url').setValue('https://api.x.ai/v1')
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledTimes(1)
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      credentials: {
+        base_url: 'https://api.x.ai/v1'
+      }
+    })
+  })
+
+  it('所选全为 grok 时展示快捷端点，点击后填入并自动勾选 base_url', async () => {
+    const wrapper = mountModal({
+      selectedPlatforms: ['grok'],
+      selectedTypes: ['oauth']
+    })
+
+    const presets = wrapper.findAll('[data-testid="grok-base-url-preset"]')
+    expect(presets.length).toBe(5)
+
+    // 第三个预设为区域 API (us-east-1.api.x.ai/v1)
+    await presets[2].trigger('click')
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledTimes(1)
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenCalledWith([1, 2], {
+      credentials: {
+        base_url: 'https://us-east-1.api.x.ai/v1'
+      }
+    })
+  })
+
+  it('所选含非 grok 平台时不展示快捷端点', async () => {
+    const wrapper = mountModal({
+      selectedPlatforms: ['grok', 'anthropic'],
+      selectedTypes: ['apikey']
+    })
+
+    expect(wrapper.findAll('[data-testid="grok-base-url-preset"]').length).toBe(0)
+  })
+
+  it.each(['kimi', 'zhipu', 'deepseek', 'minimax'])('全部目标为 %s API Key 时展示请求头覆写', (platform) => {
     const wrapper = mountModal({
       selectedPlatforms: [platform],
       selectedTypes: ['apikey']
@@ -176,7 +226,7 @@ describe('BulkEditAccountModal', () => {
     expect(wrapper.find('#bulk-edit-header-override-enabled').exists()).toBe(true)
   })
 
-  it.each(['kimi', 'zhipu', 'deepseek'])('目标为 %s OAuth 时不展示请求头覆写', (platform) => {
+  it.each(['kimi', 'zhipu', 'deepseek', 'minimax'])('目标为 %s OAuth 时不展示请求头覆写', (platform) => {
     const wrapper = mountModal({
       selectedPlatforms: [platform],
       selectedTypes: ['oauth']

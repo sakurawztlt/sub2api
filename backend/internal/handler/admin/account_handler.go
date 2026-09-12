@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
@@ -63,6 +64,7 @@ type AccountHandler struct {
 	ollamaCloudUsage        *service.OllamaCloudUsageService
 	upstreamBillingProbe    *service.UpstreamBillingProbeService
 	grokImportProber        grokUsageProber
+	cfg                     *config.Config
 }
 
 func (h *AccountHandler) SetOllamaCloudUsageService(usage *service.OllamaCloudUsageService) {
@@ -88,8 +90,10 @@ func NewAccountHandler(
 	sessionLimitCache service.SessionLimitCache,
 	rpmCache service.RPMCache,
 	tokenCacheInvalidator service.TokenCacheInvalidator,
+	cfg *config.Config,
 ) *AccountHandler {
 	return &AccountHandler{
+		cfg:                     cfg,
 		adminService:            adminService,
 		oauthService:            oauthService,
 		openaiOAuthService:      openaiOAuthService,
@@ -186,6 +190,7 @@ type CheckMixedChannelRequest struct {
 // AccountWithConcurrency extends Account with real-time concurrency info
 type AccountWithConcurrency struct {
 	*dto.Account
+	simpleMode         bool                         `json:"-"`
 	CurrentConcurrency int                          `json:"current_concurrency"`
 	SchedulerScore     *AccountSchedulerScore       `json:"scheduler_score,omitempty"`
 	SchedulerScores    []AccountSchedulerGroupScore `json:"scheduler_scores,omitempty"`
@@ -193,6 +198,123 @@ type AccountWithConcurrency struct {
 	CurrentWindowCost *float64 `json:"current_window_cost,omitempty"` // 当前窗口费用
 	ActiveSessions    *int     `json:"active_sessions,omitempty"`     // 当前活跃会话数
 	CurrentRPM        *int     `json:"current_rpm,omitempty"`         // 当前分钟 RPM 计数
+}
+
+// AccountListItemWithConcurrency is the compact account-list envelope used
+// for lite=1. It embeds dto.AccountListItem instead of the full dto.Account,
+// so groups/account_groups never appear in the list payload.
+type AccountListItemWithConcurrency struct {
+	*dto.AccountListItem
+	CurrentConcurrency int                          `json:"current_concurrency"`
+	SchedulerScore     *AccountSchedulerScore       `json:"scheduler_score,omitempty"`
+	SchedulerScores    []AccountSchedulerGroupScore `json:"scheduler_scores,omitempty"`
+	CurrentWindowCost  *float64                     `json:"current_window_cost,omitempty"`
+	ActiveSessions     *int                         `json:"active_sessions,omitempty"`
+	CurrentRPM         *int                         `json:"current_rpm,omitempty"`
+}
+
+type simpleModeGroupReference struct {
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Platform string `json:"platform"`
+	Status   string `json:"status"`
+}
+
+type simpleModeAccountGroupReference struct {
+	AccountID int64                     `json:"account_id"`
+	GroupID   int64                     `json:"group_id"`
+	Priority  int                       `json:"priority"`
+	CreatedAt time.Time                 `json:"created_at"`
+	Group     *simpleModeGroupReference `json:"group,omitempty"`
+}
+
+func simpleModeGroupReferenceFromDTO(group *dto.Group) *simpleModeGroupReference {
+	if group == nil {
+		return nil
+	}
+	return &simpleModeGroupReference{ID: group.ID, Name: group.Name, Platform: group.Platform, Status: group.Status}
+}
+
+func simpleModeCompositeGroupIDs(account *dto.Account) map[int64]struct{} {
+	hidden := make(map[int64]struct{})
+	if account == nil {
+		return hidden
+	}
+	for _, group := range account.Groups {
+		if group != nil && group.Platform == service.PlatformComposite {
+			hidden[group.ID] = struct{}{}
+		}
+	}
+	for _, accountGroup := range account.AccountGroups {
+		if accountGroup.Group != nil && accountGroup.Group.Platform == service.PlatformComposite {
+			hidden[accountGroup.GroupID] = struct{}{}
+		}
+	}
+	return hidden
+}
+
+func filterSimpleModeGroupIDs(groupIDs []int64, hidden map[int64]struct{}) []int64 {
+	visible := make([]int64, 0, len(groupIDs))
+	for _, groupID := range groupIDs {
+		if _, ok := hidden[groupID]; !ok {
+			visible = append(visible, groupID)
+		}
+	}
+	return visible
+}
+
+func simpleModeCompositeServiceGroupIDs(account *service.Account) map[int64]struct{} {
+	hidden := make(map[int64]struct{})
+	if account == nil {
+		return hidden
+	}
+	for _, group := range account.Groups {
+		if group != nil && group.Platform == service.PlatformComposite {
+			hidden[group.ID] = struct{}{}
+		}
+	}
+	for _, accountGroup := range account.AccountGroups {
+		if accountGroup.Group != nil && accountGroup.Group.Platform == service.PlatformComposite {
+			hidden[accountGroup.GroupID] = struct{}{}
+		}
+	}
+	return hidden
+}
+
+func (a AccountWithConcurrency) MarshalJSON() ([]byte, error) {
+	type alias AccountWithConcurrency
+	if !a.simpleMode || a.Account == nil {
+		return json.Marshal(alias(a))
+	}
+	groups := make([]simpleModeGroupReference, 0, len(a.Groups))
+	compositeIDs := simpleModeCompositeGroupIDs(a.Account)
+	for _, group := range a.Groups {
+		if group != nil && group.Platform == service.PlatformComposite {
+			continue
+		}
+		if ref := simpleModeGroupReferenceFromDTO(group); ref != nil {
+			groups = append(groups, *ref)
+		}
+	}
+	accountGroups := make([]simpleModeAccountGroupReference, 0, len(a.AccountGroups))
+	for _, accountGroup := range a.AccountGroups {
+		if accountGroup.Group != nil && accountGroup.Group.Platform == service.PlatformComposite {
+			continue
+		}
+		if _, hidden := compositeIDs[accountGroup.GroupID]; hidden {
+			continue
+		}
+		accountGroups = append(accountGroups, simpleModeAccountGroupReference{
+			AccountID: accountGroup.AccountID, GroupID: accountGroup.GroupID, Priority: accountGroup.Priority,
+			CreatedAt: accountGroup.CreatedAt, Group: simpleModeGroupReferenceFromDTO(accountGroup.Group),
+		})
+	}
+	return json.Marshal(struct {
+		alias
+		GroupIDs      []int64                           `json:"group_ids,omitempty"`
+		Groups        []simpleModeGroupReference        `json:"groups"`
+		AccountGroups []simpleModeAccountGroupReference `json:"account_groups"`
+	}{alias: alias(a), GroupIDs: filterSimpleModeGroupIDs(a.GroupIDs, compositeIDs), Groups: groups, AccountGroups: accountGroups})
 }
 
 type AccountSchedulerScore struct {
@@ -211,10 +333,34 @@ type AccountSchedulerGroupScore struct {
 
 const accountListGroupUngroupedQueryValue = "ungrouped"
 
+func (h *AccountHandler) accountResponseFromService(account *service.Account) *dto.Account {
+	out := dto.AccountFromService(account)
+	if h != nil && h.ollamaCloudUsage != nil && out != nil && out.OllamaCloudUsage != nil {
+		h.ollamaCloudUsage.EnrichState(out.OllamaCloudUsage)
+	}
+	return out
+}
+
+func (h *AccountHandler) accountListResponseFromService(account *service.Account) *dto.Account {
+	out := dto.AccountFromServiceShallow(account)
+	if out != nil && account != nil {
+		out.Proxy = dto.ProxyFromService(account.Proxy)
+	}
+	if h != nil && h.ollamaCloudUsage != nil && out != nil {
+		h.ollamaCloudUsage.EnrichState(out.OllamaCloudUsage)
+	}
+	return out
+}
+
+func (h *AccountHandler) isSimpleMode() bool {
+	return h != nil && h.cfg != nil && h.cfg.RunMode == config.RunModeSimple
+}
+
 func (h *AccountHandler) buildAccountResponseWithRuntime(ctx context.Context, account *service.Account) AccountWithConcurrency {
 	h.resolveOllamaCloudUsageAccounts(ctx, []*service.Account{account})
 	item := AccountWithConcurrency{
 		Account:            h.accountResponseFromService(account),
+		simpleMode:         h.isSimpleMode(),
 		CurrentConcurrency: 0,
 	}
 	if account == nil {
@@ -255,14 +401,6 @@ func (h *AccountHandler) buildAccountResponseWithRuntime(ctx context.Context, ac
 	h.enrichShadowParents(ctx, []AccountWithConcurrency{item})
 
 	return item
-}
-
-func (h *AccountHandler) accountResponseFromService(account *service.Account) *dto.Account {
-	out := dto.AccountFromService(account)
-	if out != nil && out.OllamaCloudUsage != nil && h.ollamaCloudUsage != nil {
-		h.ollamaCloudUsage.EnrichState(out.OllamaCloudUsage)
-	}
-	return out
 }
 
 func (h *AccountHandler) resolveOllamaCloudUsageAccounts(ctx context.Context, accounts []*service.Account) {
@@ -650,8 +788,16 @@ func (h *AccountHandler) List(c *gin.Context) {
 	result := make([]AccountWithConcurrency, len(accounts))
 	for i := range accounts {
 		acc := &accounts[i]
+		accountResponse := h.accountResponseFromService(acc)
+		if lite {
+			accountResponse = h.accountListResponseFromService(acc)
+			if h.isSimpleMode() {
+				accountResponse.GroupIDs = filterSimpleModeGroupIDs(accountResponse.GroupIDs, simpleModeCompositeServiceGroupIDs(acc))
+			}
+		}
 		item := AccountWithConcurrency{
-			Account:            h.accountResponseFromService(acc),
+			Account:            accountResponse,
+			simpleMode:         h.isSimpleMode(),
 			CurrentConcurrency: concurrencyCounts[acc.ID],
 			SchedulerScore:     schedulerScores[acc.ID],
 			SchedulerScores:    schedulerGroupScores[acc.ID],
@@ -682,7 +828,34 @@ func (h *AccountHandler) List(c *gin.Context) {
 	}
 	h.enrichShadowParents(c.Request.Context(), result)
 
-	etag := buildAccountsListETag(result, total, page, pageSize, platform, accountType, status, search, lite)
+	if lite {
+		compact := make([]AccountListItemWithConcurrency, len(result))
+		for i := range result {
+			item := result[i]
+			compact[i] = AccountListItemWithConcurrency{
+				AccountListItem:    dto.AccountListItemFromAccount(item.Account),
+				CurrentConcurrency: item.CurrentConcurrency,
+				SchedulerScore:     item.SchedulerScore,
+				SchedulerScores:    item.SchedulerScores,
+				CurrentWindowCost:  item.CurrentWindowCost,
+				ActiveSessions:     item.ActiveSessions,
+				CurrentRPM:         item.CurrentRPM,
+			}
+		}
+		etag := buildAccountsListETag(compact, total, page, pageSize, platform, accountType, status, search, true)
+		if etag != "" {
+			c.Header("ETag", etag)
+			c.Header("Vary", "If-None-Match")
+			if ifNoneMatchMatched(c.GetHeader("If-None-Match"), etag) {
+				c.Status(http.StatusNotModified)
+				return
+			}
+		}
+		response.Paginated(c, compact, total, page, pageSize)
+		return
+	}
+
+	etag := buildAccountsListETag(result, total, page, pageSize, platform, accountType, status, search, false)
 	if etag != "" {
 		c.Header("ETag", etag)
 		c.Header("Vary", "If-None-Match")
@@ -695,23 +868,23 @@ func (h *AccountHandler) List(c *gin.Context) {
 	response.Paginated(c, result, total, page, pageSize)
 }
 
-func buildAccountsListETag(
-	items []AccountWithConcurrency,
+func buildAccountsListETag[T any](
+	items []T,
 	total int64,
 	page, pageSize int,
 	platform, accountType, status, search string,
 	lite bool,
 ) string {
 	payload := struct {
-		Total       int64                    `json:"total"`
-		Page        int                      `json:"page"`
-		PageSize    int                      `json:"page_size"`
-		Platform    string                   `json:"platform"`
-		AccountType string                   `json:"type"`
-		Status      string                   `json:"status"`
-		Search      string                   `json:"search"`
-		Lite        bool                     `json:"lite"`
-		Items       []AccountWithConcurrency `json:"items"`
+		Total       int64  `json:"total"`
+		Page        int    `json:"page"`
+		PageSize    int    `json:"page_size"`
+		Platform    string `json:"platform"`
+		AccountType string `json:"type"`
+		Status      string `json:"status"`
+		Search      string `json:"search"`
+		Lite        bool   `json:"lite"`
+		Items       []T    `json:"items"`
 	}{
 		Total:       total,
 		Page:        page,
@@ -826,6 +999,10 @@ func (h *AccountHandler) Create(c *gin.Context) {
 	}
 	// base_rpm 输入校验：负值归零，超过 10000 截断
 	sanitizeExtraBaseRPM(req.Extra)
+	if err := service.ValidateUpstreamRequestIDHeaderExtra(req.Extra); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 
 	// 确定是否跳过混合渠道检查
 	skipCheck := req.ConfirmMixedChannelRisk != nil && *req.ConfirmMixedChannelRisk
@@ -912,6 +1089,10 @@ func (h *AccountHandler) Update(c *gin.Context) {
 	}
 	// base_rpm 输入校验：负值归零，超过 10000 截断
 	sanitizeExtraBaseRPM(req.Extra)
+	if err := service.ValidateUpstreamRequestIDHeaderExtra(req.Extra); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 
 	// 确定是否跳过混合渠道检查
 	skipCheck := req.ConfirmMixedChannelRisk != nil && *req.ConfirmMixedChannelRisk
@@ -1457,6 +1638,14 @@ func (h *AccountHandler) ApplyOAuthCredentials(c *gin.Context) {
 		response.ErrorFrom(c, infraerrors.BadRequest("NOT_OAUTH", "cannot apply oauth credentials to non-OAuth account"))
 		return
 	}
+	if err := service.ValidateOpenAILongContextBillingExtra(existing.Platform, req.Extra); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if err := service.ValidateUpstreamRequestIDHeaderExtra(req.Extra); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 
 	// Drop SSO/password residue; re-auth must leave only OAuth tokens on disk.
 	req.Credentials = service.SanitizeStoredCredentials(existing.Platform, req.Credentials)
@@ -1900,6 +2089,20 @@ func (h *AccountHandler) BatchCreate(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
+	for _, item := range req.Accounts {
+		if err := service.ValidateOpenAILongContextBillingExtra(item.Platform, item.Extra); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+	}
+	groupIDs := make([]int64, 0)
+	for _, item := range req.Accounts {
+		groupIDs = append(groupIDs, item.GroupIDs...)
+	}
+	if err := h.adminService.ValidateAccountGroupBindings(c.Request.Context(), groupIDs); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 
 	executeAdminIdempotentJSON(c, "admin.accounts.batch_create", req, service.DefaultWriteIdempotencyTTL(), func(ctx context.Context) (any, error) {
 		success := 0
@@ -1922,6 +2125,15 @@ func (h *AccountHandler) BatchCreate(c *gin.Context) {
 
 			// base_rpm 输入校验：负值归零，超过 10000 截断
 			sanitizeExtraBaseRPM(item.Extra)
+			if err := service.ValidateUpstreamRequestIDHeaderExtra(item.Extra); err != nil {
+				failed++
+				results = append(results, gin.H{
+					"name":    item.Name,
+					"success": false,
+					"error":   err.Error(),
+				})
+				continue
+			}
 
 			skipCheck := item.ConfirmMixedChannelRisk != nil && *item.ConfirmMixedChannelRisk
 
@@ -2116,6 +2328,10 @@ func (h *AccountHandler) BulkUpdate(c *gin.Context) {
 	}
 	// base_rpm 输入校验：负值归零，超过 10000 截断
 	sanitizeExtraBaseRPM(req.Extra)
+	if err := service.ValidateUpstreamRequestIDHeaderExtra(req.Extra); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 
 	// 确定是否跳过混合渠道检查
 	skipCheck := req.ConfirmMixedChannelRisk != nil && *req.ConfirmMixedChannelRisk
@@ -2601,6 +2817,14 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 
 	// Handle OpenAI accounts
 	if account.IsOpenAI() {
+		// Prefer the shared, account-keyed upstream catalog. If discovery fails,
+		// retain the legacy local catalog below so the test dialog remains usable.
+		if h.accountTestService != nil {
+			if models, fetchErr := h.accountTestService.FetchOpenAIAccountModels(c.Request.Context(), account); fetchErr == nil {
+				response.Success(c, models)
+				return
+			}
+		}
 		// OpenAI 自动透传会绕过常规模型改写，测试/模型列表也应回落到默认模型集。
 		if account.IsOpenAIPassthroughEnabled() {
 			response.Success(c, openai.DefaultModels)

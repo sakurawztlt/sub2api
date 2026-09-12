@@ -614,7 +614,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 	originalClaudeBody := body
 
 	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
+	if account.Proxy != nil {
 		proxyURL = account.Proxy.ActiveURL()
 	}
 
@@ -794,6 +794,8 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 		if err != nil {
 			safeErr := sanitizeUpstreamErrorMessage(err.Error())
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				ProxyID:            opsUpstreamProxyID(account),
+				ProxyName:          opsUpstreamProxyName(account),
 				Platform:           account.Platform,
 				AccountID:          account.ID,
 				AccountName:        account.Name,
@@ -832,6 +834,8 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 					upstreamDetail = truncateString(string(respBody), maxBytes)
 				}
 				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					ProxyID:            opsUpstreamProxyID(account),
+					ProxyName:          opsUpstreamProxyName(account),
 					Platform:           account.Platform,
 					AccountID:          account.ID,
 					AccountName:        account.Name,
@@ -915,6 +919,8 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 					upstreamDetail = truncateString(string(respBody), maxBytes)
 				}
 				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					ProxyID:            opsUpstreamProxyID(account),
+					ProxyName:          opsUpstreamProxyName(account),
 					Platform:           account.Platform,
 					AccountID:          account.ID,
 					AccountName:        account.Name,
@@ -979,6 +985,8 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 					upstreamDetail = truncateString(string(respBody), maxBytes)
 				}
 				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					ProxyID:            opsUpstreamProxyID(account),
+					ProxyName:          opsUpstreamProxyName(account),
 					Platform:           account.Platform,
 					AccountID:          account.ID,
 					AccountName:        account.Name,
@@ -1013,6 +1021,8 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 				}
 				log.Printf("[Gemini] status=400 google_config_error failover=true upstream_message=%q account=%d", upstreamMsg, account.ID)
 				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					ProxyID:            opsUpstreamProxyID(account),
+					ProxyName:          opsUpstreamProxyName(account),
 					Platform:           account.Platform,
 					AccountID:          account.ID,
 					AccountName:        account.Name,
@@ -1041,6 +1051,8 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 				upstreamDetail = truncateString(string(respBody), maxBytes)
 			}
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				ProxyID:            opsUpstreamProxyID(account),
+				ProxyName:          opsUpstreamProxyName(account),
 				Platform:           account.Platform,
 				AccountID:          account.ID,
 				AccountName:        account.Name,
@@ -1100,19 +1112,24 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 	}
 
 	// 图片生成计费
+	imageInputSize := s.extractImageInputSize(body)
 	imageSize := s.extractImageSize(body)
 	imageCount := resolveGeminiImageCount(c, originalModel, mappedModel)
 
 	return &ForwardResult{
-		RequestID:     requestID,
-		Usage:         *usage,
-		Model:         originalModel,
-		UpstreamModel: mappedModel,
-		Stream:        req.Stream,
-		Duration:      time.Since(startTime),
-		FirstTokenMs:  firstTokenMs,
-		ImageCount:    imageCount,
-		ImageSize:     imageSize,
+		RequestID:                     requestID,
+		UpstreamHeaders:               resp.Header,
+		Usage:                         *usage,
+		Model:                         originalModel,
+		UpstreamModel:                 mappedModel,
+		UpstreamResponseModel:         observedUpstreamResponseModel(c),
+		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
+		Stream:                        req.Stream,
+		Duration:                      time.Since(startTime),
+		FirstTokenMs:                  firstTokenMs,
+		ImageCount:                    imageCount,
+		ImageSize:                     imageSize,
+		ImageInputSize:                imageInputSize,
 	}, nil
 }
 
@@ -1164,7 +1181,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 	}
 
 	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
+	if account.Proxy != nil {
 		proxyURL = account.Proxy.ActiveURL()
 	}
 
@@ -1331,6 +1348,8 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		if err != nil {
 			safeErr := sanitizeUpstreamErrorMessage(err.Error())
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				ProxyID:            opsUpstreamProxyID(account),
+				ProxyName:          opsUpstreamProxyName(account),
 				Platform:           account.Platform,
 				AccountID:          account.ID,
 				AccountName:        account.Name,
@@ -1399,6 +1418,8 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 					upstreamDetail = truncateString(string(respBody), maxBytes)
 				}
 				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					ProxyID:            opsUpstreamProxyID(account),
+					ProxyName:          opsUpstreamProxyName(account),
 					Platform:           account.Platform,
 					AccountID:          account.ID,
 					AccountName:        account.Name,
@@ -1458,13 +1479,14 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 			estimated := estimateGeminiCountTokens(body)
 			c.JSON(http.StatusOK, map[string]any{"totalTokens": estimated})
 			return &ForwardResult{
-				RequestID:     requestID,
-				Usage:         ClaudeUsage{},
-				Model:         originalModel,
-				UpstreamModel: mappedModel,
-				Stream:        false,
-				Duration:      time.Since(startTime),
-				FirstTokenMs:  nil,
+				RequestID:       requestID,
+				UpstreamHeaders: resp.Header,
+				Usage:           ClaudeUsage{},
+				Model:           originalModel,
+				UpstreamModel:   mappedModel,
+				Stream:          false,
+				Duration:        time.Since(startTime),
+				FirstTokenMs:    nil,
 			}, nil
 		}
 
@@ -1496,6 +1518,8 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 					upstreamDetail = truncateString(string(evBody), maxBytes)
 				}
 				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					ProxyID:            opsUpstreamProxyID(account),
+					ProxyName:          opsUpstreamProxyName(account),
 					Platform:           account.Platform,
 					AccountID:          account.ID,
 					AccountName:        account.Name,
@@ -1527,6 +1551,8 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 				}
 				log.Printf("[Gemini] status=400 google_config_error failover=true upstream_message=%q account=%d", upstreamMsg, account.ID)
 				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					ProxyID:            opsUpstreamProxyID(account),
+					ProxyName:          opsUpstreamProxyName(account),
 					Platform:           account.Platform,
 					AccountID:          account.ID,
 					AccountName:        account.Name,
@@ -1552,6 +1578,8 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 				upstreamDetail = truncateString(string(evBody), maxBytes)
 			}
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				ProxyID:            opsUpstreamProxyID(account),
+				ProxyName:          opsUpstreamProxyName(account),
 				Platform:           account.Platform,
 				AccountID:          account.ID,
 				AccountName:        account.Name,
@@ -1602,19 +1630,24 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 	}
 
 	// 图片生成计费
+	imageInputSize := s.extractImageInputSize(body)
 	imageSize := s.extractImageSize(body)
 	imageCount := resolveGeminiImageCount(c, originalModel, mappedModel)
 
 	return &ForwardResult{
-		RequestID:     requestID,
-		Usage:         *usage,
-		Model:         originalModel,
-		UpstreamModel: mappedModel,
-		Stream:        stream,
-		Duration:      time.Since(startTime),
-		FirstTokenMs:  firstTokenMs,
-		ImageCount:    imageCount,
-		ImageSize:     imageSize,
+		RequestID:                     requestID,
+		UpstreamHeaders:               resp.Header,
+		Usage:                         *usage,
+		Model:                         originalModel,
+		UpstreamModel:                 mappedModel,
+		UpstreamResponseModel:         observedUpstreamResponseModel(c),
+		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
+		Stream:                        stream,
+		Duration:                      time.Since(startTime),
+		FirstTokenMs:                  firstTokenMs,
+		ImageCount:                    imageCount,
+		ImageSize:                     imageSize,
+		ImageInputSize:                imageInputSize,
 	}, nil
 }
 
@@ -1678,6 +1711,8 @@ func (s *GeminiMessagesCompatService) skippedErrorPolicyFailoverError(c *gin.Con
 	upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
 	upstreamDetail := s.upstreamErrorDetail(respBody)
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		ProxyID:            opsUpstreamProxyID(account),
+		ProxyName:          opsUpstreamProxyName(account),
 		Platform:           account.Platform,
 		AccountID:          account.ID,
 		AccountName:        account.Name,
@@ -1719,6 +1754,8 @@ func (s *GeminiMessagesCompatService) writeGeminiCustomCodeSkippedError(c *gin.C
 	upstreamDetail := s.upstreamErrorDetail(body)
 	setOpsUpstreamError(c, upstreamStatus, upstreamMsg, upstreamDetail)
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		ProxyID:            opsUpstreamProxyID(account),
+		ProxyName:          opsUpstreamProxyName(account),
 		Platform:           account.Platform,
 		AccountID:          account.ID,
 		AccountName:        account.Name,
@@ -1747,6 +1784,8 @@ func (s *GeminiMessagesCompatService) writeGeminiNativeUpstreamError(c *gin.Cont
 	}
 	setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		ProxyID:            opsUpstreamProxyID(account),
+		ProxyName:          opsUpstreamProxyName(account),
 		Platform:           account.Platform,
 		AccountID:          account.ID,
 		AccountName:        account.Name,
@@ -1811,6 +1850,8 @@ func (s *GeminiMessagesCompatService) writeGeminiMappedError(c *gin.Context, acc
 	}
 	setOpsUpstreamError(c, upstreamStatus, upstreamMsg, upstreamDetail)
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		ProxyID:            opsUpstreamProxyID(account),
+		ProxyName:          opsUpstreamProxyName(account),
 		Platform:           account.Platform,
 		AccountID:          account.ID,
 		AccountName:        account.Name,
@@ -2775,7 +2816,7 @@ func (s *GeminiMessagesCompatService) ForwardAIStudioGET(ctx context.Context, ac
 	fullURL := strings.TrimRight(normalizedBaseURL, "/") + path
 
 	var proxyURL string
-	if account.ProxyID != nil && account.Proxy != nil {
+	if account.Proxy != nil {
 		proxyURL = account.Proxy.ActiveURL()
 	}
 
@@ -3720,4 +3761,46 @@ func (s *GeminiMessagesCompatService) extractImageSize(body []byte) string {
 	}
 
 	return "2K"
+}
+
+func (s *GeminiMessagesCompatService) extractImageInputSize(body []byte) string {
+	var req struct {
+		GenerationConfig *struct {
+			ImageConfig *struct {
+				ImageSize string `json:"imageSize"`
+			} `json:"imageConfig"`
+		} `json:"generationConfig"`
+	}
+	if err := json.Unmarshal(body, &req); err != nil {
+		return ""
+	}
+
+	if req.GenerationConfig != nil && req.GenerationConfig.ImageConfig != nil {
+		return strings.TrimSpace(req.GenerationConfig.ImageConfig.ImageSize)
+	}
+
+	return ""
+}
+
+// generateAnthropicMsgID 生成 Anthropic 官方格式的 message ID：msg_01 + 22 位 Base62
+func generateAnthropicMsgID() string {
+	const charset = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	const idLen = 22
+	randomBytes := make([]byte, idLen)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return "msg_01" + randomHex(11)
+	}
+	b := make([]byte, idLen)
+	for i := range b {
+		b[i] = charset[int(randomBytes[i])%len(charset)]
+	}
+	return "msg_01" + string(b)
+}
+
+func isValidBase64(data string) bool {
+	if data == "" {
+		return false
+	}
+	_, err := base64.StdEncoding.DecodeString(data)
+	return err == nil
 }

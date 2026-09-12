@@ -43,12 +43,15 @@ const (
 	PlatformGemini      = domain.PlatformGemini
 	PlatformAntigravity = domain.PlatformAntigravity
 	PlatformGrok        = domain.PlatformGrok
-	PlatformKimi        = domain.PlatformKimi
-	PlatformZhipu       = domain.PlatformZhipu
-	PlatformDeepseek    = domain.PlatformDeepseek
-	PlatformComposite   = domain.PlatformComposite
-	// PlatformKiro is retained for unsupported-platform threshold tests and
-	// legacy account rows. Threshold evaluation never pauses Kiro accounts.
+	// 国产 OpenAI 兼容供应商（与 grok 一样经 OpenAI 网关转发）。
+	PlatformKimi       = domain.PlatformKimi
+	PlatformZhipu      = domain.PlatformZhipu
+	PlatformDeepseek   = domain.PlatformDeepseek
+	PlatformMiniMax    = domain.PlatformMiniMax
+	PlatformOpenCodeGo = domain.PlatformOpenCodeGo
+	PlatformComposite  = domain.PlatformComposite
+	// PlatformKiro is retained for unsupported-platform threshold tests and legacy
+	// account rows. Scheduling-threshold evaluation never pauses kiro accounts.
 	PlatformKiro = "kiro"
 )
 
@@ -56,6 +59,8 @@ const (
 const (
 	AccountModePayG   = domain.AccountModePayG
 	AccountModeCoding = domain.AccountModeCoding
+	AccountModeZen    = domain.AccountModeZen
+	AccountModeGo     = domain.AccountModeGo
 )
 
 // 上游 API 协议（国产供应商）：决定转发端点与格式，与接入模式正交。
@@ -74,6 +79,12 @@ const (
 	DefaultZhipuPayGBaseURL   = "https://open.bigmodel.cn/api/paas/v4"
 	DefaultZhipuCodingBaseURL = "https://open.bigmodel.cn/api/coding/paas/v4"
 	DefaultDeepseekBaseURL    = "https://api.deepseek.com"
+	// MiniMax 按量付费与 Coding/Token Plan 共用推理域名，靠 API Key 区分套餐。
+	DefaultMiniMaxBaseURL = "https://api.minimaxi.com/v1"
+	// OpenCode Go：Chat Completions / Responses / models 共用 /v1 基址。
+	DefaultOpenCodeGoBaseURL = "https://opencode.ai/zen/go/v1"
+	// OpenCode Zen：按量付费网关，模型列表为 /zen/v1/models。
+	DefaultOpenCodeZenBaseURL = "https://opencode.ai/zen/v1"
 )
 
 // 国产供应商 Anthropic 协议端点的默认 base_url（上游路径为 {base}/v1/messages）。
@@ -83,16 +94,31 @@ const (
 	DefaultKimiCodingAnthropicBaseURL = "https://api.kimi.com/coding"
 	DefaultZhipuAnthropicBaseURL      = "https://open.bigmodel.cn/api/anthropic"
 	DefaultDeepseekAnthropicBaseURL   = "https://api.deepseek.com/anthropic"
+	DefaultMiniMaxAnthropicBaseURL    = "https://api.minimaxi.com/anthropic"
+	// OpenCode Go Anthropic 基址不含 /v1：nativeAnthropicTargetURL 会再拼 /v1/messages。
+	DefaultOpenCodeGoAnthropicBaseURL  = "https://opencode.ai/zen/go"
+	DefaultOpenCodeZenAnthropicBaseURL = "https://opencode.ai/zen"
 )
 
-// IsCNProvider 报告 platform 是否为国产 OpenAI 兼容供应商（kimi/zhipu/deepseek）。
+// IsCNProvider 报告 platform 是否为国产 OpenAI 兼容供应商（kimi/zhipu/deepseek/minimax）。
 func IsCNProvider(platform string) bool {
 	switch platform {
-	case PlatformKimi, PlatformZhipu, PlatformDeepseek:
+	case PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax:
 		return true
 	default:
 		return false
 	}
+}
+
+// IsOpenCodeGo 报告 platform 是否为 OpenCode Go 订阅网关。
+func IsOpenCodeGo(platform string) bool {
+	return platform == PlatformOpenCodeGo
+}
+
+// IsMultiProtocolAPIKeyProvider 报告 platform 是否为多协议 API Key 网关
+// （国产供应商 + OpenCode）：走 OpenAI 网关、支持 adaptive 协议分流。
+func IsMultiProtocolAPIKeyProvider(platform string) bool {
+	return IsCNProvider(platform) || platform == PlatformOpenCodeGo
 }
 
 // AllowedQuotaPlatforms 是允许设置 user × platform quota 的平台列表（单一权威来源）。
@@ -107,16 +133,21 @@ var AllowedQuotaPlatforms = []string{
 	PlatformKimi,
 	PlatformZhipu,
 	PlatformDeepseek,
+	PlatformMiniMax,
+	PlatformOpenCodeGo,
 }
 
-// AllowedSchedulingThresholdPlatforms is the set of providers with native
-// usage windows that can safely drive automatic scheduling pauses.
+// AllowedSchedulingThresholdPlatforms 是允许设置账号自动停调阈值的平台列表。
+// openai/anthropic/grok 有原生用量窗口；kimi/zhipu/minimax 的 Coding Plan 同样暴露
+// 5h/weekly 滚动窗口，纳入阈值评估。deepseek 为余额型，走余额检测而非阈值。
 var AllowedSchedulingThresholdPlatforms = []string{
 	PlatformOpenAI,
 	PlatformAnthropic,
 	PlatformGrok,
 	PlatformKimi,
 	PlatformZhipu,
+	PlatformMiniMax,
+	PlatformOpenCodeGo,
 }
 
 // IsAllowedQuotaPlatform 报告 s 是否为合法的 quota platform 标识。
@@ -451,6 +482,10 @@ const (
 	// are exposed by user-facing monitor APIs. It is fail-closed: only literal
 	// true enables it, while admin endpoints always retain the snapshots.
 	SettingKeyChannelMonitorShowQuota = "channel_monitor_show_quota"
+	// SettingKeyChannelMonitorHideUserRanking hides the user ranking tab and
+	// /users payload from non-admin channel-monitor v2 viewers.
+	// Default false (keep the current ranking tab). Admin endpoints always keep it.
+	SettingKeyChannelMonitorHideUserRanking = "channel_monitor_hide_user_ranking"
 
 	// Grok text upstream default selected for accounts without an explicit base URL.
 	SettingKeyGrokDefaultBaseURLMode = "grok_default_base_url_mode"
@@ -463,6 +498,15 @@ const (
 	// user-facing aggregate view. When false: user endpoint returns an empty list and the
 	// sidebar entry is hidden. Defaults to false (opt-in feature).
 	SettingKeyAvailableChannelsEnabled = "available_channels_enabled"
+
+	// SettingKeySubscriptionEnabled is a DB-backed soft switch for the user-facing
+	// subscription surface: sidebar entries, purchase-page subscription tab, header
+	// progress badge, usage billing-type filter and the /subscriptions route. When
+	// false users can no longer buy or browse subscriptions from the UI; the
+	// subscriptions API, existing subscription billing and admin subscription
+	// management are unaffected. Together with BALANCE_PAYMENT_DISABLED it forms the
+	// admin "site billing mode" selector. Defaults to true (opt-out feature).
+	SettingKeySubscriptionEnabled = "subscription_enabled"
 
 	// SettingKeyModelPlazaEnabled is a DB-backed soft switch for the Model Plaza page
 	// (public group/model pricing showcase). When false: the plaza endpoint returns 404
@@ -666,3 +710,22 @@ const AdminAPIKeyPrefix = "admin-"
 // SettingKeyAllowUserViewErrorRequests controls whether end users can view
 // their own failed requests on the usage page. Default false (opt-in).
 const SettingKeyAllowUserViewErrorRequests = "allow_user_view_error_requests"
+
+const (
+	SettingKeyTencentCaptchaEnabled        = "tencent_captcha_enabled"
+	SettingKeyTencentCaptchaAppID          = "tencent_captcha_app_id"
+	SettingKeyTencentCaptchaAppSecretKey   = "tencent_captcha_app_secret_key"
+	SettingKeyTencentCaptchaCloudSecretID  = "tencent_captcha_cloud_secret_id"
+	SettingKeyTencentCaptchaCloudSecretKey = "tencent_captcha_cloud_secret_key"
+	SettingKeyTencentCaptchaRegion         = "tencent_captcha_region"           // 站点："cn"|"intl"，决定前端 SDK 脚本与服务端接入点
+	SettingKeyAliyunCaptchaEnabled         = "aliyun_captcha_enabled"           // 是否启用阿里云验证码
+	SettingKeyAliyunCaptchaAccessKeyID     = "aliyun_captcha_access_key_id"     // 阿里云 AccessKey ID
+	SettingKeyAliyunCaptchaAccessKeySecret = "aliyun_captcha_access_key_secret" // 阿里云 AccessKey Secret
+	SettingKeyAliyunCaptchaSceneID         = "aliyun_captcha_scene_id"          // 验证场景 ID（所有认证流程共用）
+	SettingKeyAliyunCaptchaPrefix          = "aliyun_captcha_prefix"            // 身份标，前端 SDK 初始化用
+	SettingKeyAliyunCaptchaRegion          = "aliyun_captcha_region"            // 地域："cn"|"sgp"，决定前端脚本区域与服务端接入点
+	SettingKeyForwardedClientIPHeaders     = "forwarded_client_ip_headers"      // 自定义 CDN 客户端 IP 请求头（JSON 数组）
+	SettingKeyPasskeyEnabled               = "passkey_enabled"                  // 是否启用 Passkey 登录（仍要求有效的 WebAuthn 部署配置）
+	SettingKeySessionBindingEnabled        = "session_binding_enabled"          // 会话 IP/UA 绑定（变更即失效），默认关闭
+	SettingKeyPluginManagementEnabled      = "plugin_management_enabled"
+)

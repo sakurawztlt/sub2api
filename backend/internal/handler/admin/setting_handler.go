@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -59,6 +60,7 @@ func firstNonEmpty(values ...string) string {
 
 // SettingHandler 系统设置处理器
 type SettingHandler struct {
+	aliyunCaptchaService     *service.AliyunCaptchaService
 	settingService           *service.SettingService
 	emailService             *service.EmailService
 	turnstileService         *service.TurnstileService
@@ -134,7 +136,27 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		paymentCfg = &service.PaymentConfig{}
 	}
 
+	passkeyConfigured, passkeyRPID, passkeyRPOrigins := h.settingService.PasskeyConfiguration()
 	payload := dto.SystemSettings{
+		PasskeyEnabled:                                         settings.PasskeyEnabled,
+		PasskeyConfigured:                                      passkeyConfigured,
+		PasskeyRPID:                                            passkeyRPID,
+		PasskeyRPOrigins:                                       passkeyRPOrigins,
+		SessionBindingEnabled:                                  settings.SessionBindingEnabled,
+		AuditLogRetentionDays:                                  settings.AuditLogRetentionDays,
+		TencentCaptchaEnabled:                                  settings.TencentCaptchaEnabled,
+		TencentCaptchaAppID:                                    settings.TencentCaptchaAppID,
+		TencentCaptchaAppSecretKeyConfigured:                   settings.TencentCaptchaAppSecretKeyConfigured,
+		TencentCaptchaCloudSecretIDConfigured:                  settings.TencentCaptchaCloudSecretIDConfigured,
+		TencentCaptchaCloudSecretKeyConfigured:                 settings.TencentCaptchaCloudSecretKeyConfigured,
+		TencentCaptchaRegion:                                   settings.TencentCaptchaRegion,
+		AliyunCaptchaEnabled:                                   settings.AliyunCaptchaEnabled,
+		AliyunCaptchaAccessKeyID:                               settings.AliyunCaptchaAccessKeyID,
+		AliyunCaptchaAccessKeySecretConfigured:                 settings.AliyunCaptchaAccessKeySecretConfigured,
+		AliyunCaptchaSceneID:                                   settings.AliyunCaptchaSceneID,
+		AliyunCaptchaPrefix:                                    settings.AliyunCaptchaPrefix,
+		AliyunCaptchaRegion:                                    settings.AliyunCaptchaRegion,
+		ForwardedClientIPHeaders:                               settings.ForwardedClientIPHeaders,
 		RegistrationEnabled:                                    settings.RegistrationEnabled,
 		EmailVerifyEnabled:                                     settings.EmailVerifyEnabled,
 		RegistrationEmailSuffixWhitelist:                       settings.RegistrationEmailSuffixWhitelist,
@@ -364,12 +386,14 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		ChannelMonitorDefaultIntervalSeconds: settings.ChannelMonitorDefaultIntervalSeconds,
 		ChannelMonitorHideThroughput:         settings.ChannelMonitorHideThroughput,
 		ChannelMonitorShowQuota:              settings.ChannelMonitorShowQuota,
+		ChannelMonitorHideUserRanking:        settings.ChannelMonitorHideUserRanking,
 
 		GrokDefaultTextModel:           settings.GrokDefaultTextModel,
 		GrokCrossClientModelMapEnabled: settings.GrokCrossClientModelMapEnabled,
 		GrokDefaultBaseURLMode:         settings.GrokDefaultBaseURLMode,
 
 		AvailableChannelsEnabled: settings.AvailableChannelsEnabled,
+		SubscriptionEnabled:      settings.SubscriptionEnabled,
 
 		ModelPlazaEnabled:       settings.ModelPlazaEnabled,
 		ModelPlazaRequireAuth:   settings.ModelPlazaRequireAuth,
@@ -464,6 +488,22 @@ func loginAgreementDocumentsToService(items []dto.LoginAgreementDocument) []serv
 
 // UpdateSettingsRequest 更新设置请求
 type UpdateSettingsRequest struct {
+	PasskeyEnabled               *bool     `json:"passkey_enabled"`
+	SessionBindingEnabled        *bool     `json:"session_binding_enabled"`
+	AuditLogRetentionDays        int       `json:"audit_log_retention_days"`
+	TencentCaptchaEnabled        bool      `json:"tencent_captcha_enabled"`
+	TencentCaptchaAppID          string    `json:"tencent_captcha_app_id"`
+	TencentCaptchaAppSecretKey   string    `json:"tencent_captcha_app_secret_key"`
+	TencentCaptchaCloudSecretID  string    `json:"tencent_captcha_cloud_secret_id"`
+	TencentCaptchaCloudSecretKey string    `json:"tencent_captcha_cloud_secret_key"`
+	TencentCaptchaRegion         string    `json:"tencent_captcha_region"`
+	AliyunCaptchaEnabled         bool      `json:"aliyun_captcha_enabled"`
+	AliyunCaptchaAccessKeyID     string    `json:"aliyun_captcha_access_key_id"`
+	AliyunCaptchaAccessKeySecret string    `json:"aliyun_captcha_access_key_secret"`
+	AliyunCaptchaSceneID         string    `json:"aliyun_captcha_scene_id"`
+	AliyunCaptchaPrefix          string    `json:"aliyun_captcha_prefix"`
+	AliyunCaptchaRegion          string    `json:"aliyun_captcha_region"`
+	ForwardedClientIPHeaders     *[]string `json:"forwarded_client_ip_headers"`
 	// 注册设置
 	RegistrationEnabled                 bool                         `json:"registration_enabled"`
 	EmailVerifyEnabled                  bool                         `json:"email_verify_enabled"`
@@ -760,16 +800,25 @@ type UpdateSettingsRequest struct {
 	ChannelMonitorDefaultIntervalSeconds *int    `json:"channel_monitor_default_interval_seconds"`
 	ChannelMonitorHideThroughput         *bool   `json:"channel_monitor_hide_throughput"`
 	ChannelMonitorShowQuota              *bool   `json:"channel_monitor_show_quota"`
+	ChannelMonitorHideUserRanking        *bool   `json:"channel_monitor_hide_user_ranking"`
 
 	GrokDefaultTextModel           *string `json:"grok_default_text_model"`
 	GrokCrossClientModelMapEnabled *bool   `json:"grok_cross_client_model_map_enabled"`
 	GrokDefaultBaseURLMode         *string `json:"grok_default_base_url_mode"`
 
 	// Available Channels feature switch (user-facing)
-	AvailableChannelsEnabled *bool   `json:"available_channels_enabled"`
-	ModelPlazaEnabled        *bool   `json:"model_plaza_enabled"`
-	ModelPlazaRequireAuth    *bool   `json:"model_plaza_require_auth"`
-	ModelPlazaDescription    *string `json:"model_plaza_description"`
+	AvailableChannelsEnabled *bool `json:"available_channels_enabled"`
+
+	// Subscription feature switch (user-facing subscription surface; see SettingKeySubscriptionEnabled)
+	SubscriptionEnabled *bool `json:"subscription_enabled"`
+
+	// Model Plaza feature switches + description
+	ModelPlazaEnabled     *bool   `json:"model_plaza_enabled"`
+	ModelPlazaRequireAuth *bool   `json:"model_plaza_require_auth"`
+	ModelPlazaDescription *string `json:"model_plaza_description"`
+
+	// Plugin management menu visibility switch; plugin runtime is unaffected.
+	PluginManagementEnabled *bool `json:"plugin_management_enabled"`
 
 	// Affiliate (邀请返利) feature switch
 	AffiliateEnabled *bool `json:"affiliate_enabled"`
@@ -889,6 +938,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
+	auditReq := settingsAuditRequest(req)
 	omitted := omittedSettingKeys(sentFields)
 
 	previousSettings, err := h.settingService.GetAllSettings(c.Request.Context())
@@ -901,6 +951,26 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	sessionBindingEnabled := previousSettings.SessionBindingEnabled
+	if req.SessionBindingEnabled != nil {
+		sessionBindingEnabled = *req.SessionBindingEnabled
+	}
+	passkeyEnabled := previousSettings.PasskeyEnabled
+	if req.PasskeyEnabled != nil {
+		passkeyEnabled = *req.PasskeyEnabled
+	}
+	if passkeyEnabled {
+		configured, _, _ := h.settingService.PasskeyConfiguration()
+		if !configured {
+			response.BadRequest(c, "Passkey sign-in requires a valid WebAuthn RP ID and allowed HTTPS origins in the deployment configuration")
+			return
+		}
+	}
+	forwardedClientIPHeaders := append([]string(nil), previousSettings.ForwardedClientIPHeaders...)
+	if req.ForwardedClientIPHeaders != nil {
+		forwardedClientIPHeaders = append([]string(nil), (*req.ForwardedClientIPHeaders)...)
+	}
+
 	stepUpEnabled := previousSettings.StepUpEnabled
 	if req.StepUpEnabled != nil {
 		stepUpEnabled = *req.StepUpEnabled
@@ -912,8 +982,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	}
 	if !stepUpEnabled && previousSettings.StepUpEnabled {
 		if h.totpService == nil || h.userService == nil {
-			response.InternalError(c, "Step-up verification service unavailable")
-			return
+			// Let the common gate reject absent sessions and machine credentials
+			// before checking the dependencies required for a valid admin session.
+			if subject, ok := middleware.GetAuthSubjectFromContext(c); ok && subject.UserID > 0 && c.GetString("auth_method") != service.AuditAuthMethodAdminAPIKey {
+				response.InternalError(c, "Step-up verification service unavailable")
+				return
+			}
 		}
 		if !middleware.EnforceStepUpAlways(c, h.totpService, h.userService) {
 			return
@@ -980,6 +1054,10 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	req.SMTPPassword = strings.TrimSpace(req.SMTPPassword)
 	req.SMTPFrom = strings.TrimSpace(req.SMTPFrom)
 	req.SMTPFromName = strings.TrimSpace(req.SMTPFromName)
+	req.TencentCaptchaAppID = strings.TrimSpace(req.TencentCaptchaAppID)
+	req.TencentCaptchaAppSecretKey = strings.TrimSpace(req.TencentCaptchaAppSecretKey)
+	req.TencentCaptchaCloudSecretID = strings.TrimSpace(req.TencentCaptchaCloudSecretID)
+	req.TencentCaptchaCloudSecretKey = strings.TrimSpace(req.TencentCaptchaCloudSecretKey)
 	if req.SMTPPort <= 0 {
 		req.SMTPPort = 587
 	}
@@ -999,6 +1077,43 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		req.SMTPFrom = previousSettings.SMTPFrom
 		req.SMTPFromName = previousSettings.SMTPFromName
 		req.SMTPUseTLS = previousSettings.SMTPUseTLS
+	}
+
+	turnstileEnabled := req.TurnstileEnabled
+	if _, sent := sentFields["turnstile_enabled"]; !sent {
+		turnstileEnabled = previousSettings.TurnstileEnabled
+	}
+	tencentCaptchaEnabled := req.TencentCaptchaEnabled
+	if _, sent := sentFields["tencent_captcha_enabled"]; !sent {
+		tencentCaptchaEnabled = previousSettings.TencentCaptchaEnabled
+	}
+	aliyunCaptchaEnabled := req.AliyunCaptchaEnabled
+	if _, sent := sentFields["aliyun_captcha_enabled"]; !sent {
+		aliyunCaptchaEnabled = previousSettings.AliyunCaptchaEnabled
+	}
+	enabledCaptchaProviders := 0
+	for _, enabled := range []bool{turnstileEnabled, tencentCaptchaEnabled, aliyunCaptchaEnabled} {
+		if enabled {
+			enabledCaptchaProviders++
+		}
+	}
+	if enabledCaptchaProviders > 1 {
+		response.BadRequest(c, "Multiple captcha providers (Cloudflare Turnstile / Tencent Captcha / Aliyun Captcha) cannot be enabled at the same time")
+		return
+	}
+	// 阿里云地域 normalize：未发送保留已存值，非法值一律按中国内地落库
+	if _, sent := sentFields["aliyun_captcha_region"]; !sent {
+		req.AliyunCaptchaRegion = previousSettings.AliyunCaptchaRegion
+	}
+	if req.AliyunCaptchaRegion != service.AliyunCaptchaRegionSGP {
+		req.AliyunCaptchaRegion = service.AliyunCaptchaRegionCN
+	}
+	// 天御站点 normalize：未发送保留已存值，非法值一律按中国站落库
+	if _, sent := sentFields["tencent_captcha_region"]; !sent {
+		req.TencentCaptchaRegion = previousSettings.TencentCaptchaRegion
+	}
+	if req.TencentCaptchaRegion != service.TencentCaptchaRegionINTL {
+		req.TencentCaptchaRegion = service.TencentCaptchaRegionCN
 	}
 
 	// Turnstile 参数验证
@@ -1022,6 +1137,83 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		secretKeyChanged := previousSettings.TurnstileSecretKey != req.TurnstileSecretKey
 		if siteKeyChanged || secretKeyChanged {
 			if err := h.turnstileService.ValidateSecretKey(c.Request.Context(), req.TurnstileSecretKey); err != nil {
+				response.ErrorFrom(c, err)
+				return
+			}
+		}
+	}
+
+	if tencentCaptchaEnabled {
+		if _, sent := sentFields["tencent_captcha_app_id"]; !sent {
+			req.TencentCaptchaAppID = previousSettings.TencentCaptchaAppID
+		}
+		appID, err := strconv.ParseUint(req.TencentCaptchaAppID, 10, 64)
+		if err != nil || appID == 0 {
+			response.BadRequest(c, "Tencent Captcha CaptchaAppId must be a positive integer when enabled")
+			return
+		}
+		if req.TencentCaptchaAppSecretKey == "" {
+			req.TencentCaptchaAppSecretKey = previousSettings.TencentCaptchaAppSecretKey
+		}
+		if req.TencentCaptchaCloudSecretID == "" {
+			req.TencentCaptchaCloudSecretID = previousSettings.TencentCaptchaCloudSecretID
+		}
+		if req.TencentCaptchaCloudSecretKey == "" {
+			req.TencentCaptchaCloudSecretKey = previousSettings.TencentCaptchaCloudSecretKey
+		}
+		if req.TencentCaptchaAppSecretKey == "" {
+			response.BadRequest(c, "Tencent Captcha AppSecretKey is required when enabled")
+			return
+		}
+		if req.TencentCaptchaCloudSecretID == "" {
+			response.BadRequest(c, "Tencent Cloud SecretId is required when Tencent Captcha is enabled")
+			return
+		}
+		if req.TencentCaptchaCloudSecretKey == "" {
+			response.BadRequest(c, "Tencent Cloud SecretKey is required when Tencent Captcha is enabled")
+			return
+		}
+	}
+
+	// 阿里云验证码 2.0 参数验证
+	if aliyunCaptchaEnabled {
+		if _, sent := sentFields["aliyun_captcha_scene_id"]; !sent {
+			req.AliyunCaptchaSceneID = previousSettings.AliyunCaptchaSceneID
+		}
+		if _, sent := sentFields["aliyun_captcha_prefix"]; !sent {
+			req.AliyunCaptchaPrefix = previousSettings.AliyunCaptchaPrefix
+		}
+		if _, sent := sentFields["aliyun_captcha_access_key_id"]; !sent {
+			req.AliyunCaptchaAccessKeyID = previousSettings.AliyunCaptchaAccessKeyID
+		}
+		if req.AliyunCaptchaSceneID == "" {
+			response.BadRequest(c, "Aliyun Captcha Scene ID is required when enabled")
+			return
+		}
+		if req.AliyunCaptchaPrefix == "" {
+			response.BadRequest(c, "Aliyun Captcha Prefix is required when enabled")
+			return
+		}
+		if req.AliyunCaptchaAccessKeyID == "" {
+			response.BadRequest(c, "Aliyun Captcha AccessKey ID is required when enabled")
+			return
+		}
+		// 如果未提供 AccessKey Secret，使用已保存的值（留空保留当前值）
+		if req.AliyunCaptchaAccessKeySecret == "" {
+			if previousSettings.AliyunCaptchaAccessKeySecret == "" {
+				response.BadRequest(c, "Aliyun Captcha AccessKey Secret is required when enabled")
+				return
+			}
+			req.AliyunCaptchaAccessKeySecret = previousSettings.AliyunCaptchaAccessKeySecret
+		}
+
+		// 凭证任一变化时真实调用一次阿里云校验（避免配置错误导致无法登录）
+		credentialsChanged := previousSettings.AliyunCaptchaAccessKeyID != req.AliyunCaptchaAccessKeyID ||
+			previousSettings.AliyunCaptchaAccessKeySecret != req.AliyunCaptchaAccessKeySecret ||
+			previousSettings.AliyunCaptchaSceneID != req.AliyunCaptchaSceneID ||
+			previousSettings.AliyunCaptchaRegion != req.AliyunCaptchaRegion
+		if credentialsChanged {
+			if err := h.aliyunCaptchaService.ValidateCredentials(c.Request.Context(), req.AliyunCaptchaAccessKeyID, req.AliyunCaptchaAccessKeySecret, req.AliyunCaptchaSceneID, req.AliyunCaptchaRegion); err != nil {
 				response.ErrorFrom(c, err)
 				return
 			}
@@ -1745,6 +1937,22 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	}
 
 	settings := &service.SystemSettings{
+		PasskeyEnabled:               passkeyEnabled,
+		SessionBindingEnabled:        sessionBindingEnabled,
+		AuditLogRetentionDays:        req.AuditLogRetentionDays,
+		TencentCaptchaEnabled:        req.TencentCaptchaEnabled,
+		TencentCaptchaAppID:          req.TencentCaptchaAppID,
+		TencentCaptchaAppSecretKey:   req.TencentCaptchaAppSecretKey,
+		TencentCaptchaCloudSecretID:  req.TencentCaptchaCloudSecretID,
+		TencentCaptchaCloudSecretKey: req.TencentCaptchaCloudSecretKey,
+		TencentCaptchaRegion:         req.TencentCaptchaRegion,
+		AliyunCaptchaEnabled:         req.AliyunCaptchaEnabled,
+		AliyunCaptchaAccessKeyID:     req.AliyunCaptchaAccessKeyID,
+		AliyunCaptchaAccessKeySecret: req.AliyunCaptchaAccessKeySecret,
+		AliyunCaptchaSceneID:         req.AliyunCaptchaSceneID,
+		AliyunCaptchaPrefix:          req.AliyunCaptchaPrefix,
+		AliyunCaptchaRegion:          req.AliyunCaptchaRegion,
+		ForwardedClientIPHeaders:     forwardedClientIPHeaders,
 		// 系统全局 platform quota 默认值（整体替换语义）
 		DefaultPlatformQuotas:       req.DefaultPlatformQuotas,
 		AccountSchedulingThresholds: req.AccountSchedulingThresholds,
@@ -2167,6 +2375,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.ChannelMonitorShowQuota
 		}(),
+		ChannelMonitorHideUserRanking: func() bool {
+			if req.ChannelMonitorHideUserRanking != nil {
+				return *req.ChannelMonitorHideUserRanking
+			}
+			return previousSettings.ChannelMonitorHideUserRanking
+		}(),
 		GrokDefaultTextModel: func() string {
 			if req.GrokDefaultTextModel != nil {
 				return strings.TrimSpace(*req.GrokDefaultTextModel)
@@ -2190,6 +2404,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 				return *req.AvailableChannelsEnabled
 			}
 			return previousSettings.AvailableChannelsEnabled
+		}(),
+		SubscriptionEnabled: func() bool {
+			if req.SubscriptionEnabled != nil {
+				return *req.SubscriptionEnabled
+			}
+			return previousSettings.SubscriptionEnabled
 		}(),
 		ModelPlazaEnabled: func() bool {
 			if req.ModelPlazaEnabled != nil {
@@ -2348,7 +2568,7 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		}
 	}
 
-	h.auditSettingsUpdate(c, previousSettings, settings, previousAuthSourceDefaults, authSourceDefaults, req)
+	h.auditSettingsUpdate(c, previousSettings, settings, previousAuthSourceDefaults, authSourceDefaults, auditReq)
 
 	// 重新获取设置返回
 	updatedSettings, err := h.settingService.GetAllSettings(c.Request.Context())
@@ -2379,7 +2599,27 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		updatedPaymentCfg = &service.PaymentConfig{}
 	}
 
+	passkeyConfigured, passkeyRPID, passkeyRPOrigins := h.settingService.PasskeyConfiguration()
 	payload := dto.SystemSettings{
+		PasskeyEnabled:                                         updatedSettings.PasskeyEnabled,
+		PasskeyConfigured:                                      passkeyConfigured,
+		PasskeyRPID:                                            passkeyRPID,
+		PasskeyRPOrigins:                                       passkeyRPOrigins,
+		SessionBindingEnabled:                                  updatedSettings.SessionBindingEnabled,
+		AuditLogRetentionDays:                                  updatedSettings.AuditLogRetentionDays,
+		TencentCaptchaEnabled:                                  updatedSettings.TencentCaptchaEnabled,
+		TencentCaptchaAppID:                                    updatedSettings.TencentCaptchaAppID,
+		TencentCaptchaAppSecretKeyConfigured:                   updatedSettings.TencentCaptchaAppSecretKeyConfigured,
+		TencentCaptchaCloudSecretIDConfigured:                  updatedSettings.TencentCaptchaCloudSecretIDConfigured,
+		TencentCaptchaCloudSecretKeyConfigured:                 updatedSettings.TencentCaptchaCloudSecretKeyConfigured,
+		TencentCaptchaRegion:                                   updatedSettings.TencentCaptchaRegion,
+		AliyunCaptchaEnabled:                                   updatedSettings.AliyunCaptchaEnabled,
+		AliyunCaptchaAccessKeyID:                               updatedSettings.AliyunCaptchaAccessKeyID,
+		AliyunCaptchaAccessKeySecretConfigured:                 updatedSettings.AliyunCaptchaAccessKeySecretConfigured,
+		AliyunCaptchaSceneID:                                   updatedSettings.AliyunCaptchaSceneID,
+		AliyunCaptchaPrefix:                                    updatedSettings.AliyunCaptchaPrefix,
+		AliyunCaptchaRegion:                                    updatedSettings.AliyunCaptchaRegion,
+		ForwardedClientIPHeaders:                               updatedSettings.ForwardedClientIPHeaders,
 		RegistrationEnabled:                                    updatedSettings.RegistrationEnabled,
 		EmailVerifyEnabled:                                     updatedSettings.EmailVerifyEnabled,
 		RegistrationEmailSuffixWhitelist:                       updatedSettings.RegistrationEmailSuffixWhitelist,
@@ -2605,15 +2845,19 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		ChannelMonitorDefaultIntervalSeconds: updatedSettings.ChannelMonitorDefaultIntervalSeconds,
 		ChannelMonitorHideThroughput:         updatedSettings.ChannelMonitorHideThroughput,
 		ChannelMonitorShowQuota:              updatedSettings.ChannelMonitorShowQuota,
+		ChannelMonitorHideUserRanking:        updatedSettings.ChannelMonitorHideUserRanking,
 
 		GrokDefaultTextModel:           updatedSettings.GrokDefaultTextModel,
 		GrokCrossClientModelMapEnabled: updatedSettings.GrokCrossClientModelMapEnabled,
 		GrokDefaultBaseURLMode:         updatedSettings.GrokDefaultBaseURLMode,
 
 		AvailableChannelsEnabled: updatedSettings.AvailableChannelsEnabled,
-		ModelPlazaEnabled:        updatedSettings.ModelPlazaEnabled,
-		ModelPlazaRequireAuth:    updatedSettings.ModelPlazaRequireAuth,
-		ModelPlazaDescription:    updatedSettings.ModelPlazaDescription,
+		SubscriptionEnabled:      updatedSettings.SubscriptionEnabled,
+
+		ModelPlazaEnabled:       updatedSettings.ModelPlazaEnabled,
+		ModelPlazaRequireAuth:   updatedSettings.ModelPlazaRequireAuth,
+		ModelPlazaDescription:   updatedSettings.ModelPlazaDescription,
+		PluginManagementEnabled: updatedSettings.PluginManagementEnabled,
 
 		AffiliateEnabled: updatedSettings.AffiliateEnabled,
 
@@ -2717,6 +2961,12 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.TotpEnabled != after.TotpEnabled {
 		changed = append(changed, "totp_enabled")
 	}
+	if before.PasskeyEnabled != after.PasskeyEnabled {
+		changed = append(changed, "passkey_enabled")
+	}
+	if before.SessionBindingEnabled != after.SessionBindingEnabled {
+		changed = append(changed, "session_binding_enabled")
+	}
 	if before.StepUpEnabled != after.StepUpEnabled {
 		changed = append(changed, "step_up_enabled")
 	}
@@ -2762,6 +3012,42 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if req.TurnstileSecretKey != "" {
 		changed = append(changed, "turnstile_secret_key")
 	}
+	if before.TencentCaptchaEnabled != after.TencentCaptchaEnabled {
+		changed = append(changed, "tencent_captcha_enabled")
+	}
+	if before.TencentCaptchaAppID != after.TencentCaptchaAppID {
+		changed = append(changed, "tencent_captcha_app_id")
+	}
+	if req.TencentCaptchaAppSecretKey != "" {
+		changed = append(changed, "tencent_captcha_app_secret_key")
+	}
+	if req.TencentCaptchaCloudSecretID != "" {
+		changed = append(changed, "tencent_captcha_cloud_secret_id")
+	}
+	if req.TencentCaptchaCloudSecretKey != "" {
+		changed = append(changed, "tencent_captcha_cloud_secret_key")
+	}
+	if before.TencentCaptchaRegion != after.TencentCaptchaRegion {
+		changed = append(changed, "tencent_captcha_region")
+	}
+	if before.AliyunCaptchaEnabled != after.AliyunCaptchaEnabled {
+		changed = append(changed, "aliyun_captcha_enabled")
+	}
+	if before.AliyunCaptchaAccessKeyID != after.AliyunCaptchaAccessKeyID {
+		changed = append(changed, "aliyun_captcha_access_key_id")
+	}
+	if req.AliyunCaptchaAccessKeySecret != "" {
+		changed = append(changed, "aliyun_captcha_access_key_secret")
+	}
+	if before.AliyunCaptchaSceneID != after.AliyunCaptchaSceneID {
+		changed = append(changed, "aliyun_captcha_scene_id")
+	}
+	if before.AliyunCaptchaPrefix != after.AliyunCaptchaPrefix {
+		changed = append(changed, "aliyun_captcha_prefix")
+	}
+	if before.AliyunCaptchaRegion != after.AliyunCaptchaRegion {
+		changed = append(changed, "aliyun_captcha_region")
+	}
 	if before.APIKeyACLTrustForwardedIP != after.APIKeyACLTrustForwardedIP {
 		changed = append(changed, "api_key_acl_trust_forwarded_ip")
 	}
@@ -2773,6 +3059,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.APIRequestIPBlockTrustForwardedIP != after.APIRequestIPBlockTrustForwardedIP {
 		changed = append(changed, "api_request_ip_block_trust_forwarded_ip")
+	}
+	if !equalStringSlice(before.ForwardedClientIPHeaders, after.ForwardedClientIPHeaders) {
+		changed = append(changed, "forwarded_client_ip_headers")
 	}
 	if before.LinuxDoConnectEnabled != after.LinuxDoConnectEnabled {
 		changed = append(changed, "linuxdo_connect_enabled")
@@ -3218,6 +3507,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.AvailableChannelsEnabled != after.AvailableChannelsEnabled {
 		changed = append(changed, "available_channels_enabled")
+	}
+	if before.SubscriptionEnabled != after.SubscriptionEnabled {
+		changed = append(changed, "subscription_enabled")
 	}
 	if before.ModelPlazaEnabled != after.ModelPlazaEnabled {
 		changed = append(changed, "model_plaza_enabled")
@@ -4483,4 +4775,18 @@ func stringSetting(value *string, fallback string) string {
 		return fallback
 	}
 	return *value
+}
+
+// SetAliyunCaptchaService attaches the Aliyun captcha credential validator without
+// changing the constructor signature used by existing unit tests.
+func (h *SettingHandler) SetAliyunCaptchaService(aliyunCaptchaService *service.AliyunCaptchaService) {
+	h.aliyunCaptchaService = aliyunCaptchaService
+}
+
+func settingsAuditRequest(req UpdateSettingsRequest) UpdateSettingsRequest {
+	req.TencentCaptchaAppSecretKey = strings.TrimSpace(req.TencentCaptchaAppSecretKey)
+	req.TencentCaptchaCloudSecretID = strings.TrimSpace(req.TencentCaptchaCloudSecretID)
+	req.TencentCaptchaCloudSecretKey = strings.TrimSpace(req.TencentCaptchaCloudSecretKey)
+	req.AliyunCaptchaAccessKeySecret = strings.TrimSpace(req.AliyunCaptchaAccessKeySecret)
+	return req
 }

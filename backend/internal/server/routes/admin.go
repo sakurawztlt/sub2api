@@ -24,10 +24,12 @@ func RegisterAdminRoutes(
 
 	admin := v1.Group("/admin")
 	admin.Use(gin.HandlerFunc(adminAuth))
+	admin.Use(middleware.AdminComplianceGuard(settingService))
 	// 面板全局按用户限流（默认管理员豁免，可在系统设置中关闭豁免）
 	admin.Use(panelRateLimiter.Global())
 	{
 		// 仪表盘
+		registerAdminComplianceRoutes(admin, h)
 		registerDashboardRoutes(admin, h)
 
 		// 用户管理
@@ -324,13 +326,14 @@ func registerUserManagementRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 
 func registerGroupRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	groups := admin.Group("/groups")
+	groups.GET("/live-capability", h.Admin.Group.GetLiveCapability)
 	{
 		groups.GET("", h.Admin.Group.List)
 		groups.GET("/all", h.Admin.Group.GetAll)
 		groups.GET("/usage-summary", h.Admin.Group.GetUsageSummary)
 		groups.GET("/capacity-summary", h.Admin.Group.GetCapacitySummary)
 		groups.PUT("/sort-order", h.Admin.Group.UpdateSortOrder)
-		groups.GET("/:id/models-list-candidates", h.Admin.Group.GetModelsListCandidates)
+		groups.GET("/:id/model-allowlist-candidates", h.Admin.Group.GetGroupModelAllowlistCandidates)
 		groups.GET("/:id/composite-routes", h.Admin.Group.ListCompositeRoutes)
 		groups.POST("/:id/composite-routes", h.Admin.Group.CreateCompositeRoute)
 		groups.POST("/:id/composite-routes/preview", h.Admin.Group.PreviewCompositeRoute)
@@ -366,6 +369,8 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		accounts.POST("/sync/crs", h.Admin.Account.SyncFromCRS)
 		accounts.POST("/sync/crs/preview", h.Admin.Account.PreviewFromCRS)
 		accounts.PUT("/:id", h.Admin.Account.Update)
+		accounts.GET("/:id/grok-media-eligibility", h.Admin.Account.GetGrokMediaEligibility)
+		accounts.PUT("/:id/grok-media-eligibility", h.Admin.Account.UpdateGrokMediaEligibility)
 		accounts.PUT("/:id/upstream-billing-probe", h.Admin.Account.SetUpstreamBillingProbeEnabled)
 		accounts.POST("/:id/upstream-billing-probe", h.Admin.Account.ProbeUpstreamBilling)
 		accounts.DELETE("/:id", h.Admin.Account.Delete)
@@ -833,4 +838,10 @@ func registerAffiliateRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 			users.DELETE("/:user_id", h.Admin.Affiliate.ClearUserSettings)
 		}
 	}
+}
+
+func registerAdminComplianceRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	compliance := admin.Group("/compliance")
+	compliance.GET("", h.Admin.Compliance.GetStatus)
+	compliance.POST("/accept", h.Admin.Compliance.Accept)
 }

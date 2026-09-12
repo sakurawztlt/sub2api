@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/gin-gonic/gin"
+
 	coderws "github.com/coder/websocket"
 	"github.com/stretchr/testify/require"
 )
@@ -248,4 +251,61 @@ func TestShouldLogOpenAIWSPayloadSchema(t *testing.T) {
 
 	svc.cfg.Gateway.OpenAIWS.PayloadLogSampleRate = 1
 	require.True(t, svc.shouldLogOpenAIWSPayloadSchema(2))
+}
+
+func TestOpsUpstreamWSProxyAttributionNeverReportsDirect(t *testing.T) {
+	proxyID := int64(7)
+	id, name := opsUpstreamWSProxyAttribution(nil)
+	require.Nil(t, id)
+	require.Equal(t, opsProxyNameUnknown, name)
+
+	id, name = opsUpstreamWSProxyAttribution(&Account{})
+	require.Nil(t, id)
+	require.Equal(t, opsProxyNameUnknown, name, "no managed proxy => http.DefaultClient => unknown, never direct")
+
+	id, name = opsUpstreamWSProxyAttribution(&Account{ProxyID: &proxyID, Proxy: &Proxy{ID: proxyID, Name: "ws-proxy"}})
+	require.NotNil(t, id)
+	require.Equal(t, proxyID, *id)
+	require.Equal(t, "ws-proxy", name)
+}
+
+func TestWriteOpenAIWSFallbackErrorResponseKeepsManagedProxy(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	svc := &OpenAIGatewayService{}
+	proxyID := int64(10060)
+	account := &Account{ID: 42, Name: "proxied", Platform: PlatformOpenAI, ProxyID: &proxyID, Proxy: &Proxy{ID: proxyID, Name: "ws-proxy"}}
+
+	require.True(t, svc.writeOpenAIWSFallbackErrorResponse(c, account, wrapOpenAIWSFallback("auth_failed", errors.New("unauthorized"))))
+
+	raw, ok := c.Get(OpsUpstreamErrorsKey)
+	require.True(t, ok)
+	events, ok := raw.([]*OpsUpstreamErrorEvent)
+	require.True(t, ok)
+	require.Len(t, events, 1)
+	require.NotNil(t, events[0].ProxyID)
+	require.Equal(t, proxyID, *events[0].ProxyID)
+	require.Equal(t, "ws-proxy", events[0].ProxyName)
+}
+
+func TestWriteOpenAIWSFallbackErrorResponseMarksDefaultClientRouteUnknown(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	svc := &OpenAIGatewayService{}
+	account := &Account{ID: 42, Name: "default-client", Platform: PlatformOpenAI}
+
+	written := svc.writeOpenAIWSFallbackErrorResponse(
+		c,
+		account,
+		wrapOpenAIWSFallback("auth_failed", errors.New("unauthorized")),
+	)
+	require.True(t, written)
+
+	raw, ok := c.Get(OpsUpstreamErrorsKey)
+	require.True(t, ok)
+	events, ok := raw.([]*OpsUpstreamErrorEvent)
+	require.True(t, ok)
+	require.Len(t, events, 1)
+	require.Nil(t, events[0].ProxyID)
+	require.Equal(t, opsProxyNameUnknown, events[0].ProxyName)
 }

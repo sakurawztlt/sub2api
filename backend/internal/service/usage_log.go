@@ -18,12 +18,13 @@ const (
 	RequestTypeSync         RequestType = 1
 	RequestTypeStream       RequestType = 2
 	RequestTypeWSV2         RequestType = 3
+	RequestTypeLive         RequestType = 5
 	RequestTypeCyberBlocked RequestType = 4 // cyber_policy 命中（透传但被上游安全策略拒绝）
 )
 
 func (t RequestType) IsValid() bool {
 	switch t {
-	case RequestTypeUnknown, RequestTypeSync, RequestTypeStream, RequestTypeWSV2, RequestTypeCyberBlocked:
+	case RequestTypeUnknown, RequestTypeSync, RequestTypeStream, RequestTypeWSV2, RequestTypeCyberBlocked, RequestTypeLive:
 		return true
 	default:
 		return false
@@ -47,6 +48,8 @@ func (t RequestType) String() string {
 		return "ws_v2"
 	case RequestTypeCyberBlocked:
 		return "cyber"
+	case RequestTypeLive:
+		return "live"
 	default:
 		return "unknown"
 	}
@@ -68,8 +71,10 @@ func ParseUsageRequestType(value string) (RequestType, error) {
 		return RequestTypeWSV2, nil
 	case "cyber":
 		return RequestTypeCyberBlocked, nil
+	case "live":
+		return RequestTypeLive, nil
 	default:
-		return RequestTypeUnknown, fmt.Errorf("invalid request_type, allowed values: unknown, sync, stream, ws_v2, cyber")
+		return RequestTypeUnknown, fmt.Errorf("invalid request_type, allowed values: unknown, sync, stream, ws_v2, cyber, live")
 	}
 }
 
@@ -193,6 +198,10 @@ type UsageLog struct {
 	// header. It is never derived from metadata.user_id, prompt_cache_key, or a
 	// relay-synthesized identifier.
 	SessionID *string
+	// UpstreamRequestID 是直接上游在响应头中声明的请求标识，只读账户
+	// extra.upstream_request_id_header 指定的头；账户未指定头名、WS 轮次
+	// 与上游没有该头的路径为 nil。
+	UpstreamRequestID *string
 
 	// Cache TTL Override 标记（管理员强制替换了缓存 TTL 计费）
 	CacheTTLOverridden bool

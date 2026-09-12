@@ -1,15 +1,34 @@
 package openai
 
-import "testing"
+import (
+	"testing"
 
-func TestDefaultModelsPreferConcreteGPT56Sol(t *testing.T) {
-	if len(DefaultModels) < 2 {
-		t.Fatalf("expected GPT-5.6 models in default catalog")
+	"github.com/stretchr/testify/require"
+)
+
+func TestDefaultModelsIncludeBareGPT56Alias(t *testing.T) {
+	require.Contains(t, DefaultModelIDs(), "gpt-5.6")
+}
+
+func TestDefaultModelsIncludeGPT6Astra(t *testing.T) {
+	require.Contains(t, DefaultModelIDs(), "gpt-6-astra")
+	require.Contains(t, DefaultModelIDs(), "gpt-6")
+	var displayName string
+	for _, model := range DefaultModels {
+		if model.ID == "gpt-6-astra" {
+			displayName = model.DisplayName
+			break
+		}
 	}
-	if got := DefaultModels[0].ID; got != "gpt-5.6-sol" {
-		t.Fatalf("first default model = %q, want gpt-5.6-sol", got)
-	}
-	if got := DefaultModels[1].ID; got != "gpt-5.6" {
-		t.Fatalf("second default model = %q, want gpt-5.6 alias", got)
-	}
+	require.Equal(t, "GPT-6 Astra", displayName)
+}
+
+func TestDefaultModelsPreferConcreteGPT56SolForAccountTests(t *testing.T) {
+	require.NotEmpty(t, DefaultModels)
+	require.Equal(t, "gpt-5.6-sol", DefaultModels[0].ID)
+}
+
+func TestDefaultModelsIncludeGPTImage25(t *testing.T) {
+	require.Contains(t, DefaultModelIDs(), "gpt-image-2.5-flare")
+	require.Contains(t, DefaultModelIDs(), "gpt-image-2.5-sunburst")
 }

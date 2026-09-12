@@ -38,17 +38,21 @@ export type SchedulingThresholdPlatformType =
   | "grok"
   | "kimi"
   | "zhipu"
+  | "minimax"
+  | "opencode_go"
 
 export type AccountSchedulingThresholdsMap = Record<SchedulingThresholdPlatformType, number>
 
 // 与后端 AllowedSchedulingThresholdPlatforms 保持一致（deepseek 为余额型，
-// 走余额检测而非用量阈值）。
+// 走余额检测而非用量阈值；minimax Coding/Token Plan 与 OpenCode GO 有滚动窗口）。
 export const SCHEDULING_THRESHOLD_PLATFORMS: SchedulingThresholdPlatformType[] = [
   "openai",
   "anthropic",
   "grok",
   "kimi",
   "zhipu",
+  "minimax",
+  "opencode_go",
 ]
 
 export function normalizeAccountSchedulingThresholdsMap(
@@ -703,9 +707,13 @@ export interface SystemSettings {
   channel_monitor_default_interval_seconds: number;
   channel_monitor_hide_throughput?: boolean;
   channel_monitor_show_quota?: boolean;
+  channel_monitor_hide_user_ranking?: boolean;
 
   // Available Channels feature switch
   available_channels_enabled: boolean;
+
+  // Subscription feature switch (user sidebar "My Subscriptions" entry)
+  subscription_enabled: boolean;
 
   // Model Plaza feature switches + description
   model_plaza_enabled: boolean;
@@ -721,6 +729,22 @@ export interface SystemSettings {
 
   // Allow user view error requests
   allow_user_view_error_requests: boolean;
+  passkey_enabled: boolean;
+  passkey_configured: boolean;
+  passkey_rp_id: string;
+  passkey_rp_origins: string[];
+  tencent_captcha_enabled: boolean;
+  tencent_captcha_app_id: string;
+  tencent_captcha_app_secret_key_configured: boolean;
+  tencent_captcha_cloud_secret_id_configured: boolean;
+  tencent_captcha_cloud_secret_key_configured: boolean;
+  tencent_captcha_region: string;
+  aliyun_captcha_enabled: boolean;
+  aliyun_captcha_access_key_id: string;
+  aliyun_captcha_access_key_secret_configured: boolean;
+  aliyun_captcha_scene_id: string;
+  aliyun_captcha_prefix: string;
+  aliyun_captcha_region: string;
 }
 
 export interface UpdateSettingsRequest {
@@ -990,9 +1014,13 @@ export interface UpdateSettingsRequest {
   channel_monitor_default_interval_seconds?: number;
   channel_monitor_hide_throughput?: boolean;
   channel_monitor_show_quota?: boolean;
+  channel_monitor_hide_user_ranking?: boolean;
 
   // Available Channels feature switch
   available_channels_enabled?: boolean;
+
+  // Subscription feature switch
+  subscription_enabled?: boolean;
 
   // Model Plaza feature switches + description
   model_plaza_enabled?: boolean;
@@ -1007,6 +1035,19 @@ export interface UpdateSettingsRequest {
   openai_fast_policy_settings?: OpenAIFastPolicySettings;
 
   allow_user_view_error_requests?: boolean;
+  passkey_enabled?: boolean;
+  tencent_captcha_enabled?: boolean;
+  tencent_captcha_app_id?: string;
+  tencent_captcha_app_secret_key?: string;
+  tencent_captcha_cloud_secret_id?: string;
+  tencent_captcha_cloud_secret_key?: string;
+  tencent_captcha_region?: string;
+  aliyun_captcha_enabled?: boolean;
+  aliyun_captcha_access_key_id?: string;
+  aliyun_captcha_access_key_secret?: string;
+  aliyun_captcha_scene_id?: string;
+  aliyun_captcha_prefix?: string;
+  aliyun_captcha_region?: string;
 }
 
 /**
@@ -1398,7 +1439,7 @@ export async function updateRectifierSettings(
  * Matches backend dto.OpenAIFastPolicyRule.
  */
 export interface OpenAIFastPolicyRule {
-  service_tier: "all" | "priority" | "flex";
+  service_tier: "all" | "priority" | "flex" | "ultrafast";
   action: "pass" | "filter" | "block" | "force_priority";
   scope: "all" | "oauth" | "apikey" | "bedrock";
   user_ids?: number[];

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
@@ -28,21 +27,6 @@ const (
 	// ContextKeySessionID 认证中间件写入的会话 ID（refresh token family）。
 	ContextKeySessionID = "session_id"
 )
-
-// SecurityClientIP returns the security-sensitive client IP from an existing
-// session-binding snapshot when present, then falls back to the trusted-proxy
-// resolver used by the rest of the server.
-func SecurityClientIP(c *gin.Context) string {
-	if c == nil {
-		return ""
-	}
-	if c.Request != nil {
-		if binding := service.SessionBindingFromContext(c.Request.Context()); binding != nil && strings.TrimSpace(binding.IP) != "" {
-			return binding.IP
-		}
-	}
-	return ip.GetTrustedClientIP(c)
-}
 
 // SetAuditAction 允许 handler / 中间件为当前请求指定审计动作名（覆盖自动推导）。
 func SetAuditAction(c *gin.Context, action string) {

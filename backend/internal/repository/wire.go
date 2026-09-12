@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 
@@ -64,7 +65,17 @@ func ProvideSchedulerCache(rdb *redis.Client, cfg *config.Config) service.Schedu
 
 // ProviderSet is the Wire provider set for all repositories
 var ProviderSet = wire.NewSet(
+	NewImageTaskStore,
+	NewAuthCacheInvalidationOutboxRepository,
+	ProvideImageStorageFactory,
+	NewBatchImageRepository,
+	NewBatchImageQueue,
+	NewBatchImageDownloadLimiter,
 	NewUserRepository,
+	NewPasskeyRepository,
+	NewPasskeySessionStore,
+	NewTencentCaptchaVerifier,
+	NewAliyunCaptchaVerifier,
 	NewAPIKeyRepository,
 	NewGroupRepository,
 	NewCompositeModelRouteRepository,
@@ -127,6 +138,7 @@ var ProviderSet = wire.NewSet(
 	NewRefreshTokenCache,
 	NewErrorPassthroughCache,
 	NewTLSFingerprintProfileCache,
+	NewChannelCache,
 	NewContentModerationHashCache,
 
 	// Encryptors
@@ -203,4 +215,14 @@ func ProvideSQLDB(client *ent.Client) (*sql.DB, error) {
 // 提供：*redis.Client
 func ProvideRedis(cfg *config.Config) *redis.Client {
 	return InitRedis(cfg)
+}
+
+// ProvideImageStorageFactory 提供按需构造对象存储客户端的工厂。
+//
+// 这里返回工厂而不是实例：异步生图的开关与凭证可以在后台随时改动，客户端必须能在
+// 设置保存后重建，而不是在启动时定死一份。
+func ProvideImageStorageFactory() service.ImageStorageFactory {
+	return func(ctx context.Context, cfg *config.ImageStorageConfig) (service.ImageStorage, error) {
+		return NewS3ImageStorage(ctx, cfg)
+	}
 }

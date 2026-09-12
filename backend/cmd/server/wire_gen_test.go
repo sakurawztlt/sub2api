@@ -52,6 +52,9 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 
 	cleanup := provideCleanup(
 		nil, // entClient
+		nil, // AuthCacheInvalidationWorker
+		nil, // BatchImageCleanupService
+		nil, // BatchImageWorkerRuntime
 		nil, // redis
 		&service.OpsMetricsCollector{},
 		&service.OpsAggregationService{},

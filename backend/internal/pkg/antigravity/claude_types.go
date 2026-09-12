@@ -145,6 +145,7 @@ type modelDef struct {
 	ID          string
 	DisplayName string
 	CreatedAt   string // 仅 Claude API 格式使用
+	IsReasoning bool
 }
 
 // Antigravity 支持的 Claude 模型
@@ -177,11 +178,21 @@ var geminiModels = []modelDef{
 	{ID: "gemini-3.1-flash-image", DisplayName: "Gemini 3.1 Flash Image", CreatedAt: "2026-02-19T00:00:00Z"},
 	{ID: "gemini-3.1-flash-image-preview", DisplayName: "Gemini 3.1 Flash Image Preview", CreatedAt: "2026-02-19T00:00:00Z"},
 	{ID: "gemini-3.6-flash", DisplayName: "Gemini 3.6 Flash", CreatedAt: "2026-07-21T00:00:00Z"},
-	{ID: "gemini-3.6-flash-high", DisplayName: "Gemini 3.6 Flash High", CreatedAt: "2026-07-21T00:00:00Z"},
-	{ID: "gemini-3.6-flash-low", DisplayName: "Gemini 3.6 Flash Low", CreatedAt: "2026-07-21T00:00:00Z"},
-	{ID: "gemini-3.6-flash-medium", DisplayName: "Gemini 3.6 Flash Medium", CreatedAt: "2026-07-21T00:00:00Z"},
-	{ID: "gemini-3.6-flash-tiered", DisplayName: "Gemini 3.6 Flash", CreatedAt: "2026-07-21T00:00:00Z"},
-	{ID: "gemini-3-pro-preview", DisplayName: "Gemini 3 Pro Preview", CreatedAt: "2025-06-01T00:00:00Z"},
+	{ID: "gemini-3.6-flash-high", DisplayName: "Gemini 3.6 Flash High", CreatedAt: "2026-07-21T00:00:00Z", IsReasoning: true},
+	{ID: "gemini-3.6-flash-low", DisplayName: "Gemini 3.6 Flash Low", CreatedAt: "2026-07-21T00:00:00Z", IsReasoning: true},
+	{ID: "gemini-3.6-flash-medium", DisplayName: "Gemini 3.6 Flash Medium", CreatedAt: "2026-07-21T00:00:00Z", IsReasoning: true},
+	{ID: "gemini-3.6-flash-tiered", DisplayName: "Gemini 3.6 Flash", CreatedAt: "2026-07-21T00:00:00Z", IsReasoning: true},
+	{ID: "gemini-3.7-flash", DisplayName: "Gemini 3.7 Flash", CreatedAt: "2026-08-13T00:00:00Z"},
+	{ID: "gemini-3.7-flash-high", DisplayName: "Gemini 3.7 Flash High", CreatedAt: "2026-08-13T00:00:00Z", IsReasoning: true},
+	{ID: "gemini-3.7-flash-low", DisplayName: "Gemini 3.7 Flash Low", CreatedAt: "2026-08-13T00:00:00Z", IsReasoning: true},
+	{ID: "gemini-3.7-flash-medium", DisplayName: "Gemini 3.7 Flash Medium", CreatedAt: "2026-08-13T00:00:00Z", IsReasoning: true},
+	{ID: "gemini-3.7-flash-tiered", DisplayName: "Gemini 3.7 Flash", CreatedAt: "2026-08-13T00:00:00Z", IsReasoning: true},
+	{ID: "gemini-3.8-flash", DisplayName: "Gemini 3.8 Flash", CreatedAt: "2026-09-02T00:00:00Z"},
+	{ID: "gemini-3.8-flash-high", DisplayName: "Gemini 3.8 Flash High", CreatedAt: "2026-09-02T00:00:00Z", IsReasoning: true},
+	{ID: "gemini-3.8-flash-low", DisplayName: "Gemini 3.8 Flash Low", CreatedAt: "2026-09-02T00:00:00Z", IsReasoning: true},
+	{ID: "gemini-3.8-flash-medium", DisplayName: "Gemini 3.8 Flash Medium", CreatedAt: "2026-09-02T00:00:00Z", IsReasoning: true},
+	{ID: "gemini-3.8-flash-tiered", DisplayName: "Gemini 3.8 Flash", CreatedAt: "2026-09-02T00:00:00Z", IsReasoning: true},
+	{ID: "gemini-3-pro-preview", DisplayName: "Gemini 3 Pro Preview", CreatedAt: "2025-06-01T00:00:00Z", IsReasoning: true},
 	{ID: "gemini-3-pro-image", DisplayName: "Gemini 3 Pro Image", CreatedAt: "2025-06-01T00:00:00Z"},
 }
 

@@ -22,6 +22,7 @@ export const useAppStore = defineStore('app', () => {
   const publicSettingsLoaded = ref<boolean>(false)
   const publicSettingsLoading = ref<boolean>(false)
   const siteName = ref<string>('Sub2API')
+  const sidebarScrollTop = ref(0)
   const siteLogo = ref<string>('')
   const siteVersion = ref<string>('')
   const contactInfo = ref<string>('')
@@ -293,6 +294,9 @@ export const useAppStore = defineStore('app', () => {
         promo_code_enabled: true,
         password_reset_enabled: false,
         invitation_code_enabled: false,
+        passkey_enabled: false,
+        tencent_captcha_enabled: false,
+        aliyun_captcha_enabled: false,
         turnstile_enabled: false,
         turnstile_site_key: '',
         site_name: siteName.value,
@@ -326,6 +330,8 @@ export const useAppStore = defineStore('app', () => {
         channel_monitor_enabled: true,
         channel_monitor_default_interval_seconds: 60,
         available_channels_enabled: false,
+        subscription_enabled: true,
+        payment_balance_disabled: false,
         model_plaza_enabled: false,
         model_plaza_require_auth: false,
         plugin_management_enabled: false,
@@ -380,6 +386,7 @@ export const useAppStore = defineStore('app', () => {
   return {
     // State
     sidebarCollapsed,
+    sidebarScrollTop,
     mobileOpen,
     loading,
     toasts,

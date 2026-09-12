@@ -32,6 +32,7 @@ describe('OpenAI Fast/Flex policy locale keys', () => {
     expect(zh.admin.settings.openaiFastPolicy).toMatchObject({
       tierAll: '全部 tier 值',
       actionForcePriority: '强制设置 priority（fast）',
+      tierUltrafast: 'ultrafast',
       modelWhitelist: '目标模型',
       fallbackAction: '其他模型处理方式',
       summaryTargetModels: '目标模型',
@@ -45,6 +46,7 @@ describe('OpenAI Fast/Flex policy locale keys', () => {
     expect(en.admin.settings.openaiFastPolicy).toMatchObject({
       tierAll: 'All tier values',
       actionForcePriority: 'Force priority (fast)',
+      tierUltrafast: 'ultrafast',
       modelWhitelist: 'Target models',
       fallbackAction: 'Other models action',
       summaryTargetModels: 'Target models',

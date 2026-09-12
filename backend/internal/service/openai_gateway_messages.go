@@ -46,6 +46,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	promptCacheKey string,
 	defaultMappedModel string,
 ) (forwardResultOut *OpenAIForwardResult, _ error) {
+	rememberOpenCodeInboundBody(c, body)
 	beginUpstreamResponseModelObservation(c)
 	defer func() {
 		forwardResultOut = attachObservedOpenAIUpstreamResponseModel(c, forwardResultOut)
@@ -55,12 +56,23 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		return nil, err
 	}
 
-	// CN providers configured for their native Anthropic protocol (including
-	// adaptive mode) must stay on /v1/messages so thinking, tool_use and cache
-	// semantics are preserved end to end. This dispatch precedes the Responses
-	// capability probe because native Anthropic accounts intentionally do not
-	// advertise OpenAI Responses support.
-	if account.IsAnthropicProtocol() || account.IsAdaptiveAPIProtocol() {
+	// OpenCode Go：按模型原生协议分流。规则未命中兜底 Chat Completions。
+	if account.IsOpenCodeGo() {
+		mapped := resolveOpenCodeGoMappedModel(account, body, defaultMappedModel)
+		switch openCodeGoNativeProtocol(account, mapped) {
+		case APIProtocolAnthropic:
+			return s.forwardAnthropicViaNativeAnthropicEndpoint(ctx, c, account, body, defaultMappedModel)
+		case APIProtocolResponses:
+			break
+		default:
+			return s.forwardAnthropicViaRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+		}
+	} else if account.IsAnthropicProtocol() || account.IsAdaptiveAPIProtocol() {
+		// 入口分流（国产供应商 Anthropic 协议）：上游为供应商原生 Anthropic 端点时，
+		// /v1/messages 请求零转换直通（仅模型名映射 + 少量 body 清洗），完整保留
+		// thinking / tool_use / cache 语义，适配 Claude Code 等原生客户端。
+		// 必须先于 ShouldUseResponsesAPI 分流：Anthropic 协议账号经 probe 落标
+		// openai_responses_supported=false，会先命中下方的 CC 直转分支。
 		return s.forwardAnthropicViaNativeAnthropicEndpoint(ctx, c, account, body, defaultMappedModel)
 	}
 
@@ -69,6 +81,8 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
 		return s.forwardAnthropicViaRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 	}
+	SetActualOpenAIUpstreamEndpoint(c, openAIResponsesUpstreamEndpoint)
+
 	startTime := time.Now()
 
 	// 5/9 codex audit: defense-in-depth. gcr 入口已经 canonicalize 过
@@ -357,10 +371,9 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	if account.Platform == PlatformOpenAI {
 		policyBody, changed, policyErr := ApplyOpenAIReasoningEffortPolicyFromContext(ctx, responsesBody)
 		if policyErr != nil {
-			var overLimit *ReasoningEffortOverLimitError
-			if errors.As(policyErr, &overLimit) {
+			if IsReasoningEffortPolicyDenied(policyErr) {
 				MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
-				writeAnthropicError(c, http.StatusForbidden, "forbidden_error", overLimit.Error())
+				writeAnthropicError(c, http.StatusForbidden, "forbidden_error", policyErr.Error())
 			}
 			return nil, policyErr
 		}
@@ -471,14 +484,59 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	if account.Proxy != nil {
 		proxyURL = account.Proxy.ActiveURL()
 	}
-	// codex round 11al: 记 time-to-headers (从 Do() 到 resp 返回的耗时).
-	// 大上下文请求排查时跟 first_token_ms / first_meaningful_ms 一起看,
-	// 区分"上游 HTTP 慢" vs "上游处理慢".
+	// Grok may reject encrypted reasoning replayed under a different OAuth
+	// account/cache identity. Match forwardGrokResponses: one strip+retry before
+	// treating the 400 as a hard failure / failover trigger.
 	upstreamReqStart := time.Now()
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
-	timeToHeadersMs := int(time.Since(upstreamReqStart).Milliseconds())
-	if err != nil {
-		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
+	timeToHeadersMs := 0
+	var resp *http.Response
+	for attempt := 0; ; attempt++ {
+		if attempt > 0 {
+			if account.Platform != PlatformGrok {
+				break
+			}
+			upstreamCtxRetry, releaseRetry := detachUpstreamContext(ctx)
+			upstreamReq, err = buildGrokResponsesRequest(upstreamCtxRetry, c, account, responsesBody, token, grokCacheIdentity, s.cfg, s.settingService)
+			releaseRetry()
+			if err != nil {
+				return nil, fmt.Errorf("build grok retry request: %w", err)
+			}
+		}
+		resp, err = s.doOpenAIUpstream(upstreamReq, proxyURL, account)
+		timeToHeadersMs = int(time.Since(upstreamReqStart).Milliseconds())
+		if err != nil {
+			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
+		}
+		if account.Platform != PlatformGrok || attempt > 0 || resp.StatusCode != http.StatusBadRequest {
+			break
+		}
+		respBody := s.readUpstreamErrorBody(resp)
+		if resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		// Prefer explicit decrypt errors; also strip once on any 400 when the
+		// outbound body still carries reasoning.encrypted_content (account
+		// switch often returns opaque "Upstream error: 400").
+		shouldStrip := isGrokInvalidEncryptedContentResponse(resp.StatusCode, respBody) ||
+			requestHasGrokEncryptedReasoning(responsesBody)
+		if !shouldStrip {
+			resp.Body = io.NopCloser(bytes.NewReader(respBody))
+			break
+		}
+		retryBody, changed, trimErr := trimGrokInvalidEncryptedContentRetryBody(responsesBody)
+		if trimErr != nil {
+			return nil, fmt.Errorf("prepare Grok invalid encrypted_content retry: %w", trimErr)
+		}
+		if !changed {
+			resp.Body = io.NopCloser(bytes.NewReader(respBody))
+			break
+		}
+		responsesBody = retryBody
+		logger.L().Info("openai messages: retrying after stripping invalid Grok encrypted_content",
+			zap.Int64("account_id", account.ID),
+			zap.Bool("cache_identity_present", strings.TrimSpace(grokCacheIdentity) != ""),
+			zap.String("upstream_error_preview", truncateOpenAIWSLogValue(string(respBody), 240)),
+		)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -622,6 +680,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		notifyOpenAIAutoReset(*account.ParentAccountID)
 	}
 
+	stampOpenAIResponsesUpstreamEndpoint(c, result)
 	return result, handleErr
 }
 
@@ -858,22 +917,34 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	}
+	// This endpoint buffers the upstream SSE and returns a JSON message.
+	c.Header("Content-Type", "application/json; charset=utf-8")
 	c.JSON(http.StatusOK, anthropicResp)
 
 	responseID := ""
 	if finalResponse != nil {
 		responseID = strings.TrimSpace(finalResponse.ID)
 	}
-	return &OpenAIForwardResult{
-		RequestID:     requestID,
-		ResponseID:    responseID,
-		Usage:         usage,
-		Model:         originalModel,
-		BillingModel:  billingModel,
-		UpstreamModel: upstreamModel,
-		Stream:        false,
-		Duration:      time.Since(startTime),
-	}, nil
+	result := &OpenAIForwardResult{
+		RequestID:                     requestID,
+		UpstreamHeaders:               resp.Header,
+		ResponseID:                    responseID,
+		Usage:                         usage,
+		Model:                         originalModel,
+		BillingModel:                  billingModel,
+		UpstreamModel:                 upstreamModel,
+		UpstreamResponseModel:         observedUpstreamResponseModel(c),
+		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
+		UpstreamResponseServiceTier:   observedUpstreamResponseServiceTier(c),
+		Stream:                        false,
+		Duration:                      time.Since(startTime),
+	}
+	if account != nil && account.IsGrok() && finalResponse != nil {
+		if responseBody, err := json.Marshal(finalResponse); err == nil {
+			result.SearchCount = countGrokNativeSearchCallsFromJSONBytes(responseBody)
+		}
+	}
+	return result, nil
 }
 
 func (s *OpenAIGatewayService) handleAnthropicJSONResponse(
@@ -960,6 +1031,8 @@ func (s *OpenAIGatewayService) handleAnthropicJSONResponse(
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	}
+	// This endpoint buffers the upstream SSE and returns a JSON message.
+	c.Header("Content-Type", "application/json; charset=utf-8")
 	c.JSON(http.StatusOK, anthropicResp)
 
 	return &OpenAIForwardResult{
@@ -1243,6 +1316,8 @@ func (s *OpenAIGatewayService) recordOpenAIMessagesStreamUpstreamError(c *gin.Co
 	message = sanitizeUpstreamErrorMessage(message)
 	setOpsUpstreamError(c, http.StatusBadGateway, message, "")
 	event := OpsUpstreamErrorEvent{
+		ProxyID:            opsUpstreamProxyID(account),
+		ProxyName:          opsUpstreamProxyName(account),
 		Platform:           PlatformOpenAI,
 		UpstreamStatusCode: http.StatusBadGateway,
 		UpstreamRequestID:  strings.TrimSpace(upstreamRequestID),
@@ -1694,6 +1769,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	var streamFailoverErr error
 	var streamNonFailoverErr error
 	terminalEventType := ""
+	searchCount := 0
+	streamSearchSeen := make(map[string]struct{})
+	countSearch := account != nil && account.IsGrok()
 
 	// R29 v25 cctest 签名校验失败教训: 没 forward 累积的 metadata events
 	// (message_start / content_block_start text/thinking / ping) 给客户,
@@ -1766,19 +1844,27 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 
 	// resultWithUsage builds the final result snapshot.
 	resultWithUsage := func() *OpenAIForwardResult {
-		return &OpenAIForwardResult{
-			RequestID:         requestID,
-			ResponseID:        responseID,
-			Usage:             usage,
-			Model:             originalModel,
-			BillingModel:      billingModel,
-			UpstreamModel:     upstreamModel,
-			Stream:            true,
-			Duration:          time.Since(startTime),
-			FirstTokenMs:      firstTokenMs,
-			FirstMeaningfulMs: firstMeaningfulMs,
-			ClientDisconnect:  clientDisconnected,
+		out := &OpenAIForwardResult{
+			RequestID:                     requestID,
+			UpstreamHeaders:               resp.Header,
+			ResponseID:                    responseID,
+			Usage:                         usage,
+			Model:                         originalModel,
+			BillingModel:                  billingModel,
+			UpstreamModel:                 upstreamModel,
+			UpstreamResponseModel:         observedUpstreamResponseModel(c),
+			UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
+			UpstreamResponseServiceTier:   observedUpstreamResponseServiceTier(c),
+			Stream:                        true,
+			Duration:                      time.Since(startTime),
+			FirstMeaningfulMs:             firstMeaningfulMs,
+			FirstTokenMs:                  firstTokenMs,
+			ClientDisconnect:              clientDisconnected,
 		}
+		if searchCount > 0 {
+			out.SearchCount = searchCount
+		}
+		return out
 	}
 
 	clientDisconnectLogFields := func(stage string) []zap.Field {
@@ -1826,6 +1912,9 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 
 	// processDataLine handles a single "data: ..." SSE line from upstream.
 	processDataLine := func(payload string) bool {
+		if countSearch {
+			searchCount += countGrokNativeSearchCallsInSSEDataDedup([]byte(payload), streamSearchSeen)
+		}
 		payload = string(restoreCodexToolNamesFromContext(c, []byte(payload)))
 		if firstChunk {
 			firstChunk = false

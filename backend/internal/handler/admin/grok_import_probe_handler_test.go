@@ -58,8 +58,7 @@ func TestGrokBatchImportKeepsCreatedAccountsWhenOneAutomaticProbeFails(t *testin
 	prober.failures[502] = infraerrors.New(502, "GROK_TEST_PROBE_FAILED", "sensitive-upstream-body")
 	handler := NewAccountHandler(
 		adminService,
-		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
-	)
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	handler.grokImportProber = prober
 
 	router := gin.New()
@@ -91,7 +90,7 @@ func TestAccountCreateWithoutAutomaticGrokProbeServiceStillSucceeds(t *testing.T
 	gin.SetMode(gin.TestMode)
 	handler := NewAccountHandler(
 		newGrokImportAdminService(),
-		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
 	)
 
 	router := gin.New()

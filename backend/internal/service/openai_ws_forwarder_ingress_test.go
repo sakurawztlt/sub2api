@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+
 	coderws "github.com/coder/websocket"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -951,18 +953,136 @@ func TestSetOpenAIWSPayloadInputSequence(t *testing.T) {
 	})
 }
 
-func TestCloneOpenAIWSRawMessages(t *testing.T) {
+func TestCombineOpenAIWSReplayItems(t *testing.T) {
 	t.Parallel()
 
-	t.Run("nil_slice", func(t *testing.T) {
-		cloned := cloneOpenAIWSRawMessages(nil)
-		require.Nil(t, cloned)
+	t.Run("empty_delta_returns_history", func(t *testing.T) {
+		history := []json.RawMessage{json.RawMessage(`{"a":1}`)}
+		require.Nil(t, combineOpenAIWSReplayItems(nil, nil))
+		combined := combineOpenAIWSReplayItems(history, nil)
+		require.Len(t, combined, 1)
 	})
 
-	t.Run("empty_slice", func(t *testing.T) {
-		items := make([]json.RawMessage, 0)
-		cloned := cloneOpenAIWSRawMessages(items)
-		require.NotNil(t, cloned)
-		require.Len(t, cloned, 0)
+	t.Run("new_header_shares_bodies", func(t *testing.T) {
+		history := []json.RawMessage{json.RawMessage(`{"a":1}`)}
+		delta := []json.RawMessage{json.RawMessage(`{"b":2}`)}
+		combined := combineOpenAIWSReplayItems(history, delta)
+		require.Len(t, combined, 2)
+		// 头数组必须是新建的：对 combined 追加不影响 history。
+		require.NotSame(t, &history[0], &combined[0])
+		// 正文共享：不发生字节级深拷贝。
+		require.Same(t, &history[0][0], &combined[0][0])
+		require.Same(t, &delta[0][0], &combined[1][0])
+	})
+}
+
+func TestOpenAIWSReplaySequenceSharesBodies(t *testing.T) {
+	t.Parallel()
+
+	t.Run("extract_shares_payload_backing_array", func(t *testing.T) {
+		payload := []byte(`{"input":[{"type":"input_text","text":"hello"},{"type":"input_text","text":"world"}]}`)
+		items, exists, err := openAIWSExtractNormalizedInputSequence(payload)
+		require.NoError(t, err)
+		require.True(t, exists)
+		require.Len(t, items, 2)
+		for _, item := range items {
+			start := bytes.Index(payload, []byte(item))
+			require.GreaterOrEqual(t, start, 0)
+			require.Same(t, &payload[start], &item[0], "extract 应零拷贝共享 payload 底层数组")
+		}
+	})
+
+	t.Run("build_transfers_current_items_ownership", func(t *testing.T) {
+		payload := []byte(`{"input":[{"type":"input_text","text":"hello"}]}`)
+		items, exists, err := buildOpenAIWSReplayInputSequence(nil, false, payload, false)
+		require.NoError(t, err)
+		require.True(t, exists)
+		require.Len(t, items, 1)
+		start := bytes.Index(payload, []byte(items[0]))
+		require.GreaterOrEqual(t, start, 0)
+		require.Same(t, &payload[start], &items[0][0])
+	})
+
+	t.Run("build_merge_shares_history_bodies", func(t *testing.T) {
+		history := []json.RawMessage{json.RawMessage(`{"type":"input_text","text":"hello"}`)}
+		items, exists, err := buildOpenAIWSReplayInputSequence(
+			history,
+			true,
+			[]byte(`{"previous_response_id":"resp_1","input":[{"type":"input_text","text":"world"}]}`),
+			true,
+		)
+		require.NoError(t, err)
+		require.True(t, exists)
+		require.Len(t, items, 2)
+		require.Same(t, &history[0][0], &items[0][0], "历史正文应共享而非深拷贝")
+	})
+
+	t.Run("build_prefix_hit_transfers_current_items", func(t *testing.T) {
+		history := []json.RawMessage{json.RawMessage(`{"type":"input_text","text":"hello"}`)}
+		payload := []byte(`{"previous_response_id":"resp_1","input":[{"type":"input_text","text":"hello"},{"type":"input_text","text":"world"}]}`)
+		items, exists, err := buildOpenAIWSReplayInputSequence(history, true, payload, true)
+		require.NoError(t, err)
+		require.True(t, exists)
+		require.Len(t, items, 2)
+		start := bytes.Index(payload, []byte(items[1]))
+		require.GreaterOrEqual(t, start, 0)
+		require.Same(t, &payload[start], &items[1][0], "prefix 命中应转移当前 items 所有权并共享 payload 底层数组")
+	})
+}
+
+func TestStripOpenAIImageGenerationToolsFromRawPayload(t *testing.T) {
+	t.Run("flat image tool", func(t *testing.T) {
+		payload := []byte(`{
+			"type":"response.create",
+			"model":"gpt-5.4",
+			"tools":[
+				{"type":"function","name":"shell"},
+				{"type":"image_generation","output_format":"png"}
+			],
+			"tool_choice":{"type":"image_generation"}
+		}`)
+
+		updated, changed, err := stripOpenAIImageGenerationToolsFromRawPayload(payload)
+
+		require.NoError(t, err)
+		require.True(t, changed)
+		require.False(t, gjson.GetBytes(updated, `tools.#(type=="image_generation")`).Exists())
+		require.True(t, gjson.GetBytes(updated, `tools.#(type=="function")`).Exists())
+		require.False(t, gjson.GetBytes(updated, "tool_choice").Exists())
+	})
+
+	t.Run("namespace and Responses Lite tools", func(t *testing.T) {
+		payload := []byte(`{
+			"type":"response.create",
+			"model":"gpt-5.5",
+			"tools":[
+				{"type":"namespace","name":"image_gen","tools":[{"type":"function","name":"imagegen"}]},
+				{"type":"namespace","name":"code_tools","tools":[{"type":"function","name":"run"}]}
+			],
+			"input":[
+				{"type":"message","role":"user","content":"hello"},
+				{"type":"additional_tools","tools":[{"type":"namespace","name":"image_gen"}]}
+			],
+			"tool_choice":{"type":"namespace","name":"image_gen"}
+		}`)
+
+		updated, changed, err := stripOpenAIImageGenerationToolsFromRawPayload(payload)
+
+		require.NoError(t, err)
+		require.True(t, changed)
+		require.False(t, IsImageGenerationIntent(openAIResponsesEndpoint, "gpt-5.5", updated))
+		require.True(t, gjson.GetBytes(updated, `tools.#(name=="code_tools")`).Exists())
+		require.Equal(t, "hello", gjson.GetBytes(updated, "input.0.content").String())
+		require.False(t, gjson.GetBytes(updated, "tool_choice").Exists())
+	})
+
+	t.Run("non-image namespace is unchanged", func(t *testing.T) {
+		payload := []byte(`{"type":"response.create","model":"gpt-5.5","tools":[{"type":"namespace","name":"code_tools"}]}`)
+
+		updated, changed, err := stripOpenAIImageGenerationToolsFromRawPayload(payload)
+
+		require.NoError(t, err)
+		require.False(t, changed)
+		require.Equal(t, payload, updated)
 	})
 }

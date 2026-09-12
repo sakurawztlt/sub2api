@@ -91,6 +91,10 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 		upstreamBody = ReplaceModelInBody(body, upstreamModel)
 	}
 
+	if normalizedBody, normalized := NormalizeGLMOpenAIReasoningEffort(upstreamBody, upstreamModel); normalized {
+		upstreamBody = normalizedBody
+	}
+
 	// 4. Apply OpenAI fast policy on the CC body
 	updatedBody, policyErr := s.applyOpenAIFastPolicyToBody(ctx, account, upstreamModel, upstreamBody)
 	if policyErr != nil {
@@ -155,8 +159,13 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 		if reasoningErr != nil {
 			return nil, fmt.Errorf("normalize Grok chat reasoning effort: %w", reasoningErr)
 		}
+		upstreamBody, stripErr = sanitizeGrokUnsupportedFields(upstreamBody)
+		if stripErr != nil {
+			return nil, fmt.Errorf("sanitize Grok unsupported fields: %w", stripErr)
+		}
 	}
 	upstreamBody = applyOllamaCloudRawChatCompletionsRequest(account, upstreamBody)
+	upstreamBody = clampOllamaCloudUpstreamMaxTokens(account, upstreamBody)
 
 	logger.L().Debug("openai chat_completions raw: forwarding without protocol conversion",
 		zap.Int64("account_id", account.ID),
@@ -242,6 +251,8 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 				kind = "failover"
 			}
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				ProxyID:            opsUpstreamProxyID(account),
+				ProxyName:          opsUpstreamProxyName(account),
 				Platform:           account.Platform,
 				AccountID:          account.ID,
 				AccountName:        account.Name,
@@ -460,6 +471,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	resultWithUsage := func() *OpenAIForwardResult {
 		return &OpenAIForwardResult{
 			RequestID:                     requestID,
+			UpstreamHeaders:               resp.Header,
 			Usage:                         usage,
 			Model:                         originalModel,
 			BillingModel:                  billingModel,
@@ -641,15 +653,19 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 	_, _ = c.Writer.Write(respBody)
 
 	return &OpenAIForwardResult{
-		RequestID:       requestID,
-		Usage:           usage,
-		Model:           originalModel,
-		BillingModel:    billingModel,
-		UpstreamModel:   upstreamModel,
-		ReasoningEffort: reasoningEffort,
-		ServiceTier:     serviceTier,
-		Stream:          false,
-		Duration:        time.Since(startTime),
+		RequestID:                     requestID,
+		UpstreamHeaders:               resp.Header,
+		Usage:                         usage,
+		Model:                         originalModel,
+		BillingModel:                  billingModel,
+		UpstreamModel:                 upstreamModel,
+		UpstreamResponseModel:         observedUpstreamResponseModel(c),
+		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
+		UpstreamResponseServiceTier:   observedUpstreamResponseServiceTier(c),
+		ReasoningEffort:               reasoningEffort,
+		ServiceTier:                   resolvedOpenAIUpstreamServiceTier(c, serviceTier),
+		Stream:                        false,
+		Duration:                      time.Since(startTime),
 	}, nil
 }
 

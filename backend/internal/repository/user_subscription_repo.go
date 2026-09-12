@@ -658,3 +658,51 @@ func applyUserSubscriptionEntityToService(dst *service.UserSubscription, src *db
 	dst.CreatedAt = src.CreatedAt
 	dst.UpdatedAt = src.UpdatedAt
 }
+
+func (r *userSubscriptionRepository) GetByIDForUpdate(ctx context.Context, id int64) (*service.UserSubscription, error) {
+	client := clientFromContext(ctx, r.client)
+	m, err := client.UserSubscription.Query().
+		Where(usersubscription.IDEQ(id)).
+		ForUpdate().
+		Only(ctx)
+	if err != nil {
+		return nil, translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	}
+	return userSubscriptionEntityToService(m), nil
+}
+
+func (r *userSubscriptionRepository) ResetUsageWindows(ctx context.Context, id int64, resetDaily, resetWeekly, resetMonthly bool, dailyStart, periodicStart time.Time) error {
+	client := clientFromContext(ctx, r.client)
+	update := client.UserSubscription.UpdateOneID(id)
+	if resetDaily {
+		update.SetDailyUsageUsd(0).SetDailyWindowStart(dailyStart)
+	}
+	if resetWeekly {
+		update.SetWeeklyUsageUsd(0).SetWeeklyWindowStart(periodicStart)
+	}
+	if resetMonthly {
+		update.SetMonthlyUsageUsd(0).SetMonthlyWindowStart(periodicStart)
+	}
+	_, err := update.Save(ctx)
+	return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+}
+
+func (r *userSubscriptionRepository) translateConditionalWindowReset(ctx context.Context, client *dbent.Client, id int64, affected int, err error) error {
+	if err != nil {
+		return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	}
+	if affected > 0 {
+		return nil
+	}
+
+	// A stale reset is an expected no-op: another request already advanced the
+	// window. Preserve not-found semantics for callers that target a missing row.
+	exists, err := client.UserSubscription.Query().Where(usersubscription.IDEQ(id)).Exist(ctx)
+	if err != nil {
+		return translatePersistenceError(err, service.ErrSubscriptionNotFound, nil)
+	}
+	if !exists {
+		return service.ErrSubscriptionNotFound
+	}
+	return nil
+}

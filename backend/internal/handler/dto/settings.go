@@ -9,13 +9,14 @@ import (
 
 // CustomMenuItem represents a user-configured custom menu entry.
 type CustomMenuItem struct {
-	ID         string `json:"id"`
-	Label      string `json:"label"`
-	IconSVG    string `json:"icon_svg"`
-	URL        string `json:"url"`
-	PageSlug   string `json:"page_slug,omitempty"`
-	Visibility string `json:"visibility"` // "user" or "admin"
-	SortOrder  int    `json:"sort_order"`
+	ID             string `json:"id"`
+	Label          string `json:"label"`
+	IconSVG        string `json:"icon_svg"`
+	URL            string `json:"url"`
+	PageSlug       string `json:"page_slug,omitempty"`
+	Visibility     string `json:"visibility"` // "user" or "admin"
+	SortOrder      int    `json:"sort_order"`
+	HideOpenButton bool   `json:"hide_open_button,omitempty"`
 }
 
 // CustomEndpoint represents an admin-configured API endpoint for quick copy.
@@ -292,6 +293,7 @@ type SystemSettings struct {
 	ChannelMonitorDefaultIntervalSeconds int    `json:"channel_monitor_default_interval_seconds"`
 	ChannelMonitorHideThroughput         bool   `json:"channel_monitor_hide_throughput"`
 	ChannelMonitorShowQuota              bool   `json:"channel_monitor_show_quota"`
+	ChannelMonitorHideUserRanking        bool   `json:"channel_monitor_hide_user_ranking"`
 
 	// Grok model mapping and default upstream policy.
 	GrokDefaultTextModel           string `json:"grok_default_text_model"`
@@ -300,6 +302,10 @@ type SystemSettings struct {
 
 	// Available Channels feature switch (user-facing aggregate view)
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
+
+	// Subscription feature switch: gates the whole user-facing subscription surface
+	// (sidebar entries, purchase-page subscription tab, header badge, /subscriptions route).
+	SubscriptionEnabled bool `json:"subscription_enabled"`
 
 	// Model Plaza feature (public group/model pricing showcase)
 	ModelPlazaEnabled       bool   `json:"model_plaza_enabled"`
@@ -328,6 +334,27 @@ type SystemSettings struct {
 
 	// 允许终端用户在用量页查看自己的失败请求
 	AllowUserViewErrorRequests bool `json:"allow_user_view_error_requests"`
+
+	// Upstream authentication and gateway controls.
+	PasskeyEnabled                         bool     `json:"passkey_enabled"`
+	PasskeyConfigured                      bool     `json:"passkey_configured"`
+	PasskeyRPID                            string   `json:"passkey_rp_id"`
+	PasskeyRPOrigins                       []string `json:"passkey_rp_origins"`
+	SessionBindingEnabled                  bool     `json:"session_binding_enabled"`  // 会话 IP/UA 绑定
+	AuditLogRetentionDays                  int      `json:"audit_log_retention_days"` // 审计日志保留天数
+	TencentCaptchaEnabled                  bool     `json:"tencent_captcha_enabled"`
+	TencentCaptchaAppID                    string   `json:"tencent_captcha_app_id"`
+	TencentCaptchaAppSecretKeyConfigured   bool     `json:"tencent_captcha_app_secret_key_configured"`
+	TencentCaptchaCloudSecretIDConfigured  bool     `json:"tencent_captcha_cloud_secret_id_configured"`
+	TencentCaptchaCloudSecretKeyConfigured bool     `json:"tencent_captcha_cloud_secret_key_configured"`
+	TencentCaptchaRegion                   string   `json:"tencent_captcha_region"`
+	AliyunCaptchaEnabled                   bool     `json:"aliyun_captcha_enabled"`
+	AliyunCaptchaAccessKeyID               string   `json:"aliyun_captcha_access_key_id"`
+	AliyunCaptchaAccessKeySecretConfigured bool     `json:"aliyun_captcha_access_key_secret_configured"`
+	AliyunCaptchaSceneID                   string   `json:"aliyun_captcha_scene_id"`
+	AliyunCaptchaPrefix                    string   `json:"aliyun_captcha_prefix"`
+	AliyunCaptchaRegion                    string   `json:"aliyun_captcha_region"`
+	ForwardedClientIPHeaders               []string `json:"forwarded_client_ip_headers"`
 }
 
 type DefaultSubscriptionSetting struct {
@@ -379,7 +406,11 @@ type PublicSettings struct {
 	GoogleOAuthEnabled                  bool                     `json:"google_oauth_enabled"`
 	BackendModeEnabled                  bool                     `json:"backend_mode_enabled"`
 	PaymentEnabled                      bool                     `json:"payment_enabled"`
-	Version                             string                   `json:"version"`
+	// PaymentBalanceDisabled mirrors the payment-config BALANCE_PAYMENT_DISABLED switch so the
+	// user shell can derive the site billing mode (recharge & subscription / recharge only /
+	// subscription only) before any authenticated checkout call.
+	PaymentBalanceDisabled bool   `json:"payment_balance_disabled"`
+	Version                string `json:"version"`
 	// 服务器全局时区（IANA 名称与当前 UTC 偏移，如 "Asia/Shanghai" / "+08:00"）。
 	// 高峰时段等按服务器本地时间判定的窗口，前端展示时据此标注，避免用户按浏览器本地时间误读。
 	ServerTimezone              string  `json:"server_timezone"`
@@ -394,8 +425,11 @@ type PublicSettings struct {
 	ChannelMonitorDefaultIntervalSeconds int    `json:"channel_monitor_default_interval_seconds"`
 	ChannelMonitorHideThroughput         bool   `json:"channel_monitor_hide_throughput"`
 	ChannelMonitorShowQuota              bool   `json:"channel_monitor_show_quota"`
+	ChannelMonitorHideUserRanking        bool   `json:"channel_monitor_hide_user_ranking"`
 
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
+
+	SubscriptionEnabled bool `json:"subscription_enabled"`
 
 	ModelPlazaEnabled       bool `json:"model_plaza_enabled"`
 	ModelPlazaRequireAuth   bool `json:"model_plaza_require_auth"`
@@ -406,6 +440,16 @@ type PublicSettings struct {
 	RiskControlEnabled bool `json:"risk_control_enabled"`
 
 	AllowUserViewErrorRequests bool `json:"allow_user_view_error_requests"`
+
+	// Upstream authentication and gateway controls.
+	PasskeyEnabled        bool   `json:"passkey_enabled"`
+	TencentCaptchaEnabled bool   `json:"tencent_captcha_enabled"`
+	TencentCaptchaAppID   string `json:"tencent_captcha_app_id"`
+	TencentCaptchaRegion  string `json:"tencent_captcha_region"`
+	AliyunCaptchaEnabled  bool   `json:"aliyun_captcha_enabled"`
+	AliyunCaptchaSceneID  string `json:"aliyun_captcha_scene_id"`
+	AliyunCaptchaPrefix   string `json:"aliyun_captcha_prefix"`
+	AliyunCaptchaRegion   string `json:"aliyun_captcha_region"`
 }
 
 type LoginAgreementDocument struct {

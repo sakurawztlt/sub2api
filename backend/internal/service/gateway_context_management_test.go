@@ -146,6 +146,8 @@ func TestComputeFinalAnthropicBeta_OAuthMimic_NonHaiku_IncludesContextManagement
 		"OAuth mimic non-haiku 必须注入完整 CC mimicry beta，含 context-management-2025-06-27")
 	require.True(t, anthropicBetaTokensContains(final, claude.BetaOAuth))
 	require.True(t, anthropicBetaTokensContains(final, claude.BetaClaudeCode))
+	require.False(t, anthropicBetaTokensContains(final, claude.BetaThinkingBindingControls),
+		"new upstream betas must not alter the captured default disguise profile")
 }
 
 func TestComputeFinalAnthropicBeta_OAuthMimic_Haiku_IncludesFullClaudeCodeBetas(t *testing.T) {
@@ -777,4 +779,84 @@ func TestBuildUpstreamRequest_APIKeyHaikuWithContextManagement_StripsField(t *te
 	outBody := readUpstreamBodyForTest(t, req)
 	require.False(t, gjson.GetBytes(outBody, "context_management").Exists(),
 		"API-key + haiku + 客户端未带 beta token → body 字段必须被 strip")
+}
+
+func TestBuildUpstreamRequest_APIKeyHaiku_RemainsUnmimicked(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	account := &Account{
+		ID: 404, Platform: PlatformAnthropic, Type: AccountTypeAPIKey,
+		Credentials: map[string]any{"api_key": "sk-ant-xxx"},
+		Status:      StatusActive, Schedulable: true,
+	}
+	body := []byte(`{"model":"claude-haiku-4-5","system":"API-key client system","thinking":{"type":"enabled"},"messages":[]}`)
+	svc := newTestGatewayServiceForBeta(true)
+	req, _, err := svc.buildUpstreamRequest(
+		context.Background(), c, account, body,
+		"sk-ant-xxx", "apikey", "claude-haiku-4-5", false, false,
+	)
+	require.NoError(t, err)
+
+	outBody := readUpstreamBodyForTest(t, req)
+	require.Equal(t, "API-key client system", gjson.GetBytes(outBody, "system").String())
+	require.Equal(t, claude.APIKeyHaikuBetaHeader, getHeaderRaw(req.Header, "anthropic-beta"))
+	require.False(t, anthropicBetaTokensContains(getHeaderRaw(req.Header, "anthropic-beta"), claude.BetaOAuth))
+	require.NotContains(t, string(outBody), "x-anthropic-billing-header:")
+}
+
+func TestComputeFinalAnthropicBeta_APIKeyHaiku_StillUsesAPIKeyBetas(t *testing.T) {
+	s := newTestGatewayServiceForBeta(true)
+	body := []byte(`{"model":"claude-haiku-4-5","thinking":{"type":"enabled"},"messages":[]}`)
+	final, ok := s.computeFinalAnthropicBeta("apikey", false, "claude-haiku-4-5", http.Header{}, body, nil)
+	require.True(t, ok)
+	require.Equal(t, claude.APIKeyHaikuBetaHeader, final)
+	require.False(t, anthropicBetaTokensContains(final, claude.BetaOAuth))
+	require.False(t, anthropicBetaTokensContains(final, claude.BetaClaudeCode))
+}
+
+// 重构等价性回归：
+// 原 main buildCountTokensRequest 在 count_tokens mimic 分支上不跳过白名单透传
+// （与 messages mimic 不同），incomingBeta 取自客户端透传。重构后必须从 clientHeaders
+// 拿同一个值并 merge，否则会丢失客户端 beta。
+func TestComputeFinalCountTokensAnthropicBeta_OAuthMimic_DiscardsExperimentalClientFlags(t *testing.T) {
+	s := newTestGatewayServiceForBeta(false)
+	hdr := http.Header{}
+	hdr.Set("anthropic-beta", "custom-experimental-beta,context-1m-2025-08-07")
+	final, ok := s.computeFinalCountTokensAnthropicBeta("oauth", true, "claude-haiku-4-5", hdr, []byte(`{}`), nil)
+	require.True(t, ok)
+	require.False(t, anthropicBetaTokensContains(final, "custom-experimental-beta"),
+		"count_tokens mimic must retain the captured local beta profile")
+	require.False(t, anthropicBetaTokensContains(final, "context-1m-2025-08-07"),
+		"client flags cannot alter the locked OAuth mimic profile")
+	require.True(t, anthropicBetaTokensContains(final, claude.BetaContextManagement),
+		"同时 FullClaudeCodeMimicryBetas 不打折扣")
+	require.True(t, anthropicBetaTokensContains(final, claude.BetaTokenCounting),
+		"同时补齐 token-counting beta")
+}
+
+func TestNormalizeClaudeOAuthRequestBody_HaikuShortModelStillNormalizesToDatedID(t *testing.T) {
+	body := []byte(`{"model":"claude-haiku-4-5","messages":[]}`)
+	out, modelID := normalizeClaudeOAuthRequestBody(body, "claude-haiku-4-5", claudeOAuthNormalizeOptions{})
+	require.Equal(t, "claude-haiku-4-5-20251001", modelID)
+	require.Equal(t, "claude-haiku-4-5-20251001", gjson.GetBytes(out, "model").String())
+}
+
+func TestSanitizeAnthropicBodyForBetaTokens_ThinkingBlockBindingKeptWhenBetaPresent(t *testing.T) {
+	body := []byte(`{"model":"claude-fable-5-1","thinking":{"type":"adaptive","display":"summarized","block_binding":{"prefix_mismatch_behavior":"drop_block"}},"messages":[]}`)
+	out, changed := sanitizeAnthropicBodyForBetaTokens(body, claude.BetaThinkingBindingControls)
+	require.False(t, changed)
+	require.Equal(t, "drop_block",
+		gjson.GetBytes(out, "thinking.block_binding.prefix_mismatch_behavior").String())
+}
+
+func TestSanitizeAnthropicBodyForBetaTokens_ThinkingBlockBindingStrippedWhenBetaMissing(t *testing.T) {
+	body := []byte(`{"model":"claude-fable-5-1","thinking":{"type":"adaptive","display":"summarized","block_binding":{"prefix_mismatch_behavior":"drop_block"}},"messages":[]}`)
+	out, changed := sanitizeAnthropicBodyForBetaTokens(body, claude.BetaContextManagement)
+	require.True(t, changed)
+	require.False(t, gjson.GetBytes(out, "thinking.block_binding").Exists())
+	require.Equal(t, "adaptive", gjson.GetBytes(out, "thinking.type").String())
+	require.Equal(t, "summarized", gjson.GetBytes(out, "thinking.display").String())
 }

@@ -7,6 +7,7 @@ import (
 )
 
 type User struct {
+	FrozenBalance  float64
 	ID             int64
 	Email          string
 	Username       string

@@ -36,6 +36,7 @@ func ProvideRouter(
 	adminAuth middleware2.AdminAuthMiddleware,
 	apiKeyAuth middleware2.APIKeyAuthMiddleware,
 	stepUpAuth middleware2.StepUpAuthMiddleware,
+	auditLog middleware2.AuditLogMiddleware,
 	apiKeyService *service.APIKeyService,
 	subscriptionService *service.SubscriptionService,
 	opsService *service.OpsService,
@@ -50,6 +51,7 @@ func ProvideRouter(
 
 	r := gin.New()
 	r.Use(middleware2.Recovery())
+	r.Use(middleware2.SessionBindingContext(cfg))
 	if len(cfg.Server.TrustedProxies) > 0 {
 		if err := r.SetTrustedProxies(cfg.Server.TrustedProxies); err != nil {
 			log.Printf("Failed to set trusted proxies: %v", err)
@@ -99,7 +101,7 @@ func ProvideRouter(
 		service.SetWebSearchManager(websearch.NewManager(configs, redisClient))
 	})
 
-	return SetupRouter(r, handlers, jwtAuth, optionalJWTAuth, adminAuth, apiKeyAuth, stepUpAuth, apiKeyService, subscriptionService, opsService, settingService, trafficCapture, compositeResolver, cfg, redisClient)
+	return SetupRouter(r, handlers, jwtAuth, optionalJWTAuth, adminAuth, apiKeyAuth, stepUpAuth, auditLog, apiKeyService, subscriptionService, opsService, settingService, trafficCapture, compositeResolver, cfg, redisClient)
 }
 
 // ProvideHTTPServer 提供 HTTP 服务器

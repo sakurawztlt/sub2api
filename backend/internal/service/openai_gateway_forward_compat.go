@@ -1,11 +1,18 @@
 package service
 
-import "github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
+import (
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
+)
 
 // shouldForwardOpenAIResponsesViaRawChatCompletions keeps explicit CN protocol
 // choices authoritative over asynchronously probed compatibility metadata.
 func shouldForwardOpenAIResponsesViaRawChatCompletions(account *Account) bool {
 	if account == nil || account.Type != AccountTypeAPIKey {
+		return false
+	}
+	if account.IsOpenCodeGo() {
+		// Model protocol_rules are the authority. Probe Extra must not collapse
+		// Grok/GPT/Muse into Chat Completions.
 		return false
 	}
 	if account.IsCNProvider() {

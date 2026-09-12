@@ -1644,6 +1644,65 @@
                 />
               </div>
 
+              <!-- Passkey sign-in -->
+              <div
+                class="border-t border-gray-100 pt-4 dark:border-dark-700"
+                data-testid="passkey-settings"
+              >
+                <div class="flex items-start justify-between gap-4">
+                  <div>
+                    <label class="font-medium text-gray-900 dark:text-white">{{
+                      t("admin.settings.security.passkey")
+                    }}</label>
+                    <p class="text-sm text-gray-500 dark:text-gray-400">
+                      {{ t("admin.settings.security.passkeyHint") }}
+                    </p>
+                  </div>
+                  <Toggle
+                    v-model="form.passkey_enabled"
+                    data-testid="passkey-toggle"
+                    :disabled="!form.passkey_configured"
+                  />
+                </div>
+                <div
+                  class="mt-3 rounded-lg border px-3 py-2 text-sm"
+                  :class="
+                    form.passkey_configured
+                      ? 'border-green-200 bg-green-50 text-green-800 dark:border-green-900 dark:bg-green-950/40 dark:text-green-300'
+                      : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-300'
+                  "
+                  data-testid="passkey-config-status"
+                >
+                  <p class="font-medium">
+                    {{
+                      form.passkey_configured
+                        ? t("admin.settings.security.passkeyConfigured")
+                        : t("admin.settings.security.passkeyNotConfigured")
+                    }}
+                  </p>
+                  <p class="mt-1 break-all">
+                    {{ t("admin.settings.security.passkeyRPID") }}:
+                    {{
+                      form.passkey_rp_id ||
+                      t("admin.settings.security.passkeyValueNotConfigured")
+                    }}
+                  </p>
+                  <p class="mt-1 break-all">
+                    {{ t("admin.settings.security.passkeyOrigins") }}:
+                    {{
+                      form.passkey_rp_origins.length > 0
+                        ? form.passkey_rp_origins.join(", ")
+                        : t(
+                            "admin.settings.security.passkeyValueNotConfigured",
+                          )
+                    }}
+                  </p>
+                  <p v-if="!form.passkey_configured" class="mt-2">
+                    {{ t("admin.settings.security.passkeyDeploymentHint") }}
+                  </p>
+                </div>
+              </div>
+
               <!-- Sensitive-operation step-up 2FA -->
               <div
                 class="flex items-center justify-between border-t border-gray-100 pt-4 dark:border-dark-700"
@@ -1923,38 +1982,97 @@
             </div>
           </div>
 
-          <!-- Cloudflare Turnstile Settings -->
+          <!-- 人机验证 Settings -->
           <div class="card">
             <div
               class="border-b border-gray-100 px-6 py-4 dark:border-dark-700"
             >
               <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-                {{ t("admin.settings.turnstile.title") }}
+                {{ t("admin.settings.captcha.title") }}
               </h2>
               <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                {{ t("admin.settings.turnstile.description") }}
+                {{ t("admin.settings.captcha.description") }}
               </p>
             </div>
             <div class="space-y-5 p-6">
-              <!-- Enable Turnstile -->
+              <!-- Enable Captcha -->
               <div class="flex items-center justify-between">
                 <div>
                   <label class="font-medium text-gray-900 dark:text-white">{{
-                    t("admin.settings.turnstile.enableTurnstile")
+                    t("admin.settings.captcha.enable")
                   }}</label>
                   <p class="text-sm text-gray-500 dark:text-gray-400">
-                    {{ t("admin.settings.turnstile.enableTurnstileHint") }}
+                    {{ t("admin.settings.captcha.enableHint") }}
                   </p>
                 </div>
-                <Toggle v-model="form.turnstile_enabled" />
+                <Toggle
+                  v-model="captchaMasterEnabled"
+                  data-testid="captcha-enabled-toggle"
+                />
               </div>
 
-              <!-- Turnstile Keys - Only show when enabled -->
+              <!-- Provider fields - Only show when enabled -->
               <div
-                v-if="form.turnstile_enabled"
+                v-if="captchaMasterEnabled"
                 class="border-t border-gray-100 pt-4 dark:border-dark-700"
               >
-                <div class="grid grid-cols-1 gap-6">
+                <!-- Provider Selector -->
+                <div class="mb-6">
+                  <label
+                    class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    {{ t("admin.settings.captcha.provider") }}
+                  </label>
+                  <div
+                    class="grid grid-cols-3 gap-2 rounded-lg bg-gray-100 p-1 dark:bg-dark-700"
+                  >
+                    <button
+                      type="button"
+                      data-testid="captcha-provider-turnstile"
+                      class="inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition"
+                      :class="
+                        captchaProviderSelection === 'turnstile'
+                          ? 'bg-white text-primary-700 shadow-sm dark:bg-dark-800 dark:text-primary-300'
+                          : 'text-gray-600 hover:text-gray-900 dark:text-dark-300 dark:hover:text-white'
+                      "
+                      @click="selectCaptchaProvider('turnstile')"
+                    >
+                      {{ t("admin.settings.captcha.providerTurnstile") }}
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="captcha-provider-tencent"
+                      class="inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition"
+                      :class="
+                        captchaProviderSelection === 'tencent'
+                          ? 'bg-white text-primary-700 shadow-sm dark:bg-dark-800 dark:text-primary-300'
+                          : 'text-gray-600 hover:text-gray-900 dark:text-dark-300 dark:hover:text-white'
+                      "
+                      @click="selectCaptchaProvider('tencent')"
+                    >
+                      {{ t("admin.settings.captcha.providerTencent") }}
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="captcha-provider-aliyun"
+                      class="inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition"
+                      :class="
+                        captchaProviderSelection === 'aliyun'
+                          ? 'bg-white text-primary-700 shadow-sm dark:bg-dark-800 dark:text-primary-300'
+                          : 'text-gray-600 hover:text-gray-900 dark:text-dark-300 dark:hover:text-white'
+                      "
+                      @click="selectCaptchaProvider('aliyun')"
+                    >
+                      {{ t("admin.settings.captcha.providerAliyun") }}
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Cloudflare Turnstile fields -->
+                <div
+                  v-if="captchaProviderSelection === 'turnstile'"
+                  class="grid grid-cols-1 gap-6"
+                >
                   <div>
                     <label
                       class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
@@ -1998,6 +2116,268 @@
                               "admin.settings.turnstile.secretKeyConfiguredHint",
                             )
                           : t("admin.settings.turnstile.secretKeyHint")
+                      }}
+                    </p>
+                  </div>
+                </div>
+
+                <!-- Tencent Captcha fields -->
+                <div v-else-if="captchaProviderSelection === 'tencent'">
+                  <div class="mb-6 max-w-sm">
+                    <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.tencentCaptcha.region") }}
+                    </label>
+                    <div class="grid grid-cols-2 gap-2 rounded-lg bg-gray-100 p-1 dark:bg-dark-700">
+                      <button
+                        type="button"
+                        data-testid="tencent-captcha-region-cn"
+                        class="inline-flex items-center justify-center rounded-md px-3 py-1.5 text-sm font-medium transition"
+                        :class="
+                          form.tencent_captcha_region !== 'intl'
+                            ? 'bg-white text-primary-700 shadow-sm dark:bg-dark-800 dark:text-primary-300'
+                            : 'text-gray-600 hover:text-gray-900 dark:text-dark-300 dark:hover:text-white'
+                        "
+                        @click="form.tencent_captcha_region = 'cn'"
+                      >
+                        {{ t("admin.settings.tencentCaptcha.regionCn") }}
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="tencent-captcha-region-intl"
+                        class="inline-flex items-center justify-center rounded-md px-3 py-1.5 text-sm font-medium transition"
+                        :class="
+                          form.tencent_captcha_region === 'intl'
+                            ? 'bg-white text-primary-700 shadow-sm dark:bg-dark-800 dark:text-primary-300'
+                            : 'text-gray-600 hover:text-gray-900 dark:text-dark-300 dark:hover:text-white'
+                        "
+                        @click="form.tencent_captcha_region = 'intl'"
+                      >
+                        {{ t("admin.settings.tencentCaptcha.regionIntl") }}
+                      </button>
+                    </div>
+                    <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                      {{ t("admin.settings.tencentCaptcha.regionHint") }}
+                    </p>
+                  </div>
+                  <div class="grid grid-cols-1 gap-6 md:grid-cols-2">
+                    <div class="md:col-span-2">
+                      <h3 class="text-sm font-semibold text-gray-900 dark:text-white">
+                        {{ t("admin.settings.tencentCaptcha.appCredentialsTitle") }}
+                      </h3>
+                      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        {{ t("admin.settings.tencentCaptcha.appCredentialsHint") }}
+                      </p>
+                    </div>
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ t("admin.settings.tencentCaptcha.appId") }}
+                      </label>
+                      <input
+                        v-model="form.tencent_captcha_app_id"
+                        type="text"
+                        inputmode="numeric"
+                        class="input font-mono text-sm"
+                        placeholder="123456789"
+                      />
+                    </div>
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ t("admin.settings.tencentCaptcha.appSecretKey") }}
+                      </label>
+                      <input
+                        v-model="form.tencent_captcha_app_secret_key"
+                        type="password"
+                        autocomplete="new-password"
+                        class="input font-mono text-sm"
+                        :placeholder="t('admin.settings.tencentCaptcha.keepExisting')"
+                      />
+                      <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                        {{ form.tencent_captcha_app_secret_key_configured ? t("admin.settings.tencentCaptcha.configured") : t("admin.settings.tencentCaptcha.required") }}
+                      </p>
+                    </div>
+                    <div class="border-t border-gray-100 pt-5 md:col-span-2 dark:border-dark-700">
+                      <h3 class="text-sm font-semibold text-gray-900 dark:text-white">
+                        {{ t("admin.settings.tencentCaptcha.cloudCredentialsTitle") }}
+                      </h3>
+                      <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        {{ t("admin.settings.tencentCaptcha.cloudCredentialsHint") }}
+                      </p>
+                    </div>
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ t("admin.settings.tencentCaptcha.cloudSecretId") }}
+                      </label>
+                      <input
+                        v-model="form.tencent_captcha_cloud_secret_id"
+                        type="password"
+                        autocomplete="new-password"
+                        class="input font-mono text-sm"
+                        :placeholder="t('admin.settings.tencentCaptcha.keepExisting')"
+                      />
+                      <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                        {{ form.tencent_captcha_cloud_secret_id_configured ? t("admin.settings.tencentCaptcha.configured") : t("admin.settings.tencentCaptcha.required") }}
+                      </p>
+                    </div>
+                    <div>
+                      <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+                        {{ t("admin.settings.tencentCaptcha.cloudSecretKey") }}
+                      </label>
+                      <input
+                        v-model="form.tencent_captcha_cloud_secret_key"
+                        type="password"
+                        autocomplete="new-password"
+                        class="input font-mono text-sm"
+                        :placeholder="t('admin.settings.tencentCaptcha.keepExisting')"
+                      />
+                      <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                        {{ form.tencent_captcha_cloud_secret_key_configured ? t("admin.settings.tencentCaptcha.configured") : t("admin.settings.tencentCaptcha.required") }}
+                      </p>
+                    </div>
+                  </div>
+                  <p class="mt-5 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.tencentCaptcha.camPermissionHint") }}
+                  </p>
+                  <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                    {{ t("admin.settings.tencentCaptcha.aidEncryptedHint") }}
+                  </p>
+                  <div class="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm">
+                    <a
+                      :href="tencentCaptchaLinks.console"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="text-primary-600 hover:text-primary-500"
+                    >
+                      {{ t("admin.settings.tencentCaptcha.openCaptchaConsole") }}
+                    </a>
+                    <a
+                      :href="tencentCaptchaLinks.cloudKeys"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="text-primary-600 hover:text-primary-500"
+                    >
+                      {{ t("admin.settings.tencentCaptcha.createCloudKeys") }}
+                    </a>
+                    <a
+                      :href="tencentCaptchaLinks.webDocs"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="text-primary-600 hover:text-primary-500"
+                    >
+                      {{ t("admin.settings.tencentCaptcha.openWebDocs") }}
+                    </a>
+                  </div>
+                </div>
+
+                <!-- Aliyun Captcha 2.0 fields -->
+                <div v-else class="grid grid-cols-1 gap-6">
+                  <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                    <div>
+                      <label
+                        class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                      >
+                        {{ t("admin.settings.aliyunCaptcha.region") }}
+                      </label>
+                      <div
+                        class="grid grid-cols-2 gap-2 rounded-lg bg-gray-100 p-1 dark:bg-dark-700"
+                      >
+                        <button
+                          type="button"
+                          class="inline-flex items-center justify-center rounded-md px-3 py-1.5 text-sm font-medium transition"
+                          :class="
+                            form.aliyun_captcha_region !== 'sgp'
+                              ? 'bg-white text-primary-700 shadow-sm dark:bg-dark-800 dark:text-primary-300'
+                              : 'text-gray-600 hover:text-gray-900 dark:text-dark-300 dark:hover:text-white'
+                          "
+                          @click="form.aliyun_captcha_region = 'cn'"
+                        >
+                          {{ t("admin.settings.aliyunCaptcha.regionCn") }}
+                        </button>
+                        <button
+                          type="button"
+                          class="inline-flex items-center justify-center rounded-md px-3 py-1.5 text-sm font-medium transition"
+                          :class="
+                            form.aliyun_captcha_region === 'sgp'
+                              ? 'bg-white text-primary-700 shadow-sm dark:bg-dark-800 dark:text-primary-300'
+                              : 'text-gray-600 hover:text-gray-900 dark:text-dark-300 dark:hover:text-white'
+                          "
+                          @click="form.aliyun_captcha_region = 'sgp'"
+                        >
+                          {{ t("admin.settings.aliyunCaptcha.regionSgp") }}
+                        </button>
+                      </div>
+                      <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                        {{ t("admin.settings.aliyunCaptcha.regionHint") }}
+                      </p>
+                    </div>
+                    <div>
+                      <label
+                        class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                      >
+                        {{ t("admin.settings.aliyunCaptcha.prefix") }}
+                      </label>
+                      <input
+                        v-model="form.aliyun_captcha_prefix"
+                        type="text"
+                        class="input font-mono text-sm"
+                        placeholder="14xxxxx"
+                      />
+                      <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                        {{ t("admin.settings.aliyunCaptcha.prefixHint") }}
+                      </p>
+                    </div>
+                  </div>
+                  <div>
+                    <label
+                      class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                    >
+                      {{ t("admin.settings.aliyunCaptcha.sceneId") }}
+                    </label>
+                    <input
+                      v-model="form.aliyun_captcha_scene_id"
+                      type="text"
+                      class="input font-mono text-sm"
+                      placeholder="1cxxxxxx"
+                    />
+                    <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                      {{ t("admin.settings.aliyunCaptcha.sceneIdHint") }}
+                    </p>
+                  </div>
+                  <div>
+                    <label
+                      class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                    >
+                      {{ t("admin.settings.aliyunCaptcha.accessKeyId") }}
+                    </label>
+                    <input
+                      v-model="form.aliyun_captcha_access_key_id"
+                      type="text"
+                      class="input font-mono text-sm"
+                      placeholder="LTAI..."
+                    />
+                    <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                      {{ t("admin.settings.aliyunCaptcha.accessKeyIdHint") }}
+                    </p>
+                  </div>
+                  <div>
+                    <label
+                      class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300"
+                    >
+                      {{ t("admin.settings.aliyunCaptcha.accessKeySecret") }}
+                    </label>
+                    <input
+                      v-model="form.aliyun_captcha_access_key_secret"
+                      type="password"
+                      autocomplete="new-password"
+                      class="input font-mono text-sm"
+                      placeholder="••••••••"
+                    />
+                    <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
+                      {{
+                        form.aliyun_captcha_access_key_secret_configured
+                          ? t(
+                              "admin.settings.aliyunCaptcha.accessKeySecretConfiguredHint",
+                            )
+                          : t("admin.settings.aliyunCaptcha.accessKeySecretHint")
                       }}
                     </p>
                   </div>
@@ -6084,6 +6464,17 @@
                     />
                   </div>
 
+                  <label class="flex items-center gap-2 sm:col-span-2">
+                    <input
+                      v-model="item.hide_open_button"
+                      type="checkbox"
+                      data-testid="custom-menu-hide-open-button"
+                    />
+                    <span class="text-sm text-gray-700 dark:text-gray-300">
+                      {{ t("admin.settings.customMenu.hideOpenButton") }}
+                    </span>
+                  </label>
+
                   <!-- SVG Icon (full width) -->
                   <div class="sm:col-span-2">
                     <label
@@ -6425,16 +6816,29 @@
                 </p>
               </div>
 
-              <div v-if="form.channel_monitor_mode === 'v2'" class="flex items-start justify-between gap-4">
-                <div class="min-w-0">
-                  <p class="text-sm font-medium text-gray-900 dark:text-white">
-                    {{ t('admin.settings.features.channelMonitor.hideThroughput') }}
-                  </p>
-                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                    {{ t('admin.settings.features.channelMonitor.hideThroughputHint') }}
-                  </p>
+              <div v-if="form.channel_monitor_mode === 'v2'" class="space-y-4">
+                <div class="flex items-start justify-between gap-4">
+                  <div class="min-w-0">
+                    <p class="text-sm font-medium text-gray-900 dark:text-white">
+                      {{ t('admin.settings.features.channelMonitor.hideThroughput') }}
+                    </p>
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      {{ t('admin.settings.features.channelMonitor.hideThroughputHint') }}
+                    </p>
+                  </div>
+                  <Toggle v-model="form.channel_monitor_hide_throughput" />
                 </div>
-                <Toggle v-model="form.channel_monitor_hide_throughput" />
+                <div class="flex items-start justify-between gap-4">
+                  <div class="min-w-0">
+                    <p class="text-sm font-medium text-gray-900 dark:text-white">
+                      {{ t('admin.settings.features.channelMonitor.hideUserRanking') }}
+                    </p>
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      {{ t('admin.settings.features.channelMonitor.hideUserRankingHint') }}
+                    </p>
+                  </div>
+                  <Toggle v-model="form.channel_monitor_hide_user_ranking" />
+                </div>
               </div>
 
               <div v-if="form.channel_monitor_mode === 'v1'" class="flex items-start justify-between gap-4">
@@ -6531,6 +6935,36 @@
                 rows="6"
                 class="input font-mono text-sm"
               ></textarea>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="border-b border-gray-100 px-6 py-4 dark:border-dark-700">
+            <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
+              {{ t('admin.settings.features.siteBillingMode.title') }}
+            </h2>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              {{ t('admin.settings.features.siteBillingMode.description') }}
+            </p>
+          </div>
+          <div class="space-y-5 p-6">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div class="min-w-0">
+                <label class="text-sm font-medium text-gray-700 dark:text-gray-300">
+                  {{ t('admin.settings.features.siteBillingMode.label') }}
+                </label>
+                <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                  {{ siteBillingModeHint }}
+                </p>
+              </div>
+              <div class="w-full shrink-0 sm:w-56">
+                <Select
+                  :modelValue="siteBillingMode"
+                  :options="siteBillingModeOptions"
+                  @update:modelValue="siteBillingMode = $event as SiteBillingMode"
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -8136,7 +8570,14 @@ import type {
 import type { ProviderInstance } from "@/types/payment";
 import AppLayout from "@/components/layout/AppLayout.vue";
 import Icon from "@/components/icons/Icon.vue";
-import Select from "@/components/common/Select.vue";
+import Select, { type SelectOption } from "@/components/common/Select.vue";
+import {
+  SITE_BILLING_MODES,
+  SITE_BILLING_MODE_I18N_KEYS,
+  billingModeToSettings,
+  resolveSiteBillingMode,
+  type SiteBillingMode,
+} from "@/utils/siteBillingMode";
 import ConfirmDialog from "@/components/common/ConfirmDialog.vue";
 import PaymentProviderList from "@/components/payment/PaymentProviderList.vue";
 import PaymentProviderDialog from "@/components/payment/PaymentProviderDialog.vue";
@@ -8444,8 +8885,13 @@ type SettingsForm = Omit<
   /** Form always binds a concrete boolean (SystemSettings marks this optional). */
   channel_monitor_hide_throughput: boolean;
   channel_monitor_show_quota: boolean;
+  channel_monitor_hide_user_ranking: boolean;
   smtp_password: string;
   turnstile_secret_key: string;
+  aliyun_captcha_access_key_secret: string;
+  tencent_captcha_cloud_secret_key: string;
+  tencent_captcha_cloud_secret_id: string;
+  tencent_captcha_app_secret_key: string;
   linuxdo_connect_client_secret: string;
   dingtalk_connect_client_secret: string;
   wechat_connect_app_secret: string;
@@ -8555,6 +9001,7 @@ const form = reactive<SettingsForm>({
     url: string;
     visibility: "user" | "admin";
     sort_order: number;
+    hide_open_button?: boolean;
   }>,
   custom_endpoints: [] as Array<{
     name: string;
@@ -8571,6 +9018,26 @@ const form = reactive<SettingsForm>({
   smtp_from_name: "",
   smtp_use_tls: true,
   // Cloudflare Turnstile
+  passkey_enabled: false,
+  passkey_configured: false,
+  passkey_rp_id: "",
+  passkey_rp_origins: [],
+  tencent_captcha_enabled: false,
+  tencent_captcha_app_id: "",
+  tencent_captcha_app_secret_key: "",
+  tencent_captcha_app_secret_key_configured: false,
+  tencent_captcha_cloud_secret_id: "",
+  tencent_captcha_cloud_secret_id_configured: false,
+  tencent_captcha_cloud_secret_key: "",
+  tencent_captcha_cloud_secret_key_configured: false,
+  tencent_captcha_region: "cn",
+  aliyun_captcha_enabled: false,
+  aliyun_captcha_access_key_id: "",
+  aliyun_captcha_access_key_secret: "",
+  aliyun_captcha_access_key_secret_configured: false,
+  aliyun_captcha_scene_id: "",
+  aliyun_captcha_prefix: "",
+  aliyun_captcha_region: "cn",
   turnstile_enabled: false,
   turnstile_site_key: "",
   turnstile_secret_key: "",
@@ -8732,8 +9199,11 @@ const form = reactive<SettingsForm>({
   channel_monitor_default_interval_seconds: 60,
   channel_monitor_hide_throughput: false,
   channel_monitor_show_quota: false,
+  channel_monitor_hide_user_ranking: false,
   // Available Channels feature switch
   available_channels_enabled: false,
+  // Subscription feature switch (user sidebar "My Subscriptions" entry)
+  subscription_enabled: true,
   // Model Plaza feature switches + description
   model_plaza_enabled: false,
   model_plaza_require_auth: false,
@@ -8745,6 +9215,58 @@ const form = reactive<SettingsForm>({
   // Allow user view error requests
   allow_user_view_error_requests: false,
 });
+
+// 人机验证 UI 状态：单卡片「总开关 + 服务商单选」，落库仍是三个独立
+// enabled 键（与上游一致），由下面的映射保证同一时间至多一家启用。
+type CaptchaProviderSelection = "turnstile" | "tencent" | "aliyun";
+
+const captchaProviderSelection = ref<CaptchaProviderSelection>("turnstile");
+
+function applyCaptchaSelection(provider: CaptchaProviderSelection | null): void {
+  form.turnstile_enabled = provider === "turnstile";
+  form.tencent_captcha_enabled = provider === "tencent";
+  form.aliyun_captcha_enabled = provider === "aliyun";
+}
+
+const captchaMasterEnabled = computed({
+  get: () =>
+    form.turnstile_enabled ||
+    form.tencent_captcha_enabled ||
+    form.aliyun_captcha_enabled,
+  set: (enabled: boolean) =>
+    applyCaptchaSelection(enabled ? captchaProviderSelection.value : null),
+});
+
+function selectCaptchaProvider(provider: CaptchaProviderSelection): void {
+  captchaProviderSelection.value = provider;
+  applyCaptchaSelection(provider);
+}
+
+// 天御中国站与国际站是两套独立账号体系，控制台与文档入口不通用，
+// 按当前选择的站点给出对应链接，避免管理员在错误的控制台里找不到 CaptchaAppId。
+const tencentCaptchaLinks = computed(() =>
+  form.tencent_captcha_region === "intl"
+    ? {
+        console: "https://console.tencentcloud.com/captcha/graphical",
+        cloudKeys: "https://console.tencentcloud.com/cam/capi",
+        webDocs: "https://www.tencentcloud.com/document/product/1159/49680",
+      }
+    : {
+        console: "https://console.cloud.tencent.com/captcha",
+        cloudKeys: "https://console.cloud.tencent.com/cam/capi",
+        webDocs: "https://cloud.tencent.com/document/product/1110/36841",
+      },
+);
+
+function syncCaptchaProviderSelection(): void {
+  if (form.tencent_captcha_enabled) {
+    captchaProviderSelection.value = "tencent";
+  } else if (form.aliyun_captcha_enabled) {
+    captchaProviderSelection.value = "aliyun";
+  } else if (form.turnstile_enabled) {
+    captchaProviderSelection.value = "turnstile";
+  }
+}
 
 type OpenAIAdvancedSchedulerOverrideKey =
   | "openai_advanced_scheduler_lb_top_k"
@@ -9565,6 +10087,9 @@ async function loadSettings() {
     form.channel_monitor_show_quota = Boolean(
       settings.channel_monitor_show_quota
     );
+    form.channel_monitor_hide_user_ranking = Boolean(
+      settings.channel_monitor_hide_user_ranking
+    );
     form.login_agreement_updated_at =
       settings.login_agreement_updated_at || "2026-03-31";
     form.login_agreement_documents =
@@ -9603,6 +10128,11 @@ async function loadSettings() {
     form.smtp_password = "";
     smtpPasswordManuallyEdited.value = false;
     form.turnstile_secret_key = "";
+    form.tencent_captcha_app_secret_key = "";
+    form.tencent_captcha_cloud_secret_id = "";
+    form.tencent_captcha_cloud_secret_key = "";
+    form.aliyun_captcha_access_key_secret = "";
+    syncCaptchaProviderSelection();
     form.linuxdo_connect_client_secret = "";
     form.dingtalk_connect_client_secret = "";
     form.github_oauth_client_secret = "";
@@ -9761,6 +10291,24 @@ function findDuplicateDefaultSubscription(
     return false;
   });
 }
+
+// 站点类型：由 subscription_enabled 与 payment_balance_disabled 两个开关派生的单选，
+// 保存时同时写回两者，避免出现「既无充值也无订阅」的组合。
+const siteBillingModeOptions = computed<SelectOption[]>(() =>
+  SITE_BILLING_MODES.map((mode) => ({
+    value: mode,
+    label: t(`admin.settings.features.siteBillingMode.options.${SITE_BILLING_MODE_I18N_KEYS[mode]}`),
+  })),
+);
+const siteBillingMode = computed<SiteBillingMode>({
+  get: () => resolveSiteBillingMode(form),
+  set: (mode) => {
+    Object.assign(form, billingModeToSettings(mode));
+  },
+});
+const siteBillingModeHint = computed(() =>
+  t(`admin.settings.features.siteBillingMode.hints.${SITE_BILLING_MODE_I18N_KEYS[siteBillingMode.value]}`),
+);
 
 async function saveSettings() {
   saving.value = true;
@@ -9964,6 +10512,19 @@ async function saveSettings() {
       smtp_from_email: form.smtp_from_email,
       smtp_from_name: form.smtp_from_name,
       smtp_use_tls: form.smtp_use_tls,
+      passkey_enabled: form.passkey_enabled,
+      tencent_captcha_enabled: form.tencent_captcha_enabled,
+      tencent_captcha_app_id: form.tencent_captcha_app_id,
+      tencent_captcha_app_secret_key: form.tencent_captcha_app_secret_key || undefined,
+      tencent_captcha_cloud_secret_id: form.tencent_captcha_cloud_secret_id || undefined,
+      tencent_captcha_cloud_secret_key: form.tencent_captcha_cloud_secret_key || undefined,
+      tencent_captcha_region: form.tencent_captcha_region,
+      aliyun_captcha_enabled: form.aliyun_captcha_enabled,
+      aliyun_captcha_access_key_id: form.aliyun_captcha_access_key_id,
+      aliyun_captcha_access_key_secret: form.aliyun_captcha_access_key_secret || undefined,
+      aliyun_captcha_scene_id: form.aliyun_captcha_scene_id,
+      aliyun_captcha_prefix: form.aliyun_captcha_prefix,
+      aliyun_captcha_region: form.aliyun_captcha_region,
       turnstile_enabled: form.turnstile_enabled,
       turnstile_site_key: form.turnstile_site_key,
       turnstile_secret_key: form.turnstile_secret_key || undefined,
@@ -10186,8 +10747,11 @@ async function saveSettings() {
         Number(form.channel_monitor_default_interval_seconds) || 60,
       channel_monitor_hide_throughput: Boolean(form.channel_monitor_hide_throughput),
       channel_monitor_show_quota: Boolean(form.channel_monitor_show_quota),
+      channel_monitor_hide_user_ranking: Boolean(form.channel_monitor_hide_user_ranking),
       // Available Channels feature switch
       available_channels_enabled: form.available_channels_enabled,
+      // Subscription feature switch
+      subscription_enabled: form.subscription_enabled,
       // Model Plaza feature switches + description
       model_plaza_enabled: form.model_plaza_enabled,
       model_plaza_require_auth: form.model_plaza_require_auth,
@@ -10266,6 +10830,11 @@ async function saveSettings() {
     form.smtp_password = "";
     smtpPasswordManuallyEdited.value = false;
     form.turnstile_secret_key = "";
+    form.tencent_captcha_app_secret_key = "";
+    form.tencent_captcha_cloud_secret_id = "";
+    form.tencent_captcha_cloud_secret_key = "";
+    form.aliyun_captcha_access_key_secret = "";
+    syncCaptchaProviderSelection();
     form.linuxdo_connect_client_secret = "";
     form.dingtalk_connect_client_secret = "";
     form.github_oauth_client_secret = "";
@@ -10761,6 +11330,10 @@ const openaiFastPolicyTierOptions = computed(() => [
   {
     value: "priority",
     label: t("admin.settings.openaiFastPolicy.tierPriority"),
+  },
+  {
+    value: "ultrafast",
+    label: t("admin.settings.openaiFastPolicy.tierUltrafast"),
   },
   { value: "flex", label: t("admin.settings.openaiFastPolicy.tierFlex") },
 ]);

@@ -112,7 +112,9 @@ func explicitOpenAIHeaderSessionID(c *gin.Context) string {
 	}
 	for _, header := range []string{
 		"session_id",
+		"session-id",
 		"conversation_id",
+		"conversation-id",
 		openCodeSessionAffinityHeader,
 		openCodeSessionIDHeader,
 		openCodeNativeSessionHeader,

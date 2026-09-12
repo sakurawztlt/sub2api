@@ -22,14 +22,6 @@ type accountBillingSettingsAdminRepo struct {
 	updateCalls      int
 }
 
-func cloneAccountValuePointer[T any](value *T) *T {
-	if value == nil {
-		return nil
-	}
-	copy := *value
-	return &copy
-}
-
 func (r *accountBillingSettingsAdminRepo) UpdateWithAccountBillingSettings(
 	_ context.Context,
 	account *Account,

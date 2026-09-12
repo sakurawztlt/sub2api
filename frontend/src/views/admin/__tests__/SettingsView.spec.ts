@@ -364,6 +364,15 @@ const ImageUploadStub = defineComponent({
 });
 
 const baseSettingsResponse = {
+  passkey_enabled: true,
+  passkey_configured: true,
+  passkey_rp_id: "sub3.nebula-spaces.com",
+  passkey_rp_origins: ["https://sub3.nebula-spaces.com"],
+  tencent_captcha_enabled: false,
+  tencent_captcha_app_id: "",
+  tencent_captcha_app_secret_key_configured: false,
+  tencent_captcha_cloud_secret_id_configured: false,
+  tencent_captcha_cloud_secret_key_configured: false,
   registration_enabled: true,
   email_verify_enabled: false,
   registration_email_suffix_whitelist: [],
@@ -728,6 +737,31 @@ describe("admin SettingsView payment visible method controls", () => {
     adminSettingsFetch.mockResolvedValue(undefined);
   });
 
+  it("loads and saves the open button visibility for each custom menu", async () => {
+    const menuItems = [
+      { id: "docs", label: "Docs", url: "https://example.com/docs", icon_svg: "", visibility: "user", sort_order: 0 },
+      { id: "help", label: "Help", url: "https://example.com/help", icon_svg: "", visibility: "user", sort_order: 1, hide_open_button: true },
+    ];
+    getSettings.mockResolvedValue({ ...baseSettingsResponse, custom_menu_items: menuItems });
+    const wrapper = mountView();
+    await flushPromises();
+
+    const toggles = wrapper.findAll<HTMLInputElement>('[data-testid="custom-menu-hide-open-button"]');
+    expect(toggles.map(toggle => toggle.element.checked)).toEqual([false, true]);
+    await toggles[0].setValue(true);
+    await toggles[1].setValue(false);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      custom_menu_items: [
+        { ...menuItems[0], hide_open_button: true },
+        { ...menuItems[1], hide_open_button: false },
+      ],
+    }));
+    wrapper.unmount();
+  });
+
   it("submits the compact home page toggle", async () => {
     const wrapper = mountView();
     await flushPromises();
@@ -780,6 +814,196 @@ describe("admin SettingsView payment visible method controls", () => {
       public_ip_rpm: 300,
     });
     expect(showSuccess).toHaveBeenCalled();
+  });
+
+  it("shows valid passkey RP configuration and persists the sign-in toggle", async () => {
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openSecurityTab(wrapper);
+
+    const settings = wrapper.get('[data-testid="passkey-settings"]');
+    const toggle = settings.get('[data-testid="passkey-toggle"]');
+    expect(toggle.attributes("disabled")).toBeUndefined();
+    expect(settings.text()).toContain("sub3.nebula-spaces.com");
+    expect(settings.text()).toContain("https://sub3.nebula-spaces.com");
+    expect(settings.text()).not.toContain("webauthn.enabled");
+
+    await toggle.setValue(false);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ passkey_enabled: false }),
+    );
+  });
+
+  it("人机验证切换到腾讯天御并保存四项配置", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    await openSecurityTab(wrapper);
+
+    const masterToggle = wrapper.get('[data-testid="captcha-enabled-toggle"]');
+    await masterToggle.setValue(true);
+    // 默认选中 Turnstile
+    expect(wrapper.text()).toContain("admin.settings.turnstile.siteKey");
+
+    await wrapper.get('[data-testid="captcha-provider-tencent"]').trigger("click");
+    await flushPromises();
+
+    const card = wrapper
+      .findAll(".card")
+      .find((node) => node.text().includes("admin.settings.captcha.title"));
+    expect(card).toBeDefined();
+    expect(card!.text()).not.toContain("admin.settings.turnstile.siteKey");
+    expect(card!.get('a[href="https://console.cloud.tencent.com/captcha"]').exists()).toBe(true);
+    expect(card!.get('a[href="https://console.cloud.tencent.com/cam/capi"]').exists()).toBe(true);
+    expect(
+      card!.get('a[href="https://cloud.tencent.com/document/product/1110/36841"]').exists(),
+    ).toBe(true);
+    const inputs = card!.findAll("input").filter((input) => input.attributes("type") !== "checkbox");
+    await inputs[0]!.setValue("123456789");
+    await inputs[1]!.setValue("app-secret-value");
+    await inputs[2]!.setValue("cloud-secret-id-value");
+    await inputs[3]!.setValue("cloud-secret-key-value");
+
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        turnstile_enabled: false,
+        tencent_captcha_enabled: true,
+        aliyun_captcha_enabled: false,
+        tencent_captcha_app_id: "123456789",
+        tencent_captcha_app_secret_key: "app-secret-value",
+        tencent_captcha_cloud_secret_id: "cloud-secret-id-value",
+        tencent_captcha_cloud_secret_key: "cloud-secret-key-value",
+        tencent_captcha_region: "cn",
+      }),
+    );
+  });
+
+  it("腾讯天御切换到国际站后保存站点并更新控制台入口", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    await openSecurityTab(wrapper);
+
+    await wrapper.get('[data-testid="captcha-enabled-toggle"]').setValue(true);
+    await wrapper.get('[data-testid="captcha-provider-tencent"]').trigger("click");
+    await wrapper.get('[data-testid="tencent-captcha-region-intl"]').trigger("click");
+
+    const card = wrapper
+      .findAll(".card")
+      .find((node) => node.text().includes("admin.settings.captcha.title"));
+    expect(card).toBeDefined();
+    expect(card!.get('a[href="https://console.tencentcloud.com/captcha/graphical"]').exists()).toBe(
+      true,
+    );
+    expect(card!.get('a[href="https://console.tencentcloud.com/cam/capi"]').exists()).toBe(true);
+
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tencent_captcha_enabled: true,
+        tencent_captcha_region: "intl",
+      }),
+    );
+  });
+
+  it("人机验证切换到阿里云并保存配置", async () => {
+    const wrapper = mountView();
+    await flushPromises();
+    await openSecurityTab(wrapper);
+
+    const masterToggle = wrapper.get('[data-testid="captcha-enabled-toggle"]');
+    await masterToggle.setValue(true);
+
+    await wrapper.get('[data-testid="captcha-provider-aliyun"]').trigger("click");
+    await flushPromises();
+
+    const card = wrapper
+      .findAll(".card")
+      .find((node) => node.text().includes("admin.settings.captcha.title"));
+    expect(card).toBeDefined();
+    expect(card!.text()).toContain("admin.settings.aliyunCaptcha.region");
+    expect(card!.text()).not.toContain("admin.settings.turnstile.siteKey");
+    const inputs = card!.findAll("input").filter((input) => input.attributes("type") !== "checkbox");
+    await inputs[0]!.setValue("prefix-1");
+    await inputs[1]!.setValue("scene-1");
+    await inputs[2]!.setValue("ak-id");
+    await inputs[3]!.setValue("ak-secret-value");
+
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        turnstile_enabled: false,
+        tencent_captcha_enabled: false,
+        aliyun_captcha_enabled: true,
+        aliyun_captcha_prefix: "prefix-1",
+        aliyun_captcha_scene_id: "scene-1",
+        aliyun_captcha_access_key_id: "ak-id",
+        aliyun_captcha_access_key_secret: "ak-secret-value",
+        aliyun_captcha_region: "cn",
+      }),
+    );
+  });
+
+  it("关闭人机验证总开关会同时关闭所有服务商", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      tencent_captcha_enabled: true,
+      tencent_captcha_app_id: "123456789",
+      tencent_captcha_app_secret_key_configured: true,
+      tencent_captcha_cloud_secret_id_configured: true,
+      tencent_captcha_cloud_secret_key_configured: true,
+    });
+    const wrapper = mountView();
+    await flushPromises();
+    await openSecurityTab(wrapper);
+
+    const masterToggle = wrapper.get('[data-testid="captcha-enabled-toggle"]');
+    expect((masterToggle.element as HTMLInputElement).checked).toBe(true);
+    // 加载后选中项跟随已启用的服务商
+    expect(wrapper.text()).toContain("admin.settings.tencentCaptcha.appId");
+
+    await masterToggle.setValue(false);
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        turnstile_enabled: false,
+        tencent_captcha_enabled: false,
+        aliyun_captcha_enabled: false,
+      }),
+    );
+  });
+
+  it("disables passkey sign-in when the RP configuration is unavailable", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      passkey_enabled: false,
+      passkey_configured: false,
+      passkey_rp_id: "",
+      passkey_rp_origins: [],
+    });
+    const wrapper = mountView();
+
+    await flushPromises();
+    await openSecurityTab(wrapper);
+
+    const settings = wrapper.get('[data-testid="passkey-settings"]');
+    expect(settings.get('[data-testid="passkey-toggle"]').attributes("disabled")).toBeDefined();
+    const status = settings.get('[data-testid="passkey-config-status"]');
+    expect(status.text()).toContain(
+      "admin.settings.security.passkeyNotConfigured",
+    );
+    expect(status.text()).toContain("admin.settings.security.passkeyDeploymentHint");
   });
 
   it("does not render legacy visible payment method controls", async () => {

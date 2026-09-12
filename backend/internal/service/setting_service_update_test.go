@@ -570,7 +570,7 @@ func TestSettingService_UpdateSettings_APIKeyACLTrustForwardedIPRefreshesConfig(
 	})
 	require.NoError(t, err)
 	require.Equal(t, "true", repo.updates[SettingKeyAPIKeyACLTrustForwardedIP])
-	require.True(t, cfg.Security.TrustForwardedIPForAPIKeyACL)
+	require.True(t, cfg.ForwardedClientIPSettings().TrustForwardedIP)
 	require.True(t, cfg.TrustForwardedIPForAPIKeyACL())
 }
 

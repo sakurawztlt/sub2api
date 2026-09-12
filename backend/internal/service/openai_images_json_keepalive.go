@@ -238,3 +238,40 @@ func (w *openAIImagesJSONKeepaliveWriter) CloseNotify() <-chan bool {
 	}
 	return w.ResponseWriter.CloseNotify()
 }
+
+func (w *openAIImagesJSONKeepaliveWriter) Pusher() http.Pusher {
+	if w.ResponseWriter == nil {
+		return nil
+	}
+	return w.ResponseWriter.Pusher()
+}
+func (w *openAIImagesJSONKeepaliveWriter) Status() int {
+	if w.ResponseWriter == nil {
+		return 0
+	}
+	if w.k != nil {
+		w.k.mu.Lock()
+		defer w.k.mu.Unlock()
+	}
+	return w.ResponseWriter.Status()
+}
+func (w *openAIImagesJSONKeepaliveWriter) Size() int {
+	if w.ResponseWriter == nil {
+		return 0
+	}
+	if w.k != nil {
+		w.k.mu.Lock()
+		defer w.k.mu.Unlock()
+	}
+	return w.ResponseWriter.Size()
+}
+func (w *openAIImagesJSONKeepaliveWriter) Written() bool {
+	if w.ResponseWriter == nil {
+		return false
+	}
+	if w.k != nil {
+		w.k.mu.Lock()
+		defer w.k.mu.Unlock()
+	}
+	return w.ResponseWriter.Written()
+}

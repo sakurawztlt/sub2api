@@ -67,42 +67,6 @@ func TestOpenAIGatewayServiceGetAccessTokenSetupToken(t *testing.T) {
 	}
 }
 
-func TestOpenAISetupTokenImagesUsesOAuthResponsesPath(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
-
-	upstream := &httpUpstreamRecorder{resp: &http.Response{
-		StatusCode: http.StatusTooManyRequests,
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"rate limited"}}`)),
-	}}
-	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
-	account := &Account{
-		ID:          73,
-		Platform:    PlatformOpenAI,
-		Type:        AccountTypeSetupToken,
-		Credentials: map[string]any{"access_token": "setup-token"},
-	}
-	parsed := &OpenAIImagesRequest{
-		Endpoint:       openAIImagesGenerationsEndpoint,
-		Model:          "gpt-image-2",
-		Prompt:         "draw a square",
-		N:              1,
-		ResponseFormat: "b64_json",
-	}
-
-	result, err := svc.ForwardImages(context.Background(), c, account, nil, parsed, "")
-
-	require.Nil(t, result)
-	var failoverErr *UpstreamFailoverError
-	require.ErrorAs(t, err, &failoverErr)
-	require.Equal(t, http.StatusTooManyRequests, failoverErr.StatusCode)
-	require.True(t, failoverErr.RetryableOnSameAccount)
-	require.False(t, failoverErr.SameAccountRetryDeadline.IsZero())
-	require.Contains(t, upstream.lastReq.URL.String(), "/backend-api/codex/responses")
-}
-
 func TestOpenAISetupTokenWSCompatibility(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -246,4 +210,40 @@ func openAISetupTokenCompatAccount(id int64) *Account {
 			"chatgpt_account_id": "chatgpt-setup",
 		},
 	}
+}
+
+func TestOpenAISetupTokenImagesUsesOAuthDirectPath(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusTooManyRequests,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"rate limited"}}`)),
+	}}
+	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	account := &Account{
+		ID:          73,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeSetupToken,
+		Credentials: map[string]any{"access_token": "setup-token"},
+	}
+	parsed := &OpenAIImagesRequest{
+		Endpoint:       openAIImagesGenerationsEndpoint,
+		Model:          "gpt-image-2",
+		Prompt:         "draw a square",
+		N:              1,
+		ResponseFormat: "b64_json",
+	}
+
+	result, err := svc.ForwardImages(context.Background(), c, account, nil, parsed, "")
+
+	require.Nil(t, result)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusTooManyRequests, failoverErr.StatusCode)
+	require.True(t, failoverErr.RetryableOnSameAccount)
+	require.False(t, failoverErr.SameAccountRetryDeadline.IsZero())
+	require.Contains(t, upstream.lastReq.URL.String(), "/backend-api/codex/images/generations")
 }

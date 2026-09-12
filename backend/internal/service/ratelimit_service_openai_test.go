@@ -74,11 +74,9 @@ func TestCalculateOpenAI429ResetTime_5hExhausted(t *testing.T) {
 	}
 }
 
-func TestCalculateOpenAI429ResetTime_NeitherExhausted_UsesFallback(t *testing.T) {
+func TestCalculateOpenAI429ResetTime_NeitherExhausted_ReturnsNil(t *testing.T) {
 	svc := &RateLimitService{}
 
-	// Neither limit is exhausted. The reset headers describe usage windows, not
-	// the transient burst limit that caused the 429.
 	headers := http.Header{}
 	headers.Set("x-codex-primary-used-percent", "80")
 	headers.Set("x-codex-primary-reset-after-seconds", "100000")
@@ -87,9 +85,7 @@ func TestCalculateOpenAI429ResetTime_NeitherExhausted_UsesFallback(t *testing.T)
 	headers.Set("x-codex-secondary-reset-after-seconds", "5000")
 	headers.Set("x-codex-secondary-window-minutes", "300")
 
-	resetAt := svc.calculateOpenAI429ResetTime(headers)
-
-	require.Nil(t, resetAt)
+	require.Nil(t, svc.calculateOpenAI429ResetTime(headers))
 }
 
 func TestCalculateOpenAI429ResetTime_NoCodexHeaders(t *testing.T) {

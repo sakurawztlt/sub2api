@@ -101,6 +101,9 @@ func (Group) Fields() []ent.Field {
 		field.Bool("allow_image_generation").
 			Default(false).
 			Comment("是否允许该分组使用图片生成能力"),
+		field.Bool("allow_batch_image_generation").
+			Default(false).
+			Comment("是否允许该分组使用批量图片生成能力"),
 		field.Bool("image_rate_independent").
 			Default(false).
 			Comment("图片生成是否使用独立倍率；false 表示共享分组有效倍率"),
@@ -120,6 +123,14 @@ func (Group) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}),
+		field.Float("batch_image_discount_multiplier").
+			SchemaType(map[string]string{dialect.Postgres: "decimal(10,4)"}).
+			Default(0.5).
+			Comment("批量图片生成折扣倍率，最终单价会乘以该值；0 表示免费"),
+		field.Float("batch_image_hold_multiplier").
+			SchemaType(map[string]string{dialect.Postgres: "decimal(10,4)"}).
+			Default(0.6).
+			Comment("批量图片生成冻结价格比例，按普通生图原价乘以该比例冻结，结算后释放差额"),
 		field.Bool("video_rate_independent").
 			Default(false).
 			Comment("视频生成是否使用独立倍率；false 表示共享分组有效倍率"),
@@ -143,12 +154,21 @@ func (Group) Fields() []ent.Field {
 			Optional().
 			SchemaType(map[string]string{dialect.Postgres: "jsonb"}).
 			Comment("按模型族和分辨率覆盖视频每秒价格"),
+		field.Float("web_search_price_per_call").
+			Optional().
+			Nillable().
+			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).
+			Comment("Codex alpha/search 网页搜索单次价格（USD/次）；nil 表示使用默认价 0.01（官方 $10/1000 次）"),
+
+		// 搜索/工具调用显式定价（per 1k calls），用于 Grok web_search 等。
 		field.Float("search_price_per_1k").
 			Optional().
 			Nillable().
 			Min(0).
 			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).
 			Comment("搜索工具价格 per 1000 calls（web_search 等）"),
+
+		// Grok Voice 显式定价（realtime / TTS / STT），不按文本 RateMultiplier。
 		field.Float("audio_realtime_price_per_min").
 			Optional().
 			Nillable().
@@ -219,6 +239,9 @@ func (Group) Fields() []ent.Field {
 		field.Bool("allow_messages_dispatch").
 			Default(false).
 			Comment("是否允许 /v1/messages 调度到此 OpenAI 分组"),
+		field.Bool("allow_live").
+			Default(false).
+			Comment("是否允许此 OpenAI 分组访问 Live 接口"),
 		field.Bool("force_openai_fast").
 			Default(false).
 			Comment("是否强制此 OpenAI/Composite 分组请求使用 service_tier=priority"),
@@ -239,10 +262,14 @@ func (Group) Fields() []ent.Field {
 			Default(domain.OpenAIMessagesDispatchModelConfig{}).
 			SchemaType(map[string]string{dialect.Postgres: "jsonb"}).
 			Comment("OpenAI Messages 调度模型配置：按 Claude 系列/精确模型映射到目标 GPT 模型"),
-		field.JSON("models_list_config", domain.GroupModelsListConfig{}).
-			Default(domain.GroupModelsListConfig{}).
+		field.JSON("model_allowlist", domain.GroupModelAllowlist{}).
+			Default(domain.GroupModelAllowlist{}).
 			SchemaType(map[string]string{dialect.Postgres: "jsonb"}).
-			Comment("自定义 /v1/models 展示列表配置；仅影响模型列表响应，不影响调度"),
+			Comment("分组模型白名单：同时约束模型列表接口与请求准入"),
+		field.JSON("codex_models_manifest_config", domain.GroupCodexModelsManifestConfig{}).
+			Default(domain.GroupCodexModelsManifestConfig{}).
+			SchemaType(map[string]string{dialect.Postgres: "jsonb"}).
+			Comment("固定账号获取 Codex Model Manifest 配置；开启后 /models 请求只用选定账号拉取（仅 openai 平台）"),
 
 		// 分组级每分钟请求数上限（0 = 不限制）。设置后优先于用户级兜底生效。
 		field.Int("rpm_limit").

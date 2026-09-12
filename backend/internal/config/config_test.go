@@ -1936,6 +1936,11 @@ func TestValidateConfigErrors(t *testing.T) {
 			wantErr: "ops.cleanup.error_log_retention_days",
 		},
 		{
+			name:    "ops cleanup system log retention",
+			mutate:  func(c *Config) { c.Ops.Cleanup.SystemLogRetentionDays = 0 },
+			wantErr: "ops.cleanup.system_log_retention_days",
+		},
+		{
 			name:    "ops cleanup minute retention",
 			mutate:  func(c *Config) { c.Ops.Cleanup.MinuteMetricsRetentionDays = -1 },
 			wantErr: "ops.cleanup.minute_metrics_retention_days",
@@ -2332,5 +2337,20 @@ func TestLoad_DefaultGatewayUsageRecordConfig(t *testing.T) {
 	}
 	if cfg.Gateway.UsageRecord.AutoScaleCooldownSeconds != 10 {
 		t.Fatalf("auto_scale_cooldown_seconds = %d, want 10", cfg.Gateway.UsageRecord.AutoScaleCooldownSeconds)
+	}
+}
+
+func TestLoadDefaultOpsCleanupConfig(t *testing.T) {
+	resetViperWithJWTSecret(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if !cfg.Ops.Cleanup.Enabled {
+		t.Fatal("Ops.Cleanup.Enabled = false, want true")
+	}
+	if cfg.Ops.Cleanup.SystemLogRetentionDays != 30 {
+		t.Fatalf("Ops.Cleanup.SystemLogRetentionDays = %d, want 30", cfg.Ops.Cleanup.SystemLogRetentionDays)
 	}
 }

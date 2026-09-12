@@ -8,8 +8,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
-	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"image"
 	"image/color"
 	stddraw "image/draw"
@@ -23,6 +21,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 
 	xdraw "golang.org/x/image/draw"
 	"golang.org/x/sync/singleflight"
@@ -1434,4 +1435,12 @@ const notifyVerifyEmailTemplate = `<!DOCTYPE html>
 // buildNotifyVerifyEmailBody builds the HTML email body for notify email verification.
 func buildNotifyVerifyEmailBody(code, siteName string) string {
 	return fmt.Sprintf(notifyVerifyEmailTemplate, siteName, code)
+}
+
+// RedeemUserAdjustmentRepository provides the atomic, floor-at-zero updates
+// used by negative-value redeem codes. It is intentionally narrower than
+// UserRepository because normal usage billing is allowed to overdraw.
+type RedeemUserAdjustmentRepository interface {
+	ApplyRedeemBalanceAdjustment(ctx context.Context, id int64, delta float64) error
+	ApplyRedeemConcurrencyAdjustment(ctx context.Context, id int64, delta int) error
 }

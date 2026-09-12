@@ -97,6 +97,8 @@ func mustCreateGroup(t *testing.T, client *dbent.Client, g *service.Group) *serv
 		SetImageRateMultiplier(g.ImageRateMultiplier).
 		SetVideoModelPrices(service.NormalizeVideoModelPrices(g.VideoModelPrices)).
 		SetLongContextPricingEnabled(g.LongContextPricingEnabled).
+		SetModelAllowlist(service.DomainGroupModelAllowlist(g.ModelAllowlist)).
+		SetCodexModelsManifestConfig(g.CodexModelsManifestConfig).
 		SetProfitControlEnabled(g.ProfitControlEnabled).
 		SetProfitMinMargin(g.ProfitMinMargin).
 		SetProfitSafetyBuffer(g.ProfitSafetyBuffer)

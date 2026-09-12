@@ -7,25 +7,29 @@ import GroupsView from '../GroupsView.vue'
 const {
   listGroups,
   getAllGroups,
-  getModelsListCandidates,
+  getModelAllowlistCandidates,
   getUsageSummary,
   getCapacitySummary,
+  getLiveCapability,
   listAccounts,
   showError,
   showSuccess,
   isCurrentStep,
   nextStep,
+  authState,
 } = vi.hoisted(() => ({
   listGroups: vi.fn(),
   getAllGroups: vi.fn(),
-  getModelsListCandidates: vi.fn(),
+  getModelAllowlistCandidates: vi.fn(),
   getUsageSummary: vi.fn(),
   getCapacitySummary: vi.fn(),
+  getLiveCapability: vi.fn().mockResolvedValue({ supported: false }),
   listAccounts: vi.fn(),
   showError: vi.fn(),
   showSuccess: vi.fn(),
   isCurrentStep: vi.fn(),
   nextStep: vi.fn(),
+  authState: { isSimpleMode: false },
 }))
 
 const messages: Record<string, string> = {
@@ -50,9 +54,10 @@ vi.mock('@/api/admin', () => ({
     groups: {
       list: listGroups,
       getAll: getAllGroups,
-      getModelsListCandidates,
+      getModelAllowlistCandidates,
       getUsageSummary,
       getCapacitySummary,
+      getLiveCapability,
       create: vi.fn(),
       update: vi.fn(),
       delete: vi.fn(),
@@ -69,6 +74,10 @@ vi.mock('@/stores/app', () => ({
     showError,
     showSuccess,
   }),
+}))
+
+vi.mock('@/stores/auth', () => ({
+  useAuthStore: () => authState,
 }))
 
 vi.mock('@/stores/onboarding', () => ({
@@ -124,7 +133,7 @@ const createGroup = (overrides: Partial<AdminGroup> = {}): AdminGroup => ({
   account_count: 3,
   active_account_count: 2,
   rate_limited_account_count: 1,
-  models_list_config: undefined,
+  model_allowlist: undefined,
   sort_order: 10,
   ...overrides,
 })
@@ -229,14 +238,16 @@ describe('admin GroupsView column settings', () => {
 
     listGroups.mockReset()
     getAllGroups.mockReset()
-    getModelsListCandidates.mockReset()
+    getModelAllowlistCandidates.mockReset()
     getUsageSummary.mockReset()
     getCapacitySummary.mockReset()
+    getLiveCapability.mockReset().mockResolvedValue({ supported: false })
     listAccounts.mockReset()
     showError.mockReset()
     showSuccess.mockReset()
     isCurrentStep.mockReset()
     nextStep.mockReset()
+    authState.isSimpleMode = false
 
     listGroups.mockResolvedValue({
       items: [createGroup()],
@@ -246,11 +257,28 @@ describe('admin GroupsView column settings', () => {
       pages: 1,
     })
     getAllGroups.mockResolvedValue([])
-    getModelsListCandidates.mockResolvedValue([])
+    getModelAllowlistCandidates.mockResolvedValue([])
     getUsageSummary.mockResolvedValue([])
     getCapacitySummary.mockResolvedValue([])
     listAccounts.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 20, pages: 0 })
     isCurrentStep.mockReturnValue(false)
+  })
+
+  it('does not call advanced group APIs or expose the exclusive filter in simple mode', async () => {
+    authState.isSimpleMode = true
+    const wrapper = await mountView()
+
+    expect(getLiveCapability).not.toHaveBeenCalled()
+    expect(getModelAllowlistCandidates).not.toHaveBeenCalled()
+    expect(getUsageSummary).not.toHaveBeenCalled()
+    expect(getCapacitySummary).not.toHaveBeenCalled()
+    expect(listGroups).toHaveBeenCalledWith(
+      expect.any(Number),
+      expect.any(Number),
+      expect.objectContaining({ is_exclusive: undefined }),
+      expect.anything(),
+    )
+    expect(wrapper.find('select').text()).not.toContain('admin.groups.allGroups')
   })
 
   afterEach(() => {
@@ -262,6 +290,7 @@ describe('admin GroupsView column settings', () => {
 
     expect(columnKeys(wrapper)).toEqual([
       'name',
+      'id',
       'platform',
       'billing_type',
       'rate_multiplier',
@@ -284,6 +313,7 @@ describe('admin GroupsView column settings', () => {
 
     expect(columnKeys(wrapper)).toEqual([
       'name',
+      'id',
       'platform',
       'billing_type',
       'rate_multiplier',
@@ -302,6 +332,7 @@ describe('admin GroupsView column settings', () => {
 
     expect(columnKeys(wrapper)).toEqual([
       'name',
+      'id',
       'platform',
       'billing_type',
       'rate_multiplier',
@@ -315,7 +346,7 @@ describe('admin GroupsView column settings', () => {
   })
 
   it('skips hidden usage and capacity fetches until those columns are shown', async () => {
-    localStorage.setItem('group-hidden-columns', JSON.stringify(['usage', 'capacity']))
+    localStorage.setItem('group-hidden-columns', JSON.stringify(['usage', 'capacity', 'billing_type']))
 
     const wrapper = await mountView()
 

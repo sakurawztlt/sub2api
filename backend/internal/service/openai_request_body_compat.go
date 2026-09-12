@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -70,7 +71,7 @@ func openAIRequestBodyHasTools(body []byte) bool {
 // normalizeOpenAIResponsesReasoningContentReplay removes non-portable visible
 // reasoning.content while retaining the portable reasoning item metadata.
 func normalizeOpenAIResponsesReasoningContentReplay(body []byte) ([]byte, bool, error) {
-	input := gjson.GetBytes(body, "input")
+	input := parseRawJSONView(body).Get("input")
 	if !input.IsArray() {
 		return body, false, nil
 	}
@@ -147,67 +148,78 @@ func normalizeOpenAIAPIKeyStoreFalseReasoningReplay(body []byte, knownStoreFalse
 	if !knownStoreFalse && gjson.GetBytes(body, "store").Type != gjson.False {
 		return body, false, nil
 	}
-	input := gjson.GetBytes(body, "input")
+	root := parseRawJSONView(body)
+	input := root.Get("input")
 	if !input.IsArray() {
 		return body, false, nil
 	}
+	if !root.IsObject() || !gjson.ValidBytes(body) || !utf8.Valid(body) || hasDuplicateJSONObjectKeys(root) {
+		return normalizeOpenAIAPIKeyStoreFalseReasoningReplayDecoded(body, knownStoreFalse)
+	}
 
-	var reqBody map[string]any
-	if err := decodeOpenAIJSONUseNumber(body, &reqBody); err != nil {
-		return body, false, fmt.Errorf("normalize API-key store=false reasoning replay: %w", err)
-	}
-	items, ok := reqBody["input"].([]any)
-	if !ok {
-		return body, false, nil
-	}
-	filtered := make([]any, 0, len(items))
+	// Only reasoning metadata needs decoding. Keep large image/tool results as
+	// slices of the original JSON and copy them once into the final request.
+	items := make([]string, 0)
 	changed := false
-	for _, rawItem := range items {
-		item, ok := rawItem.(map[string]any)
-		if !ok {
-			filtered = append(filtered, rawItem)
-			continue
+	fallback := false
+	var itemErr error
+	input.ForEach(func(_, item gjson.Result) bool {
+		if !item.IsObject() {
+			items = append(items, item.Raw)
+			return true
 		}
-		typ := strings.TrimSpace(firstNonEmptyString(item["type"]))
-		id := strings.TrimSpace(firstNonEmptyString(item["id"]))
-		switch typ {
-		case "reasoning":
-			encryptedContent, hasEncryptedContent := item["encrypted_content"].(string)
-			if !hasEncryptedContent || strings.TrimSpace(encryptedContent) == "" {
-				changed = true
-				continue
-			}
-			if strings.HasPrefix(id, "rs_") {
-				delete(item, "id")
-				changed = true
-			}
-			if summary, ok := item["summary"]; !ok || summary == nil {
-				item["summary"] = []any{}
-				changed = true
-			}
-		case "item_reference":
-			if strings.HasPrefix(id, "rs_") {
-				changed = true
-				continue
-			}
+		if hasDuplicateJSONObjectKeys(item) {
+			fallback = true
+			return false
 		}
-		if shouldStripOpenAIResponsesNonPairCallID(typ) {
-			if _, hasCallID := item["call_id"]; hasCallID {
-				delete(item, "call_id")
-				changed = true
-			}
+		typ := strings.TrimSpace(item.Get("type").String())
+		id := strings.TrimSpace(item.Get("id").String())
+		encrypted := item.Get("encrypted_content")
+		if (typ == "reasoning" && (encrypted.Type != gjson.String || strings.TrimSpace(encrypted.Str) == "")) ||
+			(typ == "item_reference" && strings.HasPrefix(id, "rs_")) {
+			changed = true
+			return true
 		}
-		filtered = append(filtered, item)
+		stripID := typ == "reasoning" && strings.HasPrefix(id, "rs_")
+		addSummary := typ == "reasoning" && item.Get("summary").Type == gjson.Null
+		stripCallID := shouldStripOpenAIResponsesNonPairCallID(typ) && item.Get("call_id").Exists()
+		if !stripID && !addSummary && !stripCallID {
+			items = append(items, item.Raw)
+			return true
+		}
+		var decoded map[string]any
+		if err := decodeOpenAIJSONUseNumber([]byte(item.Raw), &decoded); err != nil {
+			itemErr = err
+			return false
+		}
+		if stripID {
+			delete(decoded, "id")
+		}
+		if addSummary {
+			decoded["summary"] = []any{}
+		}
+		if stripCallID {
+			delete(decoded, "call_id")
+		}
+		encoded, err := marshalOpenAIUpstreamJSON(decoded)
+		if err != nil {
+			itemErr = err
+			return false
+		}
+		items = append(items, string(encoded))
+		changed = true
+		return true
+	})
+	if fallback {
+		return normalizeOpenAIAPIKeyStoreFalseReasoningReplayDecoded(body, knownStoreFalse)
+	}
+	if itemErr != nil {
+		return body, false, fmt.Errorf("normalize API-key store=false reasoning replay: %w", itemErr)
 	}
 	if !changed {
 		return body, false, nil
 	}
-	reqBody["input"] = filtered
-	normalized, err := marshalOpenAIUpstreamJSON(reqBody)
-	if err != nil {
-		return body, false, fmt.Errorf("serialize API-key store=false reasoning replay: %w", err)
-	}
-	return normalized, true, nil
+	return replaceOpenAIRawInput(body, input, items), true, nil
 }
 
 func normalizeOpenAIOAuthResponsesCompatibilityBody(body []byte) ([]byte, bool, error) {
@@ -246,6 +258,10 @@ func normalizeOpenAIOAuthResponsesCompatibilityBody(body []byte) ([]byte, bool, 
 
 func normalizeOpenAIResponsesReasoningMode(body []byte) ([]byte, bool, error) {
 	if len(body) == 0 {
+		return body, false, nil
+	}
+	// Astra 的 reasoning.mode 与 reasoning.effort 是独立参数，不做兼容替换；非 Astra 维持旧 strip-mode/pro->max 行为。
+	if isOpenAIGPT6AstraModel(gjson.GetBytes(body, "model").String()) {
 		return body, false, nil
 	}
 	mode := gjson.GetBytes(body, "reasoning.mode")

@@ -70,7 +70,7 @@ type ErrInvalidOpenAIServiceTier struct {
 }
 
 func (e *ErrInvalidOpenAIServiceTier) Error() string {
-	return fmt.Sprintf("invalid service_tier %q: must be one of auto, default, fast, flex, priority, scale", e.Value)
+	return fmt.Sprintf("invalid service_tier %q: must be one of auto, default, fast, flex, priority, scale, ultrafast", e.Value)
 }
 
 const invalidOpenAIServiceTierValueMaxLen = 64
@@ -82,6 +82,16 @@ func boundInvalidOpenAIServiceTierValue(raw string) string {
 	return raw[:invalidOpenAIServiceTierValueMaxLen] + "..."
 }
 
+// ValidateOpenAIServiceTierField validates the service_tier field of a raw
+// OpenAI-compatible request body (/v1/responses and /v1/chat/completions).
+//
+//   - absent / null → valid, returns "" (field omitted keeps current behavior)
+//   - "fast" → normalized to "priority" (the two are equivalent; the canonical
+//     value is what reaches the OpenAI upstream)
+//   - "priority" / "flex" / "auto" / "default" / "scale" / "ultrafast" → valid, returned as-is
+//   - an explicitly present non-string value, an empty string, or any other
+//     unknown value → *ErrInvalidOpenAIServiceTier (handler maps to HTTP 400),
+//     matching OpenAI's enum validation semantics
 func ValidateOpenAIServiceTierField(body []byte) (string, error) {
 	tierResult := gjson.GetBytes(body, "service_tier")
 	if !tierResult.Exists() || tierResult.Type == gjson.Null {
@@ -104,6 +114,9 @@ func ValidateOpenAIServiceTierField(body []byte) (string, error) {
 func shouldPreserveOpenAIResponsesNoneReasoningEffort(account *Account) bool {
 	if account == nil {
 		return false
+	}
+	if account.IsOpenAIPassthroughEnabled() {
+		return true
 	}
 	if account.IsOpenAIOAuthLike() {
 		return true

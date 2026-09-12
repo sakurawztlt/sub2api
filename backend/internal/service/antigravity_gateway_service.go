@@ -679,6 +679,8 @@ urlFallbackLoop:
 			if err != nil {
 				safeErr := sanitizeUpstreamErrorMessage(err.Error())
 				appendOpsUpstreamError(p.c, OpsUpstreamErrorEvent{
+					ProxyID:            opsUpstreamProxyID(p.account),
+					ProxyName:          opsUpstreamProxyName(p.account),
 					Platform:           p.account.Platform,
 					AccountID:          p.account.ID,
 					AccountName:        p.account.Name,
@@ -756,6 +758,8 @@ urlFallbackLoop:
 						upstreamMsg := strings.TrimSpace(extractAntigravityErrorMessage(respBody))
 						upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 						appendOpsUpstreamError(p.c, OpsUpstreamErrorEvent{
+							ProxyID:            opsUpstreamProxyID(p.account),
+							ProxyName:          opsUpstreamProxyName(p.account),
 							Platform:           p.account.Platform,
 							AccountID:          p.account.ID,
 							AccountName:        p.account.Name,
@@ -791,6 +795,8 @@ urlFallbackLoop:
 						upstreamMsg := strings.TrimSpace(extractAntigravityErrorMessage(respBody))
 						upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 						appendOpsUpstreamError(p.c, OpsUpstreamErrorEvent{
+							ProxyID:            opsUpstreamProxyID(p.account),
+							ProxyName:          opsUpstreamProxyName(p.account),
 							Platform:           p.account.Platform,
 							AccountID:          p.account.ID,
 							AccountName:        p.account.Name,
@@ -1154,7 +1160,7 @@ func (s *AntigravityGatewayService) TestConnection(ctx context.Context, account 
 
 	// 代理 URL
 	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
+	if account.Proxy != nil {
 		proxyURL = account.Proxy.ActiveURL()
 	}
 
@@ -1480,7 +1486,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 
 	// 代理 URL
 	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
+	if account.Proxy != nil {
 		proxyURL = account.Proxy.ActiveURL()
 	}
 
@@ -1547,6 +1553,8 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 			logBody, maxBytes := s.getLogConfig()
 			upstreamDetail := s.getUpstreamErrorDetail(respBody)
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				ProxyID:            opsUpstreamProxyID(account),
+				ProxyName:          opsUpstreamProxyName(account),
 				Platform:           account.Platform,
 				AccountID:          account.ID,
 				AccountName:        account.Name,
@@ -1604,6 +1612,8 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 				})
 				if retryErr != nil {
 					appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+						ProxyID:            opsUpstreamProxyID(account),
+						ProxyName:          opsUpstreamProxyName(account),
 						Platform:           account.Platform,
 						AccountID:          account.ID,
 						AccountName:        account.Name,
@@ -1643,6 +1653,8 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 					retryUpstreamDetail = truncateString(string(retryBody), maxBytes)
 				}
 				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					ProxyID:            opsUpstreamProxyID(account),
+					ProxyName:          opsUpstreamProxyName(account),
 					Platform:           account.Platform,
 					AccountID:          account.ID,
 					AccountName:        account.Name,
@@ -1679,6 +1691,8 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 			errMsg := strings.TrimSpace(extractAntigravityErrorMessage(respBody))
 			if isThinkingBudgetConstraintError(errMsg) && s.settingService.IsBudgetRectifierEnabled(ctx) {
 				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					ProxyID:            opsUpstreamProxyID(account),
+					ProxyName:          opsUpstreamProxyName(account),
 					Platform:           account.Platform,
 					AccountID:          account.ID,
 					AccountName:        account.Name,
@@ -1760,6 +1774,8 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 					logger.LegacyPrintf("service.antigravity_gateway", "%s status=400 prompt_too_long=true upstream_message=%q request_id=%s body=%s", prefix, upstreamMsg, resp.Header.Get("x-request-id"), truncateForLog(respBody, maxBytes))
 				}
 				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					ProxyID:            opsUpstreamProxyID(account),
+					ProxyName:          opsUpstreamProxyName(account),
 					Platform:           account.Platform,
 					AccountID:          account.ID,
 					AccountName:        account.Name,
@@ -1786,6 +1802,8 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 					upstreamDetail := s.getUpstreamErrorDetail(respBody)
 					log.Printf("%s status=400 google_config_error failover=true upstream_message=%q account=%d", prefix, upstreamMsg, account.ID)
 					appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+						ProxyID:            opsUpstreamProxyID(account),
+						ProxyName:          opsUpstreamProxyName(account),
 						Platform:           account.Platform,
 						AccountID:          account.ID,
 						AccountName:        account.Name,
@@ -1804,6 +1822,8 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 				upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 				upstreamDetail := s.getUpstreamErrorDetail(respBody)
 				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					ProxyID:            opsUpstreamProxyID(account),
+					ProxyName:          opsUpstreamProxyName(account),
 					Platform:           account.Platform,
 					AccountID:          account.ID,
 					AccountName:        account.Name,
@@ -1850,14 +1870,17 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 	}
 
 	return &ForwardResult{
-		RequestID:        requestID,
-		Usage:            *usage,
-		Model:            originalModel,
-		UpstreamModel:    billingModel,
-		Stream:           claudeReq.Stream,
-		Duration:         time.Since(startTime),
-		FirstTokenMs:     firstTokenMs,
-		ClientDisconnect: clientDisconnect,
+		RequestID:                     requestID,
+		UpstreamHeaders:               resp.Header,
+		Usage:                         *usage,
+		Model:                         originalModel,
+		UpstreamModel:                 billingModel,
+		UpstreamResponseModel:         observedUpstreamResponseModel(c),
+		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
+		Stream:                        claudeReq.Stream,
+		Duration:                      time.Since(startTime),
+		FirstTokenMs:                  firstTokenMs,
+		ClientDisconnect:              clientDisconnect,
 	}, nil
 }
 
@@ -2207,6 +2230,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 	}
 
 	// 解析请求以获取 image_size（用于图片计费）
+	imageInputSize := s.extractImageInputSize(body)
 	imageSize := s.extractImageSize(body)
 
 	switch action {
@@ -2251,7 +2275,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 
 	// 代理 URL
 	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
+	if account.Proxy != nil {
 		proxyURL = account.Proxy.ActiveURL()
 	}
 
@@ -2365,6 +2389,8 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 			upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractAntigravityErrorMessage(signatureCheckBody)))
 			upstreamDetail := s.getUpstreamErrorDetail(signatureCheckBody)
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				ProxyID:            opsUpstreamProxyID(account),
+				ProxyName:          opsUpstreamProxyName(account),
 				Platform:           account.Platform,
 				AccountID:          account.ID,
 				AccountName:        account.Name,
@@ -2410,6 +2436,8 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 							retryOpsBody = retryUnwrapped
 						}
 						appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+							ProxyID:            opsUpstreamProxyID(account),
+							ProxyName:          opsUpstreamProxyName(account),
 							Platform:           account.Platform,
 							AccountID:          account.ID,
 							AccountName:        account.Name,
@@ -2430,6 +2458,8 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 				} else {
 					if switchErr, ok := IsAntigravityAccountSwitchError(retryErr); ok {
 						appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+							ProxyID:            opsUpstreamProxyID(account),
+							ProxyName:          opsUpstreamProxyName(account),
 							Platform:           account.Platform,
 							AccountID:          account.ID,
 							AccountName:        account.Name,
@@ -2443,6 +2473,8 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 						}
 					}
 					appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+						ProxyID:            opsUpstreamProxyID(account),
+						ProxyName:          opsUpstreamProxyName(account),
 						Platform:           account.Platform,
 						AccountID:          account.ID,
 						AccountName:        account.Name,
@@ -2484,6 +2516,8 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 		if resp.StatusCode == http.StatusBadRequest && isGoogleProjectConfigError(strings.ToLower(upstreamMsg)) {
 			log.Printf("%s status=400 google_config_error failover=true upstream_message=%q account=%d", prefix, upstreamMsg, account.ID)
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				ProxyID:            opsUpstreamProxyID(account),
+				ProxyName:          opsUpstreamProxyName(account),
 				Platform:           account.Platform,
 				AccountID:          account.ID,
 				AccountName:        account.Name,
@@ -2498,6 +2532,8 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 
 		if s.shouldFailoverUpstreamError(resp.StatusCode) {
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				ProxyID:            opsUpstreamProxyID(account),
+				ProxyName:          opsUpstreamProxyName(account),
 				Platform:           account.Platform,
 				AccountID:          account.ID,
 				AccountName:        account.Name,
@@ -2513,6 +2549,8 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 			contentType = "application/json"
 		}
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			ProxyID:            opsUpstreamProxyID(account),
+			ProxyName:          opsUpstreamProxyName(account),
 			Platform:           account.Platform,
 			AccountID:          account.ID,
 			AccountName:        account.Name,
@@ -2571,16 +2609,20 @@ handleSuccess:
 	}
 
 	return &ForwardResult{
-		RequestID:        requestID,
-		Usage:            *usage,
-		Model:            originalModel,
-		UpstreamModel:    billingModel,
-		Stream:           stream,
-		Duration:         time.Since(startTime),
-		FirstTokenMs:     firstTokenMs,
-		ClientDisconnect: clientDisconnect,
-		ImageCount:       imageCount,
-		ImageSize:        imageSize,
+		RequestID:                     requestID,
+		UpstreamHeaders:               resp.Header,
+		Usage:                         *usage,
+		Model:                         originalModel,
+		UpstreamModel:                 billingModel,
+		UpstreamResponseModel:         observedUpstreamResponseModel(c),
+		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
+		Stream:                        stream,
+		Duration:                      time.Since(startTime),
+		FirstTokenMs:                  firstTokenMs,
+		ClientDisconnect:              clientDisconnect,
+		ImageCount:                    imageCount,
+		ImageSize:                     imageSize,
+		ImageInputSize:                imageInputSize,
 	}, nil
 }
 
@@ -3780,6 +3822,8 @@ func (s *AntigravityGatewayService) writeMappedClaudeError(c *gin.Context, accou
 	upstreamDetail := s.getUpstreamErrorDetail(body)
 	setOpsUpstreamError(c, upstreamStatus, upstreamMsg, upstreamDetail)
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		ProxyID:            opsUpstreamProxyID(account),
+		ProxyName:          opsUpstreamProxyName(account),
 		Platform:           account.Platform,
 		AccountID:          account.ID,
 		AccountName:        account.Name,
@@ -4536,7 +4580,7 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 
 	// 代理 URL
 	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
+	if account.Proxy != nil {
 		proxyURL = account.Proxy.ActiveURL()
 	}
 
@@ -4605,11 +4649,14 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 	logger.LegacyPrintf("service.antigravity_gateway", "%s status=success duration_ms=%d", prefix, duration.Milliseconds())
 
 	return &ForwardResult{
-		Model:            originalModel,
-		Stream:           claudeReq.Stream,
-		Duration:         duration,
-		FirstTokenMs:     firstTokenMs,
-		ClientDisconnect: clientDisconnect,
+		Model:                         originalModel,
+		UpstreamResponseModel:         observedUpstreamResponseModel(c),
+		UpstreamResponseModelConflict: observedUpstreamResponseModelConflict(c),
+		Stream:                        claudeReq.Stream,
+		Duration:                      duration,
+		FirstTokenMs:                  firstTokenMs,
+		ClientDisconnect:              clientDisconnect,
+		UpstreamHeaders:               resp.Header,
 		Usage: ClaudeUsage{
 			InputTokens:              usage.InputTokens,
 			OutputTokens:             usage.OutputTokens,
@@ -4841,4 +4888,17 @@ func (s *AntigravityGatewayService) extractClaudeUsage(body []byte) *ClaudeUsage
 		}
 	}
 	return usage
+}
+
+func (s *AntigravityGatewayService) extractImageInputSize(body []byte) string {
+	var req antigravity.GeminiRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		return ""
+	}
+
+	if req.GenerationConfig != nil && req.GenerationConfig.ImageConfig != nil {
+		return strings.TrimSpace(req.GenerationConfig.ImageConfig.ImageSize)
+	}
+
+	return ""
 }

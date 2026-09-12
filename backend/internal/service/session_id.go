@@ -63,3 +63,12 @@ func sanitizeSessionID(raw string) string {
 	}
 	return value
 }
+
+// ClaudeCodeSessionIDFromHeader reads the explicit header only for routing paths
+// that opt into the Claude Code session contract. Persistence remains separate.
+func ClaudeCodeSessionIDFromHeader(c *gin.Context) string {
+	if c == nil || c.Request == nil {
+		return ""
+	}
+	return sanitizeSessionID(c.GetHeader("X-Claude-Code-Session-Id"))
+}

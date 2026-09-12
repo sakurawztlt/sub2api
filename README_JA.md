@@ -100,6 +100,104 @@ Sub2API は、AI 製品のサブスクリプションから API クォータを�
 <a href="https://pateway.ai/?ch=1tsfr51">こちらのリンク</a>から登録すると、$3 のトライアルクレジットがもらえます。チャージは最大40%オフ、友達紹介で双方にボーナス付与 — 紹介報酬は最大 $150。</td>
 </tr>
 
+<tr>
+<td width="180"><a href="https://api.pptoken.cc/register?promo=SUB2API"><img src="assets/partners/logos/pptoken.png" alt="pptoken" width="150"></a></td>
+<td>PPToken.cc のご支援に感謝します！<a href="https://api.pptoken.cc/register?promo=SUB2API">PPToken.cc</a> は GPT シリーズモデルの API 中継サービスを専門としており、Codex、Claude Code、OpenAI 互換クライアント、Gemini CLI などのツール接続をサポートしています。チャージは 1:1（1元＝1ドル分のクレジット）、GPT モデルは最低 0.16 倍のレート倍率で、総合コストは公式価格の約 2.2% 、最速ファーストトークンは約1秒 — 開発者が低コスト・高速レスポンスで GPT モデル機能にアクセスするのに最適です。テクニカルサポート：24時間365日リアルな人間が対応（ボットではありません）、グループ内で @技術 すれば 10 分以内に返信。スポンサー特典：先着 200 名のユーザーが<a href="https://api.pptoken.cc/register?promo=SUB2API">専用登録リンク</a>から登録し、プロモコード `SUB2API` を入力すると、Codex / Claude Code の無料トライアルクレジットを獲得できます — 最低利用額なし、カード登録不要。
+</td>
+</tr>
+
+<tr>
+<td width="180"><a href="https://veilx.io/#/hello/SJRBRVDV"><img src="assets/partners/logos/veilx.png" alt="veilx" width="150"></a></td>
+<td>Veilx のご支援に感謝します！<a href="https://veilx.io/#/hello/SJRBRVDV">Veilx</a> CDN は超大規模 API リクエストシナリオ向けに設計されており、AI 中継サービスと AI API 呼び出しチェーンに対して深く最適化されています。高並列・高頻度リクエスト・大容量トラフィックに容易に対応し、開発者と企業により高速で安定した、低レイテンシの加速体験を提供します。OpenAI、Claude、Gemini などの AI インターフェース中継はもちろん、チャット、画像生成、Embedding、ストリーミング出力などの複雑なシナリオでも、Veilx は応答速度と接続安定性を大幅に向上させ、ネットワーク変動によるタイムアウトや失敗を効果的に削減します。さらに、Veilx は中国三大ネットワーク最適化の高速回線を提供しており、中国本土から海外 AI サービスへのアクセス速度と安定性を大幅に向上させます。グローバル AI 中継プラットフォーム、海外 AI SaaS、越境ビジネス、高並列 API システム展開に特に適しています。AI API のために生まれ、あなたの AI 中継サービスをより速く、より安定して、より安心に。<a href="https://veilx.io/#/hello/SJRBRVDV">購入リンク</a>
+</td>
+</tr>
+
+<tr>
+<td width="180"><a href="https://roxybrowser.com/invite/bgGKG7"><img src="assets/partners/logos/RoxyBrowser.png" alt="RoxyBrowser" width="150"></a></td>
+<td>RoxyBrowser のご支援に感謝します！<a href="https://roxybrowser.com/invite/bgGKG7">RoxyBrowser</a> は Sub2API の理想的なパートナーです：ネイティブ統合された Roxy AI Agent と高品質なネイティブ住宅 IP を搭載し、シンプルなコマンドで一括自動化をサポート、マルチアカウント管理のセキュリティと効率を大幅に向上させます！<a href="https://roxybrowser.com/invite/bgGKG7">このリンク</a>から登録すると、無料の住宅 IP パッケージと生涯 10% 割引を獲得できます。
+</td>
+</tr>
+
+<tr>
+<td width="180"><a href="https://www.proxy4free.com/?keyword=4yjqecpc"><img src="assets/partners/logos/proxy4free.png" alt="proxy4free" width="150"></a></td>
+<td>Proxy4Free のご支援に感謝します！Proxy4Free は開発者と AI アプリケーション向けのデータプロキシサービスプロバイダーで、住宅プロキシ、静的住宅プロキシ、ISP プロキシ、データセンタープロキシなど多様なプロキシソリューションを提供しており、Web Scraping、Browser Automation、AI Agent などのシナリオに適しています。グローバル IP リソース、安定した接続、柔軟な切り替えをサポートし、開発者のデータ収集成功率の向上と IP ブロックリスクの低減を支援します。<a href="https://www.proxy4free.com/?keyword=4yjqecpc">こちらのリンクから登録</a>して、より安定した効率的な自動化ワークフローを簡単に構築しましょう。
+</td>
+</tr>
+
+<tr>
+<td width="180"><a href="http://www.fastaitoken.com/register"><img src="assets/partners/logos/fastaitoken.jpg" alt="fastaitoken" width="150"></a></td>
+<td>🎉 FastAIToken のご支援に感謝します！<a href="http://www.fastaitoken.com/register">FastAIToken</a> は開発者向けの AI API アグリゲーションプラットフォームで、OpenAI、Claude、Gemini などの主要な大規模モデルに対応しています。チャージは 1:1（1 元 = 1 米ドル分の API クレジット）で、開発者がより低コスト・より手軽に世界トップクラスの大規模モデルサービスを利用できます。<br>
+
+🚀 プラットフォームでは多彩なチャネルを自由に選択できます：超低価格の 0.02x OpenAI 特典グループ（期間限定）、最低 0.25x の OpenAI グループ、0.7x Claude（95% 固定キャッシュ）、1.2x Claude Max チャネル。さらに、各グループの可用率・レイテンシ・稼働状況をリアルタイムで表示する公開ステータスページを提供し、透明で信頼できるサービスを実現。7×24 時間の有人テクニカルサポート（ボットではありません）により、開発者のニーズに迅速に対応します。
+</td>
+</tr>
+
+<tr>
+<td width="180"><a href="http://aimzoon.com"><img src="assets/partners/logos/aimzoon.jpg" alt="aimzoon" width="150"></a></td>
+<td>Aimzoon のご支援に感謝します！<a href="http://aimzoon.com">Aimzoon</a> は安定してコストパフォーマンスに優れた AI API 接続サービスを提供し、開発者が主要な AI サービスを Codex、Claude Code、Gemini CLI などのコーディングツールへ素早く接続できるようにします。複雑な設定は不要で、より速い接続、より安定した呼び出し、より低いコストを実現。Codex レート割引や特価レートなどのキャンペーンも随時開催中、登録するだけで無料お試しクレジットをプレゼント。AI コーディングを日常のワークフローへ。<a href="http://aimzoon.com">こちら</a>から登録してお試しください！
+</td>
+</tr>
+
+<tr>
+<td width="180"><a href="https://nagora.ai/"><img src="assets/partners/logos/nagora.png" alt="Nagora" width="150"></a></td>
+<td><a href="https://nagora.ai/">Nagora</a>は、開発者やチーム向けに設計されたマルチモデルAI APIゲートウェイです。1つのアカウントと1つのAPIキーだけで、26種類以上の主要なテキストモデルおよび画像モデルを一元的に利用できます。OpenAI、Anthropic、Geminiの各プロトコルに対応し、Claude Code、Codex、Gemini CLIなどの開発ツールにもシームレスに接続できます。 プラットフォームには、インテリジェントルーティング、自動フェイルオーバー、透明性の高い料金体系、請求の一元管理に加え、予算管理、レート制限、同時実行数の制御機能が備わっています。これにより、個人開発、チームでの共同作業、本番環境におけるAI APIの利用を、より安定的かつ柔軟に管理できます。 既存のアプリケーションを改修する必要はありません。Base URLとAPIキーを置き換えるだけで、最短1分で導入を完了できます。</td>
+</tr>
+
+<tr>
+<td width="180"><a href="https://s.qiniu.com/u6rQrq"><img src="assets/partners/logos/qiniu.jpg" alt="Qiniu AI" width="150"></a></td>
+<td>七牛云AI のご支援に感謝します！七牛云AI は、七牛云（02567.HK）傘下のエンタープライズ向け大規模モデル MaaS プラットフォームです。世界の主要モデル 150+ をワンストップで利用でき、グローバル主要モデルプロバイダーのプロトコルに対応し、テキスト、画像、音声、動画、ファイル処理などのフルモーダル処理能力をカバー。169万を超える企業・開発者ユーザーにサービスを提供しています。Sub2API ユーザー向けの限定特典として、<a href="https://s.qiniu.com/u6rQrq">こちらのリンク</a>から登録すると、企業ユーザーは 1200万 Token、開発者は 300万 Token を無料で獲得できます。</td>
+</tr>
+
+<tr>
+<td width="180"><a href="https://api.fenno.ai/s/dC4k"><img src="assets/partners/logos/fennoai.jpg" alt="FennoAI" width="150"></a></td>
+<td>FennoAI のご支援に感謝します！FennoAI は、企業の研究開発チームと開発者向けの高安定・高性能 API 中継サービスプロバイダーです。OpenAI と Anthropic のプロトコルに対応し、Codex、Claude Code、OpenCode などの主要 AI コーディングツールにシームレスに接続できます。エンタープライズ級の安定性を備え、1 日あたり千億規模の Token 呼び出しに対応。国内外法人間の企業間決済と請求書発行もサポートし、企業の研究開発・調達ニーズに応えます。Sub2API ユーザー限定特典として、<a href="https://api.fenno.ai/s/dC4k">専用リンク</a>からサブスクリプションを購入すると、わずか 1.99 ドルで 50 ドル相当の Coding Plan クレジットを獲得できます。さらに招待報酬にも対応しており、友達の購入で最大 20% の還元を獲得可能。招待が多いほど、報酬も増えます。</td>
+</tr>
+
+<tr>
+<td width="180"><a href="https://lanox.ai/?c=6"><img src="assets/partners/logos/lanox.jpg" alt="LanoX AI" width="150"></a></td>
+<td>本プロジェクトをご支援いただいている <a href="https://lanox.ai/?c=6">LanoX AI</a> に感謝します！LanoX AI は、開発者、チーム、企業向けに、安定性とコストパフォーマンスに優れたグローバルモデル接続サービスを提供しています。 🎁 新規ユーザー特典 — 数百万 Token を無料で獲得可能。さらに 500+ の無料モデルで、低コストなテスト、検証、デプロイをより簡単に 🧠 世界の主要モデル — GPT · Claude · Gemini · Qwen · Grok... 🎬 マルチモーダル制作 — Seedance 2.0 · GPT Image · Gemini Nano Banana 🛡️ エンタープライズ級の安定性 — 高可用性 💎 ネイティブ能力の出力 💎 性能劣化なし 💎 モデル混在なし 💎 利用量と課金が透明 💎 💰 より低い利用コスト — トップモデルを公式価格の 1 割から利用可能。明確なドキュメント、簡単な接続、請求書発行、企業向け一括利用に対応 🏢 企業に最適 — AI プロダクト、Agent、コンテンツプラットフォーム、大量利用する開発チームに最適</td>
+</tr>
+
+<tr>
+<td width="180"><a href="https://www.rapidproxy.io/?ref=sub2api"><img src="assets/partners/logos/rapidproxy.jpg" alt="RapidProxy" width="150"></a></td>
+<td><a href="https://www.rapidproxy.io/?ref=sub2api">RapidProxy</a> は開発者向けのデータ収集プロキシソリューションであり、安定して信頼できる住宅用プロキシサービスを提供します。9,000 万以上のグローバル住宅 IP と 200 以上の国・地域のカバー、インテリジェントなローテーション機構、精密な地域ターゲティング機能により、クローラー、AI データ学習、SEO モニタリング、EC データ分析などのプロジェクトがアクセス制限を突破し、データ収集の効率を高めます。Playwright、Selenium、Puppeteer などの主要な自動化フレームワークに対応し、料金は $0.65/GB から。<a href="https://www.rapidproxy.io/?ref=sub2api">今すぐ無料でお試しください</a>。</td>
+</tr>
+
+<tr>
+<td width="180"><a href="https://hao.ai"><img src="assets/partners/logos/haoai.png" alt="hao.ai" width="150"></a></td>
+<td><a href="https://hao.ai">hao.ai</a> は、開発者とチーム向けの高速で安定した大規模モデル統合 API ゲートウェイです。1 つの API Key と統一されたインターフェースで、GPT、Claude、xAI Grok などの主要モデルに接続でき、OpenAI や Anthropic などの一般的なプロトコルと SDK に対応しています。プラットフォームはモデルルーティング、フェイルオーバー、チーム管理、完全な呼び出しログを提供し、モデル価格は公式参考価格の 1.5 割から。よりシンプルに、より安定して、より低コストに AI アプリケーションを構築できます。</td>
+</tr>
+
+<tr>
+<td width="180"><a href="https://www.swiftproxy.net/?ref=sub2api"><img src="assets/partners/logos/swiftprox.png" alt="Swiftproxy" width="150"></a></td>
+<td>Swiftproxy は開発者向けの高性能プロキシソリューションで、安定して信頼できるレジデンシャルおよび静的レジデンシャルプロキシサービスを提供します。9,000 万以上のクリーンな住宅 IP を保有し、グローバルカバレッジ、柔軟なローテーション、精密なジオターゲティングにより、Web スクレイピング、AI オートメーション、ブラウザ自動化、SEO モニタリング、マルチアカウント管理などのプロジェクトがアクセス制限を克服し、ワークフロー効率を向上させます。HTTP(S) および SOCKS5 プロトコルに対応し、Playwright、Selenium、Puppeteer などの主要な自動化ツールと統合可能。動的プロキシトラフィックは使い切るまで期限切れなし、無料テストも利用可能 — <a href="https://www.swiftproxy.net/?ref=sub2api">今すぐ無料テストを開始</a>！</td>
+</tr>
+
+<tr>
+<td width="180"><a href="https://www.duckip.cn/?keyword=cu7oog6y"><img src="assets/partners/logos/duckip.png" alt="DuckIP" width="150"></a></td>
+<td><a href="https://www.duckip.cn/?keyword=cu7oog6y">DuckIP</a> - 195 以上の国と地域にわたる 9,000 万以上のグローバルレジデンシャルネットワークリソース。ローテーションとスティッキーセッションに対応し、パブリックデータ収集、RAG 更新、モデル評価、マルチリージョンデータワークロードに最適。🟢レジデンシャルプロキシ - 20% オフ；🟢スタティックレジデンシャルプロキシ - ¥50.00/IP から；🟢無制限レジデンシャルプロキシ - ¥19.8/時間 から。✅500M 無料トライアルを取得。</td>
+</tr>
+
+<tr>
+<td width="180"><a href="https://go.apimart.ai/gh-sub2api"><img src="assets/partners/logos/apimart.jpg" alt="APIMart" width="150"></a></td>
+<td>APIMart のご支援に感謝します！<a href="https://go.apimart.ai/gh-sub2api">APIMart</a> は AI 画像・動画生成に特化した低価格 API プラットフォームです。GPT-Image-2 は 1 枚 $0.006 から、1 ドルで 160 枚以上の画像を生成できます。画像と動画の両方に対応する非同期 API を 1 つで利用でき、タスクを送信して ID を取得し、ポーリングまたはコールバックで結果を取得できます。数万枚規模のバッチ処理でもタイムアウトせず、モデルを変更してもコードの変更は不要です。月額料金なしの従量課金制で、<a href="https://go.apimart.ai/gh-sub2api">こちらの登録リンク</a>からすぐに利用を開始できます。</td>
+</tr>
+
+<tr>
+<td width="180"><a href="https://www.axisnow.io/"><img src="assets/partners/logos/axisnow.jpg" alt="AxisNow" width="150"></a></td>
+<td>AxisNow のご支援に感謝します！<a href="https://www.axisnow.io/">AxisNow</a> はウェブサイトと API を保護・高速化し、中国本土および世界中で快適なアクセス体験を実現します。クライアント SDK により、ネイティブ／モバイルアプリにも高速化・セキュリティ機能を拡張できます — <strong>自社構築・プライベートデプロイ CDN</strong>｜<strong>サブスクリプション型高防御 CDN</strong>｜<strong>自律制御で柔軟に組み合わせられる CDN ネットワーク</strong>。</td>
+</tr>
+
+<tr>
+<td width="180"><a href="https://pp.dog/register?aff=SUB2API"><img src="assets/partners/logos/ppdog.png" alt="PP.dog" width="150"></a></td>
+<td><a href="https://pp.dog/register?aff=SUB2API">PP.dog</a> は自社運用の大規模アカウントプールを持つソースレベルの API ゲートウェイで、下流の中継ステーションや高頻度開発者向けに API ゲートウェイリレーサービスを提供し、アカウントプールの自主構築にかかるすべての手間を省きます。✅ ソース直供：自社運用の大規模アカウントプール、中間マージンなし；🧧 コスト最強：総合レート倍率わずか 0.03x、コストは公式の 0.35% のみ；🚀 超高速体験：ファーストトークンレイテンシ 1 秒未満、公式ネイティブ API に匹敵するスムーズさ。<a href="https://www.pp.dog/register?aff=SUB2API">今すぐ PP.dog に接続</a></td>
+</tr>
+
+<tr>
+<td width="180"><a href="https://colaproxy.com/?utm_source=sub2api&utm_medium=sub2api&ref=sub2api"><img src="assets/partners/logos/cola-proxy.jpg" alt="ColaProxy" width="150"></a></td>
+<td>ColaProxy は、Web スクレイピング、自動化、マルチアカウント管理向けに構築された高品質な住宅プロキシを提供します。有効期限なしのトラフィックで無料トライアルが利用でき、料金は $0.3/GB から、無制限の同時接続とインテリジェントな IP ローテーションにより、よりスムーズで安定したプロキシ体験を実現します。割引コード COLA10 で 10% オフ、信頼性の高い住宅プロキシでプロジェクトを今すぐスケールしましょう。<a href="https://colaproxy.com/?utm_source=sub2api&utm_medium=sub2api&ref=sub2api">ColaProxy を始める</a></td>
+</tr>
+
 </table>
 
 ## エコシステム

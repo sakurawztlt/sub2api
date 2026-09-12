@@ -2199,3 +2199,223 @@ func TestOpenAIWSHTTPBridge_IdleTimeoutClosesClientSession(t *testing.T) {
 	}
 	require.Len(t, upstream.bodies, 1, "an idle client must not leave a continuation request running")
 }
+
+func TestProxyOpenAIWSHTTPBridgeTurnMarksCyberPolicyForFailureShapes(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name       string
+		statusCode int
+		body       string
+		wantStatus int
+		wantInput  int
+		wantOutput int
+		wantResult bool
+		wantError  bool
+	}{
+		{
+			name:       "http_error_body",
+			statusCode: http.StatusBadRequest,
+			body:       `{"error":{"code":"cyber_policy","message":"blocked by HTTP cyber policy"}}`,
+			wantStatus: http.StatusBadRequest,
+			wantError:  true,
+		},
+		{
+			name:       "sse_error_event",
+			statusCode: http.StatusOK,
+			body:       "data: {\"type\":\"error\",\"error\":{\"code\":\"cyber_policy\",\"message\":\"blocked by error event\"},\"usage\":{\"input_tokens\":5,\"output_tokens\":1}}\n\n",
+			wantStatus: http.StatusOK,
+			wantInput:  5,
+			wantOutput: 1,
+			wantResult: true,
+			wantError:  true,
+		},
+		{
+			name:       "sse_response_failed_event",
+			statusCode: http.StatusOK,
+			body:       "data: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_cyber\",\"error\":{\"code\":\"cyber_policy\",\"message\":\"blocked by failed event\"},\"usage\":{\"input_tokens\":9,\"output_tokens\":2}}}\n\n",
+			wantStatus: http.StatusOK,
+			wantInput:  9,
+			wantOutput: 2,
+			wantResult: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: tt.statusCode,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(tt.body)),
+			}}
+			svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+			account := &Account{ID: 112, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 1}
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+			payload := []byte(`{"type":"response.create","model":"gpt-5","input":"hi"}`)
+
+			result, err := svc.proxyOpenAIWSHTTPBridgeTurn(
+				context.Background(), c, account, "sk-test", payload, len(payload),
+				"gpt-5", "", "", "", "", 1, func([]byte) error { return nil },
+			)
+
+			require.Equal(t, tt.wantResult, result != nil)
+			require.Equal(t, tt.wantError, err != nil)
+			mark := GetOpsCyberPolicy(c)
+			require.NotNil(t, mark)
+			require.Equal(t, "cyber_policy", mark.Code)
+			require.Equal(t, tt.wantStatus, mark.UpstreamStatus)
+			require.Equal(t, tt.wantInput, mark.UpstreamInTok)
+			require.Equal(t, tt.wantOutput, mark.UpstreamOutTok)
+			require.Contains(t, mark.Body, `"code":"cyber_policy"`)
+		})
+	}
+}
+
+func TestProxyOpenAIWSHTTPBridgeTurnPromotesCodexAdditionalToolsForMixedCache(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body: io.NopCloser(strings.NewReader(strings.Join([]string{
+			`data: {"type":"response.created","response":{"id":"resp_grok_codex_lite","model":"grok-4.5"}}`,
+			"",
+			`data: {"type":"response.completed","response":{"id":"resp_grok_codex_lite","model":"grok-4.5","usage":{"input_tokens":4,"output_tokens":1}}}`,
+			"",
+		}, "\n"))),
+	}}
+	svc := &OpenAIGatewayService{
+		cfg:          &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}},
+		httpUpstream: upstream,
+	}
+	account := &Account{
+		ID:          73,
+		Platform:    PlatformGrok,
+		Type:        AccountTypeOAuth,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"base_url":          xai.DefaultCLIBaseURL,
+			"subscription_tier": "free",
+		},
+	}
+	payload := []byte(`{
+		"type":"response.create","generate":true,"model":"grok","stream":true,
+		"input":[
+			{"type":"additional_tools","role":"developer","tools":[
+				{"type":"function","name":"lookup","parameters":{"type":"object"}},
+				{"type":"function","name":"web_search","parameters":{"type":"object"}},
+				{"type":"custom","name":"apply_patch"},
+				{"type":"namespace","name":"collaboration"}
+			]},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}
+		]
+	}`)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	c.Request.Header.Set(grokClientToolCacheOptInHeader, "prefer-cache")
+	var events [][]byte
+
+	result, err := svc.proxyOpenAIWSHTTPBridgeTurn(
+		context.Background(), c, account, "access-token", payload, len(payload),
+		"grok", "", "", "", "isolated-ws-cache-id", 1,
+		func(message []byte) error {
+			events = append(events, append([]byte(nil), message...))
+			return nil
+		},
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, events, 2)
+	require.False(t, gjson.GetBytes(upstream.lastBody, `input.#(type=="additional_tools")`).Exists())
+	tools := gjson.GetBytes(upstream.lastBody, "tools").Array()
+	require.Len(t, tools, 4)
+	require.Equal(t, "function", tools[0].Get("type").String())
+	require.Equal(t, "lookup", tools[0].Get("name").String())
+	require.Equal(t, "web_search", tools[1].Get("type").String())
+	require.Equal(t, "function", tools[2].Get("type").String())
+	require.Equal(t, "apply_patch", tools[2].Get("name").String())
+	require.Equal(t, "x_search", tools[3].Get("type").String())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "tool_choice").Exists())
+	require.False(t, gjson.GetBytes(upstream.lastBody, `tools.#(type=="custom")`).Exists())
+	require.False(t, gjson.GetBytes(upstream.lastBody, `tools.#(type=="namespace")`).Exists())
+	require.Equal(t, "isolated-ws-cache-id", gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
+	require.Equal(t, "isolated-ws-cache-id", upstream.lastReq.Header.Get(grokConversationIDHeader))
+	require.Empty(t, upstream.lastReq.Header.Get(grokClientToolCacheOptInHeader))
+}
+
+// 桥接转发 error / response.failed 给 WS 客户端前必须把容量降载码改写为可重试
+// 的 server_error：Codex 对 server_is_overloaded/slow_down 判致命并终止会话。
+// 账号状态判定使用改写前的原始事件，不受影响。
+func TestProxyOpenAIWSHTTPBridgeTurnRewritesCapacityShedCodeForClient(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name    string
+		turn    int
+		body    string
+		wantErr bool
+	}{
+		{
+			name:    "turn2_error_frame",
+			turn:    2,
+			body:    "data: {\"type\":\"error\",\"error\":{\"type\":\"service_unavailable_error\",\"code\":\"server_is_overloaded\",\"message\":\"Our servers are currently overloaded. Please try again later.\"}}\n\n",
+			wantErr: true,
+		},
+		{
+			// 后续 turn 不允许 replay，容量错误必须改写后交给客户端重试。
+			name: "turn2_bare_response_failed",
+			turn: 2,
+			body: "data: {\"type\":\"response.failed\",\"response\":{\"id\":\"resp_shed\",\"status\":\"failed\",\"error\":{\"code\":\"server_is_overloaded\",\"message\":\"Our servers are currently overloaded. Please try again later.\"}}}\n\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(tt.body)),
+			}}
+			svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+			account := &Account{ID: 11, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1}
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+			payload := []byte(`{"type":"response.create","model":"gpt-5","input":"hi"}`)
+			var writes [][]byte
+
+			_, err := svc.proxyOpenAIWSHTTPBridgeTurn(
+				context.Background(), c, account, "sk-test", payload, len(payload),
+				"gpt-5", "", "", "", "", tt.turn,
+				func(message []byte) error {
+					writes = append(writes, append([]byte(nil), message...))
+					return nil
+				},
+			)
+
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Len(t, writes, 1)
+			require.Contains(t, string(writes[0]), `"code":"server_error"`)
+			require.NotContains(t, string(writes[0]), "server_is_overloaded")
+			require.Contains(t, string(writes[0]), "Our servers are currently overloaded")
+		})
+	}
+}
+
+func TestResolveOpenAIWSClientFirstMessageTimeout(t *testing.T) {
+	defaultTimeout := time.Duration(config.DefaultOpenAIWSClientFirstMessageTimeoutSeconds) * time.Second
+	require.Equal(t, defaultTimeout, ResolveOpenAIWSClientFirstMessageTimeout(nil))
+
+	cfg := &config.Config{}
+	require.Equal(t, defaultTimeout, ResolveOpenAIWSClientFirstMessageTimeout(cfg))
+
+	cfg.Gateway.OpenAIWS.ClientFirstMessageTimeoutSeconds = 120
+	require.Equal(t, 120*time.Second, ResolveOpenAIWSClientFirstMessageTimeout(cfg))
+}

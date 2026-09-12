@@ -3603,3 +3603,111 @@ func TestGatewayService_ResolveGatewayGroup_DetectsFallbackCycle(t *testing.T) {
 	require.Nil(t, gotID)
 	require.Contains(t, err.Error(), "fallback group cycle")
 }
+
+func (m *mockConcurrencyService) GetAccountWaitingCount(ctx context.Context, accountID int64) (int, error) {
+	if m.accountWaitCounts == nil {
+		return 0, nil
+	}
+	return m.accountWaitCounts[accountID], nil
+}
+
+func (m *mockConcurrencyService) GetAccountsLoadBatch(ctx context.Context, accounts []AccountWithConcurrency) (map[int64]*AccountLoadInfo, error) {
+	if m.accountLoads == nil {
+		return map[int64]*AccountLoadInfo{}, nil
+	}
+	result := make(map[int64]*AccountLoadInfo)
+	for _, acc := range accounts {
+		if load, ok := m.accountLoads[acc.ID]; ok {
+			result[acc.ID] = load
+		} else {
+			result[acc.ID] = &AccountLoadInfo{
+				AccountID:          acc.ID,
+				CurrentConcurrency: 0,
+				WaitingCount:       0,
+				LoadRate:           0,
+			}
+		}
+	}
+	return result, nil
+}
+
+// Model routing used to be read only for requests resolved to Anthropic, so an
+// OpenAI group's rules were stored and displayed but never honored. Routing an
+// OpenAI request must pick the routed account instead of the group-wide winner.
+func TestGatewayService_SelectAccountForModelWithPlatform_RoutedOpenAIGroup(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(13)
+	requestedModel := "gpt-6-astra"
+
+	repo := &mockAccountRepoForPlatform{
+		accounts: []Account{
+			// Priority 1 would win any group-wide selection, but it is not routed.
+			{ID: 1, Platform: PlatformOpenAI, Priority: 1, Status: StatusActive, Schedulable: true},
+			{ID: 2, Platform: PlatformOpenAI, Priority: 5, Status: StatusActive, Schedulable: true},
+		},
+		accountsByID: map[int64]*Account{},
+	}
+	for i := range repo.accounts {
+		repo.accountsByID[repo.accounts[i].ID] = &repo.accounts[i]
+	}
+
+	groupRepo := &mockGroupRepoForGateway{
+		groups: map[int64]*Group{
+			groupID: {
+				ID:                  groupID,
+				Name:                "openai-route-group",
+				Platform:            PlatformOpenAI,
+				Status:              StatusActive,
+				Hydrated:            true,
+				ModelRoutingEnabled: true,
+				ModelRouting: map[string][]int64{
+					requestedModel: {2},
+				},
+			},
+		},
+	}
+
+	svc := &GatewayService{
+		accountRepo: repo,
+		cache:       &mockGatewayCacheForPlatform{},
+		cfg:         testConfig(),
+		groupRepo:   groupRepo,
+	}
+
+	acc, err := svc.selectAccountForModelWithPlatform(ctx, &groupID, "", requestedModel, nil, PlatformOpenAI)
+	require.NoError(t, err)
+	require.NotNil(t, acc)
+	require.Equal(t, int64(2), acc.ID, "routed account must win over the higher-priority unrouted one")
+}
+
+func TestModelRoutingAppliesToPlatform(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		targetPlatform string
+		groupPlatform  string
+		want           bool
+	}{
+		{"anthropic group", PlatformAnthropic, PlatformAnthropic, true},
+		{"openai group", PlatformOpenAI, PlatformOpenAI, true},
+		{"composite group resolved to anthropic", PlatformAnthropic, PlatformComposite, true},
+		{"composite group resolved to openai", PlatformOpenAI, PlatformComposite, true},
+		{"target platform outside the allowed set", PlatformGemini, PlatformGemini, false},
+		{"composite group resolved outside the allowed set", PlatformGemini, PlatformComposite, false},
+		{"group platform does not match target", PlatformOpenAI, PlatformAnthropic, false},
+		{"empty target platform", "", PlatformOpenAI, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, modelRoutingAppliesToPlatform(tc.targetPlatform, tc.groupPlatform))
+		})
+	}
+}
+
+// mockConcurrencyService for testing
+type mockConcurrencyService struct {
+	accountLoads      map[int64]*AccountLoadInfo
+	accountWaitCounts map[int64]int
+	acquireResults    map[int64]bool
+}
+
+// Verify interface implementation
+var _ AccountRepository = (*mockAccountRepoForPlatform)(nil)

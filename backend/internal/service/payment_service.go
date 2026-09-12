@@ -184,18 +184,19 @@ type TopUsersByCurrency map[string][]TopUserStat
 // --- Service ---
 
 type PaymentService struct {
-	providerMu       sync.Mutex
-	providersLoaded  bool
-	entClient        *dbent.Client
-	registry         *payment.Registry
-	loadBalancer     payment.LoadBalancer
-	redeemService    *RedeemService
-	subscriptionSvc  *SubscriptionService
-	configService    *PaymentConfigService
-	userRepo         UserRepository
-	groupRepo        GroupRepository
-	resumeService    *PaymentResumeService
-	affiliateService *AffiliateService
+	notificationEmailService *NotificationEmailService
+	providerMu               sync.Mutex
+	providersLoaded          bool
+	entClient                *dbent.Client
+	registry                 *payment.Registry
+	loadBalancer             payment.LoadBalancer
+	redeemService            *RedeemService
+	subscriptionSvc          *SubscriptionService
+	configService            *PaymentConfigService
+	userRepo                 UserRepository
+	groupRepo                GroupRepository
+	resumeService            *PaymentResumeService
+	affiliateService         *AffiliateService
 }
 
 func NewPaymentService(entClient *dbent.Client, registry *payment.Registry, loadBalancer payment.LoadBalancer, redeemService *RedeemService, subscriptionSvc *SubscriptionService, configService *PaymentConfigService, userRepo UserRepository, groupRepo GroupRepository, affiliateService *AffiliateService) *PaymentService {
@@ -376,4 +377,8 @@ func applyPagination(pageSize, page int) (size, pg int) {
 		pg = 1
 	}
 	return size, pg
+}
+
+func (s *PaymentService) SetNotificationEmailService(notificationEmailService *NotificationEmailService) {
+	s.notificationEmailService = notificationEmailService
 }

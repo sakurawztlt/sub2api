@@ -3,6 +3,8 @@ package openai
 import (
 	"regexp"
 	"strings"
+
+	"golang.org/x/net/http/httpguts"
 )
 
 // CodexCLIUserAgentPrefixes matches Codex CLI User-Agent patterns
@@ -187,6 +189,10 @@ func matchCodexClientHeaderStrictPrefixes(value string, prefixes []string) bool 
 // PairCodexClientIdentity derives a matching originator from the final outbound
 // User-Agent. ChatGPT's Codex endpoint rejects mismatched identity pairs.
 func PairCodexClientIdentity(userAgent string) (originator string, pairedUA string, ok bool) {
+	// Validate before trimming so control bytes cannot become a valid identity.
+	if !validCodexUserAgentValue(userAgent) {
+		return "", "", false
+	}
 	ua := strings.TrimSpace(userAgent)
 	slash := strings.IndexByte(ua, '/')
 	if slash <= 0 {
@@ -204,6 +210,16 @@ func PairCodexClientIdentity(userAgent string) (originator string, pairedUA stri
 	return "", "", false
 }
 
+func validCodexUserAgentValue(value string) bool {
+	if !httpguts.ValidHeaderFieldValue(value) {
+		return false
+	}
+	// httpguts follows the legacy field-value grammar and permits obs-fold.
+	// User-Agent is not an obs-folded header; reject CR/LF before forwarding.
+	return !strings.ContainsAny(value, "\r\n")
+}
+
+// codexOriginatorMaxLen 官方 clientInfo.name 均为短 ASCII 标识，远低于此上限。
 const codexOriginatorMaxLen = 64
 
 func isSaneCodexOriginator(name string) bool {
@@ -328,3 +344,6 @@ func ParseCodexEngineVersion(ua string) (string, bool) {
 	}
 	return m, true
 }
+
+// CodexDefaultOriginator follows the captured relay CLI profile.
+const CodexDefaultOriginator = CodexCLIOriginator

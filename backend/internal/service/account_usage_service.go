@@ -300,6 +300,8 @@ type AccountUsageService struct {
 	cache                   *UsageCache
 	identityCache           IdentityCache
 	tlsFPProfileService     *TLSFingerprintProfileService
+	agentIdentityTaskMu     sync.Mutex
+	agentIdentityWS         agentIdentityWSConnectionInvalidator
 }
 
 // NewAccountUsageService 创建AccountUsageService实例

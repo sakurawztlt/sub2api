@@ -23,8 +23,26 @@ func TestGetOpsAdvancedSettings_DefaultHidesOpenAITokenStats(t *testing.T) {
 	if !cfg.DisplayAlertEvents {
 		t.Fatalf("DisplayAlertEvents = false, want true by default")
 	}
-	if repo.setCalls != 1 {
-		t.Fatalf("expected defaults to be persisted once, got %d", repo.setCalls)
+	if !cfg.DataRetention.CleanupEnabled {
+		t.Fatal("data cleanup should be enabled by default")
+	}
+	if repo.getValueCalls != 0 || repo.getMultipleCalls != 0 {
+		t.Fatalf("hot-path snapshot read touched repository: get=%d get_multiple=%d", repo.getValueCalls, repo.getMultipleCalls)
+	}
+}
+
+func TestGetOpsAdvancedSettings_DefaultCleanupFollowsDeploymentConfig(t *testing.T) {
+	svc := &OpsService{cfg: &config.Config{Ops: config.OpsConfig{
+		Cleanup: config.OpsCleanupConfig{Enabled: false},
+	}}}
+	svc.initRuntimeSettings(context.Background())
+
+	cfg, err := svc.GetOpsAdvancedSettings(context.Background())
+	if err != nil {
+		t.Fatalf("GetOpsAdvancedSettings() error = %v", err)
+	}
+	if cfg.DataRetention.CleanupEnabled {
+		t.Fatal("data cleanup should follow the disabled deployment baseline")
 	}
 }
 

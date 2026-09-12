@@ -30,6 +30,7 @@ const messages: Record<string, string> = {
   'usage.perMillionTokens': '/ 1M tokens',
   'usage.serviceTier': 'Service tier',
   'usage.serviceTierPriority': 'Fast',
+  'usage.serviceTierUltrafast': 'Ultrafast',
   'usage.serviceTierFlex': 'Flex',
   'usage.serviceTierStandard': 'Standard',
   'usage.rate': 'Rate',
@@ -37,15 +38,39 @@ const messages: Record<string, string> = {
   'usage.original': 'Original',
   'usage.userBilled': 'User billed',
   'usage.accountBilled': 'Account billed',
-  'usage.requestedModel': 'Requested',
-  'usage.sentUpstreamModel': 'Sent upstream',
-  'usage.upstreamResponseModel': 'Upstream response',
-  'usage.modelVariant': 'Possible version variant',
-  'usage.modelMismatch': 'Different model',
-  'admin.usage.requestIdCopied': 'Request ID copied',
-  'keys.copied': 'Copied',
-  'keys.copyToClipboard': 'Copy to clipboard',
-  'common.copyFailed': 'Copy failed',
+  'usage.imageUnit': ' images',
+  'usage.imageCount': 'Image count',
+  'usage.imageBillingSize': 'Billing size',
+  'usage.imageInputSize': 'Input size',
+  'usage.imageOutputSize': 'Output size',
+  'usage.imageSizeSource': 'Size source',
+  'usage.imageSizeBreakdown': 'Size breakdown',
+  'usage.imageSizeSourceOutput': 'Upstream output',
+  'usage.imageSizeSourceInput': 'Request input',
+  'usage.imageSizeSourceDefault': 'Default billing tier',
+  'usage.imageSizeSourceLegacy': 'Legacy record',
+  'usage.imageSizeSourceMissing': 'Not recorded',
+  'usage.imageSizeNotRecorded': 'not recorded',
+  'usage.imageSizeLegacyUnstandardized': 'legacy unstandardized',
+  'usage.imageSizeUnknown': 'unknown',
+  'usage.imageUnitPrice': 'Per-image price',
+  'usage.imageTotalPrice': 'Image total price',
+  'usage.stream': 'Stream',
+  'usage.sync': 'Sync',
+  'usage.nativeCompactionV2': 'Compaction',
+  'admin.usage.billingModeToken': 'Token',
+  'admin.usage.billingModePerRequest': 'Per request',
+  'admin.usage.billingModeImage': 'Image',
+	'admin.usage.requestIdCopied': 'Request ID copied',
+	'admin.usage.upstreamRequestIdCopied': 'Upstream ID copied',
+	'keys.copied': 'Copied',
+	'keys.copyToClipboard': 'Copy to clipboard',
+	'common.copyFailed': 'Copy failed',
+	'usage.requestedModel': 'Requested',
+	'usage.sentUpstreamModel': 'Sent upstream',
+	'usage.upstreamResponseModel': 'Upstream response',
+	'usage.modelVariant': 'Possible version variant',
+	'usage.modelMismatch': 'Different model',
 }
 
 vi.mock('vue-i18n', async () => {
@@ -66,9 +91,38 @@ const DataTableStub = {
         <slot name="cell-model" :row="row" :value="row.model" />
         <slot name="cell-cost" :row="row" />
         <slot name="cell-request_id" :row="row" />
+        <slot name="cell-upstream_request_id" :row="row" />
       </div>
     </div>
   `,
+}
+
+const baseImageRow = {
+  request_id: 'req-admin-image',
+  model: 'gpt-image-2',
+  actual_cost: 0.4,
+  total_cost: 0.4,
+  account_rate_multiplier: 1,
+  rate_multiplier: 1,
+  service_tier: null,
+  input_cost: 0,
+  output_cost: 0,
+  cache_creation_cost: 0,
+  cache_read_cost: 0,
+  input_tokens: 0,
+  output_tokens: 0,
+  cache_creation_tokens: 0,
+  cache_read_tokens: 0,
+  cache_creation_5m_tokens: 0,
+  cache_creation_1h_tokens: 0,
+  cache_ttl_overridden: false,
+  billing_mode: 'image',
+  image_count: 2,
+  image_size: '2K',
+  image_input_size: null,
+  image_output_size: null,
+  image_size_source: null,
+  image_size_breakdown: null,
 }
 
 describe('admin UsageTable tooltip', () => {
@@ -133,6 +187,53 @@ describe('admin UsageTable tooltip', () => {
     expect(text).toContain('$5.0000 / 1M tokens')
     expect(text).toContain('$30.0000 / 1M tokens')
     expect(text).toContain('$0.069568')
+  })
+
+  it.each(['token', 'image', 'per_request'])('keeps eight decimal places in %s cost details', async (billingMode) => {
+    const row = {
+      ...baseImageRow,
+      billing_mode: billingMode,
+      image_count: billingMode === 'image' ? 2 : 0,
+      input_cost: 0.00000001,
+      image_input_cost: 0.00000002,
+      output_cost: 0.00000003,
+      image_output_cost: 0.00000004,
+      cache_creation_cost: 0.00000005,
+      cache_read_cost: 0.00000006,
+      total_cost: 0.00000022,
+      actual_cost: 0.00000042,
+      account_stats_cost: 0.00000012,
+      account_rate_multiplier: 1.5,
+    }
+    const wrapper = mount(UsageTable, {
+      props: { data: [row], loading: false, columns: [] },
+      global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } },
+    })
+    const triggers = wrapper.findAll('.group.relative')
+    await triggers[triggers.length - 1].trigger('mouseenter')
+    const amounts = wrapper.get('.fixed').findAll('span').map(span => span.text())
+    expect(amounts).toEqual(expect.arrayContaining([
+      '$0.00000001', '$0.00000002', '$0.00000003', '$0.00000004',
+      '$0.00000005', '$0.00000006', '$0.00000022', '$0.00000042', '$0.00000018',
+    ]))
+    if (billingMode === 'image') expect(amounts).toContain('$0.00000011')
+    wrapper.unmount()
+  })
+
+  it('uses eight decimal places for missing cost values', async () => {
+    const wrapper = mount(UsageTable, {
+      props: {
+        data: [{ ...baseImageRow, billing_mode: 'per_request', image_count: 0, total_cost: undefined, actual_cost: undefined }],
+        loading: false,
+        columns: [],
+      },
+      global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } },
+    })
+    const triggers = wrapper.findAll('.group.relative')
+    await triggers[triggers.length - 1].trigger('mouseenter')
+    const amounts = wrapper.get('.fixed').findAll('span').map(span => span.text()).filter(text => text.startsWith('$'))
+    expect(amounts).toEqual(['$0.00000000', '$0.00000000', '$0.00000000', '$0.00000000'])
+    wrapper.unmount()
   })
 
   it('shows requested and upstream models separately for admin rows', () => {
@@ -247,6 +348,35 @@ describe('admin UsageTable request ID column', () => {
 
     expect(writeText).toHaveBeenCalledWith('req-admin-visible-id')
     expect(appStoreMocks.showSuccess).toHaveBeenCalledWith('Request ID copied')
+  })
+
+  it('renders and copies the upstream ID', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+
+    const wrapper = mount(UsageTable, {
+      props: {
+        data: [{ ...baseImageRow, request_id: '', upstream_request_id: '20260903082826779695' }],
+        loading: false,
+        columns: [{ key: 'upstream_request_id', label: 'Upstream ID' }],
+      },
+      global: {
+        stubs: {
+          DataTable: DataTableStub,
+          EmptyState: true,
+          Icon: true,
+          Teleport: true,
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('20260903082826779695')
+    const copyButtons = wrapper.findAll('button[title="Copy to clipboard"]')
+    expect(copyButtons).toHaveLength(1)
+    await copyButtons[0].trigger('click')
+
+    expect(writeText).toHaveBeenCalledWith('20260903082826779695')
+    expect(appStoreMocks.showSuccess).toHaveBeenCalledWith('Upstream ID copied')
   })
 })
 

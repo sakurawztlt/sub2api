@@ -101,7 +101,7 @@ func TestWSResponseCreate_ForcePriorityRewritesKnownTier(t *testing.T) {
 	svc := newOpenAIGatewayServiceWithSettings(t, settings)
 	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
 
-	for _, tier := range []string{"flex", "auto", "default", "scale", "fast", "priority"} {
+	for _, tier := range []string{"flex", "auto", "default", "scale", "fast", "priority", "ultrafast"} {
 		frame := []byte(`{"type":"response.create","model":"gpt-5.5","service_tier":"` + tier + `"}`)
 		updated, blocked, err := svc.applyOpenAIFastPolicyToWSResponseCreate(context.Background(), account, "gpt-5.5", frame)
 		require.NoError(t, err)
@@ -345,23 +345,6 @@ func TestPolicyEnforcingFrameConn_FollowupFrameWithoutModelUsesCapturedModel(t *
 	require.NotContains(t, string(payload), `"service_tier"`,
 		"D5 regression: empty model on follow-up frame must fall back to capturedSessionModel; whitelist policy filters service_tier=priority for gpt-5.5")
 	require.Equal(t, "response.create", gjson.GetBytes(payload, "type").String())
-}
-
-func TestOpenAIWSPassthroughPolicyModelAppliesAccountMapping(t *testing.T) {
-	account := &Account{
-		Platform: PlatformOpenAI,
-		Type:     AccountTypeOAuth,
-		Credentials: map[string]any{
-			"model_mapping": map[string]any{"public-model": "private-model"},
-		},
-		Extra: map[string]any{"openai_passthrough": true},
-	}
-
-	responseCreate := []byte(`{"type":"response.create","model":"public-model"}`)
-	require.Equal(t, "private-model", openAIWSPassthroughPolicyModelForFrame(account, responseCreate))
-
-	sessionUpdate := []byte(`{"type":"session.update","session":{"model":"public-model"}}`)
-	require.Equal(t, "private-model", openAIWSPassthroughPolicyModelFromSessionFrame(account, sessionUpdate))
 }
 
 // TestPolicyEnforcingFrameConn_WithoutCapturedFallbackPolicyMisses pins the
@@ -1196,4 +1179,145 @@ func TestPassthroughBilling_BlockedFrameDoesNotMutateServiceTier(t *testing.T) {
 	require.NotNil(t, tier, "blocked frame must not clobber prior billing tier to nil")
 	require.Equal(t, "flex", *tier,
 		"blocked frame is never sent upstream; billing must retain the previous turn's tier")
+}
+
+// TestForwardAsAnthropicMessages_BetaFastModePassesExplicitOpenAIFastPolicy
+// verifies the Anthropic-compat entrypoint chain: anthropic-beta: fast-mode →
+// BetaFastMode detection → ServiceTier="priority" injection
+// (openai_gateway_messages.go:60) → explicit OpenAI fast policy pass. We
+// exercise the same internal pipeline (Anthropic→Responses + BetaFastMode +
+// policy) without spinning up a real upstream HTTP server.
+func TestForwardAsAnthropicMessages_BetaFastModePassesExplicitOpenAIFastPolicy(t *testing.T) {
+	svc := newOpenAIGatewayServiceWithSettings(t, &OpenAIFastPolicySettings{})
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+
+	// Step 1: parse Anthropic request (mirrors openai_gateway_messages.go:38-50).
+	anthropicBody := []byte(`{"model":"gpt-5.5","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`)
+	var anthropicReq apicompat.AnthropicRequest
+	require.NoError(t, json.Unmarshal(anthropicBody, &anthropicReq))
+	responsesReq, err := apicompat.AnthropicToResponses(&anthropicReq)
+	require.NoError(t, err)
+
+	// Step 2: BetaFastMode header → service_tier="priority" (mirrors line 58-61).
+	headers := http.Header{}
+	headers.Set("anthropic-beta", claude.BetaFastMode)
+	require.True(t, containsBetaToken(headers.Get("anthropic-beta"), claude.BetaFastMode))
+	responsesReq.ServiceTier = "priority"
+	responsesReq.Model = "gpt-5.5"
+
+	// Step 3: marshal & apply fast policy (mirrors line 78 + 149).
+	responsesBody, err := json.Marshal(responsesReq)
+	require.NoError(t, err)
+	require.Equal(t, "priority", gjson.GetBytes(responsesBody, "service_tier").String(), "前置：beta 翻译应当注入 priority")
+
+	upstreamBody, policyErr := svc.applyOpenAIFastPolicyToBody(context.Background(), account, "gpt-5.5", responsesBody)
+	require.NoError(t, policyErr)
+
+	// Step 4: explicit pass policy must preserve the explicit fast/priority request.
+	require.Equal(t, "priority", gjson.GetBytes(upstreamBody, "service_tier").String(),
+		"explicit pass policy should pass service_tier=priority through to upstream")
+}
+
+func TestOpenAIWSPassthroughPolicyModelDoesNotApplyAccountMapping(t *testing.T) {
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{"public-model": "private-model"},
+		},
+		Extra: map[string]any{"openai_passthrough": true},
+	}
+
+	responseCreate := []byte(`{"type":"response.create","model":"public-model"}`)
+	require.Equal(t, "public-model", openAIWSPassthroughPolicyModelForFrame(account, responseCreate))
+
+	sessionUpdate := []byte(`{"type":"session.update","session":{"model":"public-model"}}`)
+	require.Equal(t, "public-model", openAIWSPassthroughPolicyModelFromSessionFrame(account, sessionUpdate))
+}
+
+func TestWSResponseCreate_ExplicitPassPreservesPriorityAndNormalizesFast(t *testing.T) {
+	svc := newOpenAIGatewayServiceWithSettings(t, &OpenAIFastPolicySettings{})
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+
+	frame := []byte(`{"type":"response.create","model":"gpt-5.5","service_tier":"priority","input":[{"type":"input_text","text":"hi"}]}`)
+	updated, blocked, err := svc.applyOpenAIFastPolicyToWSResponseCreate(context.Background(), account, "gpt-5.5", frame)
+	require.NoError(t, err)
+	require.Nil(t, blocked)
+	require.Equal(t, "priority", gjson.GetBytes(updated, "service_tier").String(), "explicit pass policy should preserve priority tier")
+	// Other fields preserved.
+	require.Equal(t, "response.create", gjson.GetBytes(updated, "type").String())
+	require.Equal(t, "gpt-5.5", gjson.GetBytes(updated, "model").String())
+	require.Equal(t, "hi", gjson.GetBytes(updated, "input.0.text").String())
+
+	frame = []byte(`{"type":"response.create","model":"gpt-5.5","service_tier":"fast"}`)
+	updated, blocked, err = svc.applyOpenAIFastPolicyToWSResponseCreate(context.Background(), account, "gpt-5.5", frame)
+	require.NoError(t, err)
+	require.Nil(t, blocked)
+	require.Equal(t, "priority", gjson.GetBytes(updated, "service_tier").String(), "fast alias should normalize before reaching upstream")
+
+	// Mixed-case + whitespace variant should also normalize.
+	frame = []byte(`{"type":"response.create","model":"gpt-5.5","service_tier":"  Fast  "}`)
+	updated, blocked, err = svc.applyOpenAIFastPolicyToWSResponseCreate(context.Background(), account, "gpt-5.5", frame)
+	require.NoError(t, err)
+	require.Nil(t, blocked)
+	require.Equal(t, "priority", gjson.GetBytes(updated, "service_tier").String())
+}
+
+func TestWSResponseCreate_ExplicitFilterStripsServiceTier(t *testing.T) {
+	svc := newOpenAIGatewayServiceWithSettings(t, openAIFastFilterPriorityPolicy())
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+
+	frame := []byte(`{"type":"response.create","model":"gpt-5.5","service_tier":"priority","input":[{"type":"input_text","text":"hi"}]}`)
+	updated, blocked, err := svc.applyOpenAIFastPolicyToWSResponseCreate(context.Background(), account, "gpt-5.5", frame)
+	require.NoError(t, err)
+	require.Nil(t, blocked)
+	require.NotContains(t, string(updated), `"service_tier"`, "filter action should strip service_tier")
+
+	frame = []byte(`{"type":"response.create","model":"gpt-5.5","service_tier":"fast"}`)
+	updated, blocked, err = svc.applyOpenAIFastPolicyToWSResponseCreate(context.Background(), account, "gpt-5.5", frame)
+	require.NoError(t, err)
+	require.Nil(t, blocked)
+	require.NotContains(t, string(updated), `"service_tier"`)
+}
+
+func TestWSResponseCreate_ExplicitFlexPassThrough(t *testing.T) {
+	svc := newOpenAIGatewayServiceWithSettings(t, &OpenAIFastPolicySettings{})
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+
+	// Explicit pass policy has no rules; flex is left untouched.
+	frame := []byte(`{"type":"response.create","model":"gpt-5.5","service_tier":"flex"}`)
+	updated, blocked, err := svc.applyOpenAIFastPolicyToWSResponseCreate(context.Background(), account, "gpt-5.5", frame)
+	require.NoError(t, err)
+	require.Nil(t, blocked)
+	require.Equal(t, "flex", gjson.GetBytes(updated, "service_tier").String(), "flex frames must reach upstream untouched under explicit pass policy")
+}
+
+func TestWSResponseCreate_GroupForceDoesNotTouchOtherFrames(t *testing.T) {
+	svc := newOpenAIGatewayServiceWithSettings(t, DefaultOpenAIFastPolicySettings())
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	ctx := context.WithValue(context.Background(), ctxkey.Group, &Group{
+		ID: 7, Platform: PlatformOpenAI, Status: StatusActive, Hydrated: true, ForceOpenAIFast: true,
+	})
+	frame := []byte(`{"type":"response.cancel","model":"gpt-5.6-sol"}`)
+
+	updated, blocked, err := svc.applyOpenAIFastPolicyToWSResponseCreate(ctx, account, "gpt-5.6-sol", frame)
+	require.NoError(t, err)
+	require.Nil(t, blocked)
+	require.Equal(t, string(frame), string(updated))
+}
+
+func TestWSResponseCreate_GroupForceInjectsMissingTier(t *testing.T) {
+	// The relay defaults to filtering tiers. Explicit admin pass rules allow
+	// the group priority request; a global filter still overrides it.
+	svc := newOpenAIGatewayServiceWithSettings(t, &OpenAIFastPolicySettings{})
+	account := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	ctx := context.WithValue(context.Background(), ctxkey.Group, &Group{
+		ID: 7, Platform: PlatformOpenAI, Status: StatusActive, Hydrated: true, ForceOpenAIFast: true,
+	})
+	frame := []byte(`{"type":"response.create","model":"gpt-5.6-sol","input":[]}`)
+
+	updated, blocked, err := svc.applyOpenAIFastPolicyToWSResponseCreate(ctx, account, "gpt-5.6-sol", frame)
+	require.NoError(t, err)
+	require.Nil(t, blocked)
+	require.Equal(t, OpenAIFastTierPriority, gjson.GetBytes(updated, "service_tier").String())
 }

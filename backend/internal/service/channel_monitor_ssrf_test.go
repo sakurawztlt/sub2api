@@ -8,7 +8,7 @@ import (
 )
 
 // TestValidateEndpoint_AllowPrivateToggle 验证 monitorAllowPrivateEndpoints 双向生效：
-// 关闭时私网 endpoint 被拒；开启时放行，但 https / origin-only 校验不受影响。
+// 关闭时私网 endpoint 被拒；开启时放行，但 https / query-fragment 校验不受影响。
 func TestValidateEndpoint_AllowPrivateToggle(t *testing.T) {
 	// 用例结束复位为默认 false，避免污染其它用例（包级状态）。
 	t.Cleanup(func() { monitorAllowPrivateEndpoints.Store(false) })
@@ -32,8 +32,11 @@ func TestValidateEndpoint_AllowPrivateToggle(t *testing.T) {
 		t.Fatalf("allow_private=true: http 期望 ErrChannelMonitorEndpointScheme, got %v", err)
 	}
 
-	// 开启时仍要求 origin-only：带 path 的地址按 path 错误拒绝。
-	if err := validateEndpoint("https://10.0.0.1/v1"); !errors.Is(err, ErrChannelMonitorEndpointPath) {
-		t.Fatalf("allow_private=true: 带 path 期望 ErrChannelMonitorEndpointPath, got %v", err)
+	// 路径前缀可用，但开启私网访问仍不允许 query/fragment。
+	if err := validateEndpoint("https://10.0.0.1/v1"); err != nil {
+		t.Fatalf("allow_private=true: path prefix should remain supported: %v", err)
+	}
+	if err := validateEndpoint("https://10.0.0.1/v1?key=secret"); !errors.Is(err, ErrChannelMonitorEndpointPath) {
+		t.Fatalf("allow_private=true: 带 query 期望 ErrChannelMonitorEndpointPath, got %v", err)
 	}
 }

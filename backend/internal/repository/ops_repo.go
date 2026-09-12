@@ -934,13 +934,6 @@ func nullTime(t time.Time) sql.NullTime {
 	return sql.NullTime{Time: t, Valid: true}
 }
 
-func nullBool(v *bool) sql.NullBool {
-	if v == nil {
-		return sql.NullBool{}
-	}
-	return sql.NullBool{Bool: *v, Valid: true}
-}
-
 func (r *opsRepository) ListRetryAttemptsByErrorID(ctx context.Context, sourceErrorID int64, limit int) ([]*service.OpsRetryAttempt, error) {
 	if r == nil || r.db == nil {
 		return nil, fmt.Errorf("nil ops repository")

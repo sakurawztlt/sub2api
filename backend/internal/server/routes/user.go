@@ -13,6 +13,7 @@ func RegisterUserRoutes(
 	v1 *gin.RouterGroup,
 	h *handler.Handlers,
 	jwtAuth middleware.JWTAuthMiddleware,
+	auditLog middleware.AuditLogMiddleware,
 	settingService *service.SettingService,
 	panelRateLimiter *middleware.PanelRateLimiter,
 ) {
@@ -21,6 +22,7 @@ func RegisterUserRoutes(
 	authenticated.Use(middleware.BackendModeUserGuard(settingService))
 	// 面板全局按用户限流：防止单个账号高频刷接口打爆数据库
 	authenticated.Use(panelRateLimiter.Global())
+	authenticated.Use(gin.HandlerFunc(auditLog))
 	{
 		// 用户接口
 		user := authenticated.Group("/user")
@@ -56,6 +58,15 @@ func RegisterUserRoutes(
 				totp.POST("/enable", h.Totp.Enable)
 				totp.POST("/disable", h.Totp.Disable)
 				totp.POST("/step-up", h.Totp.StepUp)
+			}
+
+			passkeys := user.Group("/passkeys")
+			{
+				passkeys.GET("", h.Passkey.List)
+				passkeys.POST("/register/begin", h.Passkey.BeginRegistration)
+				passkeys.POST("/register/finish", h.Passkey.FinishRegistration)
+				passkeys.PATCH("/:id", h.Passkey.Rename)
+				passkeys.DELETE("/:id", h.Passkey.Delete)
 			}
 		}
 

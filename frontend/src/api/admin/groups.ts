@@ -86,21 +86,28 @@ export async function getByPlatform(platform: GroupPlatform): Promise<AdminGroup
  * @param id - Group ID
  * @returns Group details
  */
+export interface LiveCapability { supported: boolean; reason?: string }
+
+export async function getLiveCapability(): Promise<LiveCapability> {
+  const { data } = await apiClient.get<LiveCapability>('/admin/groups/live-capability')
+  return data
+}
+
 export async function getById(id: number): Promise<AdminGroup> {
   const { data } = await apiClient.get<AdminGroup>(`/admin/groups/${id}`)
   return data
 }
 
 /**
- * Get candidate models for custom /v1/models list.
+ * Get candidate models for the group model allowlist.
  * id=0 returns platform default models for create flow.
  */
-export async function getModelsListCandidates(
+export async function getModelAllowlistCandidates(
   id: number,
   platform?: GroupPlatform
 ): Promise<string[]> {
   const { data } = await apiClient.get<{ models: string[] }>(
-    `/admin/groups/${id}/models-list-candidates`,
+    `/admin/groups/${id}/model-allowlist-candidates`,
     {
       params: platform ? { platform } : undefined
     }
@@ -498,8 +505,9 @@ export const groupsAPI = {
   getAll,
   getByPlatform,
   getAllIncludingInactive,
+  getLiveCapability,
   getById,
-  getModelsListCandidates,
+  getModelAllowlistCandidates,
   create,
   duplicate,
   update,

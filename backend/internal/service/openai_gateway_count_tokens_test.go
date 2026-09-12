@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -305,9 +307,13 @@ func TestEstimateOpenAIInputTokens_CompareWithOpenAIAPI(t *testing.T) {
 
 			actual, err := callOpenAIInputTokensAPIForTest(client, apiKey, prepared.Request)
 			if err != nil {
-				// Live-API comparison only; invalid/expired local keys should skip, not fail CI.
-				if strings.Contains(err.Error(), "status=401") || strings.Contains(err.Error(), "invalid_api_key") {
-					t.Skipf("OPENAI_API_KEY rejected by OpenAI: %v", err)
+				// This is an optional live-API comparison. Credential and transient
+				// network failures must not make the deterministic unit suite fail.
+				var netErr net.Error
+				if strings.Contains(err.Error(), "status=401") ||
+					strings.Contains(err.Error(), "invalid_api_key") ||
+					errors.As(err, &netErr) {
+					t.Skipf("OpenAI live comparison unavailable: %v", err)
 				}
 				require.NoError(t, err)
 			}
@@ -361,4 +367,49 @@ func maxLocalInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func TestEstimateGrokCountTokens_AnthropicRequests(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "simple message",
+			body: `{"model":"grok-4","messages":[{"role":"user","content":"hello world"}]}`,
+		},
+		{
+			name: "system blocks and tools",
+			body: `{
+				"model":"grok-4",
+				"system":[{"type":"text","text":"You are helpful."}],
+				"messages":[{"role":"user","content":[{"type":"text","text":"look up the weather"}]}],
+				"tools":[{"name":"lookup_weather","description":"Look up weather","input_schema":{"type":"object","properties":{"city":{"type":"string"}}}}],
+				"tool_choice":{"type":"auto"}
+			}`,
+		},
+		{
+			name: "empty conversation uses positive minimum",
+			body: `{"model":"grok-4","messages":[]}`,
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := EstimateGrokCountTokens([]byte(tt.body))
+			require.NoError(t, err)
+			require.Positive(t, got)
+		})
+	}
+}
+
+func TestEstimateGrokCountTokens_RejectsInvalidRequests(t *testing.T) {
+	for _, body := range []string{
+		`{`,
+		`{"messages":[{"role":"user","content":"hello"}]}`,
+		`{"model":"grok-4","messages":[{"role":"user","content":{"unexpected":true}}]}`,
+	} {
+		_, err := EstimateGrokCountTokens([]byte(body))
+		require.Error(t, err, "body=%s", body)
+	}
 }

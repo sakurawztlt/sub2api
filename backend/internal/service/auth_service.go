@@ -57,6 +57,8 @@ const refreshTokenPrefix = "rt_"
 
 // JWTClaims JWT载荷数据
 type JWTClaims struct {
+	SessionID    string `json:"sid,omitempty"`
+	BindingHash  string `json:"bnd,omitempty"`
 	UserID       int64  `json:"user_id"`
 	Email        string `json:"email"`
 	Role         string `json:"role"`
@@ -66,6 +68,8 @@ type JWTClaims struct {
 
 // AuthService 认证服务
 type AuthService struct {
+	aliyunCaptchaService  *AliyunCaptchaService
+	tencentCaptchaService *TencentCaptchaService
 	entClient             *dbent.Client
 	userRepo              UserRepository
 	redeemRepo            RedeemCodeRepository
@@ -269,7 +273,7 @@ func (s *AuthService) RegisterWithVerification(ctx context.Context, email, passw
 	}
 
 	// 生成token
-	token, err := s.GenerateToken(user)
+	token, err := s.GenerateTokenWithContext(ctx, user)
 	if err != nil {
 		return "", nil, fmt.Errorf("generate token: %w", err)
 	}
@@ -371,47 +375,14 @@ func (s *AuthService) SendVerifyCodeAsync(ctx context.Context, email string) (*S
 	}, nil
 }
 
-// VerifyTurnstileForRegister 在注册场景下验证 Turnstile。
-// 当邮箱验证开启且已提交验证码时，说明验证码发送阶段已完成 Turnstile 校验，
-// 此处跳过二次校验，避免一次性 token 在注册提交时重复使用导致误报失败。
+// VerifyTurnstileForRegister 保留旧内部接口，生产 handler 使用 VerifyCaptchaForRegister。
 func (s *AuthService) VerifyTurnstileForRegister(ctx context.Context, token, remoteIP, verifyCode string) error {
-	if s.IsEmailVerifyEnabled(ctx) && strings.TrimSpace(verifyCode) != "" {
-		logger.LegacyPrintf("service.auth", "%s", "[Auth] Email verify flow detected, skip duplicate Turnstile check on register")
-		return nil
-	}
-	return s.VerifyTurnstile(ctx, token, remoteIP)
+	return s.VerifyCaptchaForRegister(ctx, CaptchaProof{TurnstileToken: token}, remoteIP, verifyCode)
 }
 
-// VerifyTurnstile 验证Turnstile token
+// VerifyTurnstile 保留旧内部接口，生产 handler 使用 VerifyCaptcha。
 func (s *AuthService) VerifyTurnstile(ctx context.Context, token string, remoteIP string) error {
-	required := s.cfg != nil && s.cfg.Server.Mode == "release" && s.cfg.Turnstile.Required
-
-	if required {
-		if s.settingService == nil {
-			logger.LegacyPrintf("service.auth", "%s", "[Auth] Turnstile required but settings service is not configured")
-			return ErrTurnstileNotConfigured
-		}
-		enabled := s.settingService.IsTurnstileEnabled(ctx)
-		secretConfigured := s.settingService.GetTurnstileSecretKey(ctx) != ""
-		if !enabled || !secretConfigured {
-			logger.LegacyPrintf("service.auth", "[Auth] Turnstile required but not configured (enabled=%v, secret_configured=%v)", enabled, secretConfigured)
-			return ErrTurnstileNotConfigured
-		}
-	}
-
-	if s.turnstileService == nil {
-		if required {
-			logger.LegacyPrintf("service.auth", "%s", "[Auth] Turnstile required but service not configured")
-			return ErrTurnstileNotConfigured
-		}
-		return nil // 服务未配置则跳过验证
-	}
-
-	if !required && s.settingService != nil && s.settingService.IsTurnstileEnabled(ctx) && s.settingService.GetTurnstileSecretKey(ctx) == "" {
-		logger.LegacyPrintf("service.auth", "%s", "[Auth] Turnstile enabled but secret key not configured")
-	}
-
-	return s.turnstileService.VerifyToken(ctx, token, remoteIP)
+	return s.VerifyCaptcha(ctx, CaptchaProof{TurnstileToken: token}, remoteIP)
 }
 
 // IsTurnstileEnabled 检查是否启用Turnstile验证
@@ -462,7 +433,7 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (string
 	}
 
 	// 生成JWT token
-	token, err := s.GenerateToken(user)
+	token, err := s.GenerateTokenWithContext(ctx, user)
 	if err != nil {
 		return "", nil, fmt.Errorf("generate token: %w", err)
 	}
@@ -574,7 +545,7 @@ func (s *AuthService) LoginOrRegisterOAuth(ctx context.Context, email, username 
 			logger.LegacyPrintf("service.auth", "[Auth] Failed to update username after oauth login: %v", err)
 		}
 	}
-	token, err := s.GenerateToken(user)
+	token, err := s.GenerateTokenWithContext(ctx, user)
 	if err != nil {
 		return "", nil, fmt.Errorf("generate token: %w", err)
 	}
@@ -1313,36 +1284,14 @@ func isReservedEmail(email string) bool {
 }
 
 // GenerateToken 生成JWT access token
-// 使用新的access_token_expire_minutes配置项（如果配置了），否则回退到expire_hour
-func (s *AuthService) GenerateToken(user *User) (string, error) {
-	now := time.Now()
-	var expiresAt time.Time
-	if s.cfg.JWT.AccessTokenExpireMinutes > 0 {
-		expiresAt = now.Add(time.Duration(s.cfg.JWT.AccessTokenExpireMinutes) * time.Minute)
-	} else {
-		// 向后兼容：使用旧的expire_hour配置
-		expiresAt = now.Add(time.Duration(s.cfg.JWT.ExpireHour) * time.Hour)
-	}
-
-	claims := &JWTClaims{
-		UserID:       user.ID,
-		Email:        user.Email,
-		Role:         user.Role,
-		TokenVersion: resolvedTokenVersion(user),
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(expiresAt),
-			IssuedAt:  jwt.NewNumericDate(now),
-			NotBefore: jwt.NewNumericDate(now),
-		},
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, err := token.SignedString([]byte(s.cfg.JWT.Secret))
+// 使用新的access_token_expire_minutes配置项（如果配置了），否则回退到expire_hour。
+// 会话指纹（IP/UA）从 ctx 中提取（由 HTTP 入口中间件注入），缺失时生成不带绑定的 token。
+func (s *AuthService) GenerateTokenWithContext(ctx context.Context, user *User) (string, error) {
+	sessionID, err := randomHexString(8)
 	if err != nil {
-		return "", fmt.Errorf("sign token: %w", err)
+		return "", fmt.Errorf("generate session id: %w", err)
 	}
-
-	return tokenString, nil
+	return s.generateAccessToken(user, sessionID, sessionBindingHashFromContext(ctx))
 }
 
 // GetAccessTokenExpiresIn 返回Access Token的有效期（秒）
@@ -1398,8 +1347,16 @@ func (s *AuthService) RefreshToken(ctx context.Context, oldTokenString string) (
 		return "", ErrTokenRevoked
 	}
 
+	// 会话绑定检查：指纹变化的旧 token 不允许换发新 token。
+	if s.settingService != nil && s.settingService.IsSessionBindingEnabled(ctx) && claims.BindingHash != "" {
+		if current := sessionBindingHashFromContext(ctx); current != "" && current != claims.BindingHash {
+			_ = s.RevokeSessionFamily(ctx, claims.SessionID)
+			return "", ErrSessionBindingMismatch
+		}
+	}
+
 	// 生成新token
-	return s.GenerateToken(user)
+	return s.GenerateTokenWithContext(ctx, user)
 }
 
 // IsPasswordResetEnabled 检查是否启用密码重置功能
@@ -1579,8 +1536,18 @@ func (s *AuthService) GenerateTokenPair(ctx context.Context, user *User, familyI
 		return nil, errors.New("refresh token cache not configured")
 	}
 
-	// 生成Access Token
-	accessToken, err := s.GenerateToken(user)
+	// 提前确定家族ID：作为 access token 的会话ID（sid），保证同一会话的
+	// access/refresh token 可以互相关联（单会话撤销、step-up 授权绑定）。
+	if familyID == "" {
+		familyBytes := make([]byte, 16)
+		if _, err := rand.Read(familyBytes); err != nil {
+			return nil, fmt.Errorf("generate family id: %w", err)
+		}
+		familyID = hex.EncodeToString(familyBytes)
+	}
+
+	// 生成Access Token（携带会话ID与绑定指纹）
+	accessToken, err := s.generateAccessToken(user, familyID, sessionBindingHashFromContext(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("generate access token: %w", err)
 	}
@@ -1626,6 +1593,7 @@ func (s *AuthService) generateRefreshToken(ctx context.Context, user *User, fami
 		UserID:       user.ID,
 		TokenVersion: resolvedTokenVersion(user),
 		FamilyID:     familyID,
+		BindingHash:  sessionBindingHashFromContext(ctx),
 		CreatedAt:    now,
 		ExpiresAt:    now.Add(ttl),
 	}
@@ -1710,6 +1678,16 @@ func (s *AuthService) RefreshTokenPair(ctx context.Context, refreshToken string)
 		return nil, ErrTokenRevoked
 	}
 
+	// 会话绑定检查：IP/UA 任一变化即撤销整个会话家族。
+	// data.BindingHash 为空表示功能开启前签发的旧会话，放行并在轮转时补齐绑定。
+	if s.settingService != nil && s.settingService.IsSessionBindingEnabled(ctx) && data.BindingHash != "" {
+		if current := sessionBindingHashFromContext(ctx); current != "" && current != data.BindingHash {
+			_ = s.refreshTokenCache.DeleteTokenFamily(ctx, data.FamilyID)
+			logger.LegacyPrintf("service.auth", "[Auth] Session binding mismatch on refresh for user %d, family revoked", data.UserID)
+			return nil, ErrSessionBindingMismatch
+		}
+	}
+
 	// Token轮转：立即使旧Token失效
 	if err := s.refreshTokenCache.DeleteRefreshToken(ctx, tokenHash); err != nil {
 		logger.LegacyPrintf("service.auth", "[Auth] Failed to delete old refresh token: %v", err)
@@ -1787,7 +1765,7 @@ func resolvedTokenVersion(user *User) int64 {
 	return user.TokenVersion ^ fingerprint
 }
 
-// snapshotPlatformQuotaDefaults 把 plan.PlatformQuotas（platform × 3 window）以
+// snapshotPlatformQuotaDefaults 把 plan.PlatformQuotas 中至少配置了一档限额的平台以
 // BulkInsertInitial 形式写入 user_platform_quotas 表。失败 fail-open（仅 warn log）。
 func (s *AuthService) snapshotPlatformQuotaDefaults(ctx context.Context, userID int64, plan *signupGrantPlan) error {
 	if s.userPlatformQuotaRepo == nil || plan == nil || len(plan.PlatformQuotas) == 0 {
@@ -1798,22 +1776,196 @@ func (s *AuthService) snapshotPlatformQuotaDefaults(ctx context.Context, userID 
 	// 整个调用方事务被 Postgres 标记 aborted，把"无关紧要的默认配额快照"放大成
 	// "整笔注册失败"（OAuth pending 路径曾因此 500 → 清 cookie → 404）。
 	ctx = dbent.WithoutTx(ctx)
+	// 仅为至少配置了一档限额的平台建行：user_platform_quotas 中不存在的行等价于不限额，
+	// 三档全空的记录不携带任何可执行的限额。
 	records := make([]UserPlatformQuotaRecord, 0, len(plan.PlatformQuotas))
 	for platform, q := range plan.PlatformQuotas {
-		rec := UserPlatformQuotaRecord{
-			UserID:   userID,
-			Platform: platform,
+		if !q.HasAnyLimit() {
+			continue
 		}
-		if q != nil {
-			rec.DailyLimitUSD = q.DailyLimitUSD
-			rec.WeeklyLimitUSD = q.WeeklyLimitUSD
-			rec.MonthlyLimitUSD = q.MonthlyLimitUSD
-		}
-		records = append(records, rec)
+		records = append(records, UserPlatformQuotaRecord{
+			UserID:          userID,
+			Platform:        platform,
+			DailyLimitUSD:   q.DailyLimitUSD,
+			WeeklyLimitUSD:  q.WeeklyLimitUSD,
+			MonthlyLimitUSD: q.MonthlyLimitUSD,
+		})
+	}
+	if len(records) == 0 {
+		return nil
 	}
 	if err := s.userPlatformQuotaRepo.BulkInsertInitial(ctx, records); err != nil {
 		logger.LegacyPrintf("service.auth", "[Auth] Warning: snapshot platform quota failed user=%d: %v (fail-open)", userID, err)
 		return nil // fail-open：返回 nil，让调用方继续
 	}
 	return nil
+}
+
+type CaptchaProof struct {
+	// TurnstileToken 承载 Cloudflare Turnstile token；阿里云验证码复用该字段承载 captchaVerifyParam
+	TurnstileToken string
+	TencentTicket  string
+	TencentRandstr string
+}
+
+func (s *AuthService) SetTencentCaptchaService(tencentCaptchaService *TencentCaptchaService) {
+	s.tencentCaptchaService = tencentCaptchaService
+}
+
+func (s *AuthService) SetAliyunCaptchaService(aliyunCaptchaService *AliyunCaptchaService) {
+	s.aliyunCaptchaService = aliyunCaptchaService
+}
+
+// VerifyCaptchaForRegister 在注册场景下验证当前启用的验证码。
+// 当邮箱验证开启且已提交验证码时，说明验证码发送阶段已完成验证码校验，
+// 此处跳过二次校验，避免一次性 token 在注册提交时重复使用导致误报失败。
+func (s *AuthService) VerifyCaptchaForRegister(ctx context.Context, proof CaptchaProof, remoteIP, verifyCode string) error {
+	if s.IsEmailVerifyEnabled(ctx) && strings.TrimSpace(verifyCode) != "" {
+		logger.LegacyPrintf("service.auth", "%s", "[Auth] Email verify flow detected, skip duplicate captcha check on register")
+		return nil
+	}
+	return s.VerifyCaptcha(ctx, proof, remoteIP)
+}
+
+func (s *AuthService) VerifyCaptcha(ctx context.Context, proof CaptchaProof, remoteIP string) error {
+	required := s.cfg != nil && s.cfg.Server.Mode == "release" && s.cfg.Turnstile.Required
+	if s.settingService == nil {
+		if required {
+			return ErrTurnstileNotConfigured
+		}
+		return nil
+	}
+
+	providerConfig, err := s.settingService.GetCaptchaProviderConfig(ctx)
+	if err != nil {
+		logger.LegacyPrintf("service.auth", "%s", "[Auth] Failed to read captcha provider settings")
+		return ErrServiceUnavailable
+	}
+	turnstileEnabled := providerConfig.TurnstileEnabled
+	tencentEnabled := providerConfig.Tencent.Enabled
+	aliyunEnabled := providerConfig.Aliyun.Enabled
+	if captchaProvidersConflict(turnstileEnabled, tencentEnabled, aliyunEnabled) {
+		return ErrCaptchaProviderConflict
+	}
+	if tencentEnabled {
+		if s.tencentCaptchaService == nil {
+			return ErrTencentCaptchaNotConfigured
+		}
+		return s.tencentCaptchaService.VerifyTicketWithConfig(ctx, providerConfig.Tencent, proof.TencentTicket, proof.TencentRandstr, remoteIP)
+	}
+	if aliyunEnabled {
+		if s.aliyunCaptchaService == nil {
+			return ErrAliyunCaptchaNotConfigured
+		}
+		return s.aliyunCaptchaService.VerifyParamWithConfig(ctx, providerConfig.Aliyun, proof.TurnstileToken)
+	}
+	if turnstileEnabled {
+		if s.turnstileService == nil || strings.TrimSpace(providerConfig.TurnstileSecretKey) == "" {
+			return ErrTurnstileNotConfigured
+		}
+		return s.turnstileService.VerifyTokenWithSecret(ctx, providerConfig.TurnstileSecretKey, proof.TurnstileToken, remoteIP)
+	}
+	if required {
+		return ErrTurnstileNotConfigured
+	}
+	return nil
+}
+
+// captchaProvidersConflict 同一时间仅允许启用一家人机验证服务商
+func captchaProvidersConflict(enabled ...bool) bool {
+	count := 0
+	for _, e := range enabled {
+		if e {
+			count++
+		}
+	}
+	return count > 1
+}
+
+// VerifyActionCaptchaIfEnabled 仅保护动作触发的扩展入口（OAuth 登录启动、passkey 登录），
+// 腾讯天御与阿里云验证码启用时拦截；不扩大 Cloudflare Turnstile 的既有覆盖范围。
+func (s *AuthService) VerifyActionCaptchaIfEnabled(ctx context.Context, proof CaptchaProof, remoteIP string) error {
+	if s == nil || s.settingService == nil {
+		return ErrServiceUnavailable
+	}
+
+	providerConfig, err := s.settingService.GetCaptchaProviderConfig(ctx)
+	if err != nil {
+		logger.LegacyPrintf("service.auth", "%s", "[Auth] Failed to read captcha provider settings")
+		return ErrServiceUnavailable
+	}
+	tencentEnabled := providerConfig.Tencent.Enabled
+	aliyunEnabled := providerConfig.Aliyun.Enabled
+	if !tencentEnabled && !aliyunEnabled {
+		return nil
+	}
+	if captchaProvidersConflict(providerConfig.TurnstileEnabled, tencentEnabled, aliyunEnabled) {
+		return ErrCaptchaProviderConflict
+	}
+	if aliyunEnabled {
+		if s.aliyunCaptchaService == nil {
+			return ErrAliyunCaptchaNotConfigured
+		}
+		return s.aliyunCaptchaService.VerifyParamWithConfig(ctx, providerConfig.Aliyun, proof.TurnstileToken)
+	}
+	if s.tencentCaptchaService == nil {
+		return ErrTencentCaptchaNotConfigured
+	}
+	return s.tencentCaptchaService.VerifyTicketWithConfig(
+		ctx,
+		providerConfig.Tencent,
+		proof.TencentTicket,
+		proof.TencentRandstr,
+		remoteIP,
+	)
+}
+
+var ErrCaptchaProviderConflict = infraerrors.ServiceUnavailable("CAPTCHA_PROVIDER_CONFLICT", "multiple captcha providers are enabled")
+
+// generateAccessToken 生成带会话 ID 与绑定指纹的 access token。
+func (s *AuthService) generateAccessToken(user *User, sessionID, bindingHash string) (string, error) {
+	now := time.Now()
+	var expiresAt time.Time
+	if s.cfg.JWT.AccessTokenExpireMinutes > 0 {
+		expiresAt = now.Add(time.Duration(s.cfg.JWT.AccessTokenExpireMinutes) * time.Minute)
+	} else {
+		// 向后兼容：使用旧的expire_hour配置
+		expiresAt = now.Add(time.Duration(s.cfg.JWT.ExpireHour) * time.Hour)
+	}
+
+	claims := &JWTClaims{
+		UserID:       user.ID,
+		Email:        user.Email,
+		Role:         user.Role,
+		TokenVersion: resolvedTokenVersion(user),
+		SessionID:    sessionID,
+		BindingHash:  bindingHash,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
+			IssuedAt:  jwt.NewNumericDate(now),
+			NotBefore: jwt.NewNumericDate(now),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString([]byte(s.cfg.JWT.Secret))
+	if err != nil {
+		return "", fmt.Errorf("sign token: %w", err)
+	}
+
+	return tokenString, nil
+}
+
+// RevokeSessionFamily 撤销单个会话家族（该会话的所有 refresh token）。
+// 用于会话绑定失效等单会话级撤销场景，不影响用户的其他设备会话。
+func (s *AuthService) RevokeSessionFamily(ctx context.Context, familyID string) error {
+	if s.refreshTokenCache == nil || familyID == "" {
+		return nil
+	}
+	return s.refreshTokenCache.DeleteTokenFamily(ctx, familyID)
+}
+
+// GenerateToken preserves the context-free API used by existing callers.
+func (s *AuthService) GenerateToken(user *User) (string, error) {
+	return s.GenerateTokenWithContext(context.Background(), user)
 }

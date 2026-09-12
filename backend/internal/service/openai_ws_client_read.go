@@ -103,7 +103,11 @@ func readOpenAIWSClientMessageWithTimeoutStart(
 		case <-timeoutCh:
 			return closeAndJoin(timeoutStatus, timeoutReason, context.DeadlineExceeded)
 		case <-controlCtx.Done():
-			return closeAndJoin(coderws.StatusGoingAway, "websocket request canceled", context.Cause(controlCtx))
+			cause := context.Cause(controlCtx)
+			if errors.Is(cause, ErrOpenAIWSIngressLeaseLost) {
+				return closeAndJoin(coderws.StatusTryAgainLater, "websocket ingress capacity lease lost; please reconnect", cause)
+			}
+			return closeAndJoin(coderws.StatusGoingAway, "websocket request canceled", cause)
 		}
 	}
 }

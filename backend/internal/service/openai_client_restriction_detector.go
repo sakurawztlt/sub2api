@@ -48,9 +48,11 @@ type CodexRestrictionPolicy struct {
 
 // CodexClientRestrictionDetectionResult 是 codex_cli_only 统一检测入口结果。
 type CodexClientRestrictionDetectionResult struct {
-	Enabled bool
-	Matched bool
-	Reason  string
+	DetectedVersion string
+	MinCodexVersion string
+	Enabled         bool
+	Matched         bool
+	Reason          string
 }
 
 // CodexClientRestrictionDetector 定义 codex_cli_only 统一检测入口。
@@ -127,7 +129,7 @@ func (d *OpenAICodexClientRestrictionDetector) Detect(c *gin.Context, account *A
 			return CodexClientRestrictionDetectionResult{Enabled: true, Matched: false, Reason: CodexClientRestrictionReasonVersionUndetectable}
 		}
 		if policy.MinCodexVersion != "" && CompareVersions(ver, policy.MinCodexVersion) < 0 {
-			return CodexClientRestrictionDetectionResult{Enabled: true, Matched: false, Reason: CodexClientRestrictionReasonVersionTooLow}
+			return CodexClientRestrictionDetectionResult{Enabled: true, Matched: false, Reason: CodexClientRestrictionReasonVersionTooLow, DetectedVersion: ver, MinCodexVersion: policy.MinCodexVersion}
 		}
 		if policy.MaxCodexVersion != "" && CompareVersions(ver, policy.MaxCodexVersion) > 0 {
 			return CodexClientRestrictionDetectionResult{Enabled: true, Matched: false, Reason: CodexClientRestrictionReasonVersionTooHigh}

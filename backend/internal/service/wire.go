@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/google/wire"
 	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
 )
 
 // ProvideGrokOAuthService injects runtime config and the shared Redis-backed
@@ -98,50 +99,6 @@ func ProvideTokenRefreshService(
 	return svc
 }
 
-func ProvideGrokQuotaService(
-	accountRepo AccountRepository,
-	proxyRepo ProxyRepository,
-	tokenProvider *GrokTokenProvider,
-	httpUpstream HTTPUpstream,
-	cfg *config.Config,
-	usageLogRepo UsageLogRepository,
-) *GrokQuotaService {
-	return NewGrokQuotaService(accountRepo, proxyRepo, tokenProvider, httpUpstream, cfg, usageLogRepo)
-}
-
-func ProvideCNProviderQuotaService(
-	accountRepo AccountRepository,
-	proxyRepo ProxyRepository,
-	httpUpstream HTTPUpstream,
-	cfg *config.Config,
-) *CNProviderQuotaService {
-	return NewCNProviderQuotaService(accountRepo, proxyRepo, httpUpstream, cfg)
-}
-
-func ProvideCNProviderBalanceService(
-	accountRepo AccountRepository,
-	proxyRepo ProxyRepository,
-	httpUpstream HTTPUpstream,
-	cfg *config.Config,
-) *CNProviderBalanceService {
-	return NewCNProviderBalanceService(accountRepo, proxyRepo, httpUpstream, cfg)
-}
-
-func ProvideCNProviderBalanceCheckService(
-	accountRepo AccountRepository,
-	balanceService *CNProviderBalanceService,
-	quotaService *CNProviderQuotaService,
-	cfg *config.Config,
-) *CNProviderBalanceCheckService {
-	minutes := 10
-	if cfg != nil && cfg.Gateway.CNProviders.BalanceCheckIntervalMinutes > 0 {
-		minutes = cfg.Gateway.CNProviders.BalanceCheckIntervalMinutes
-	}
-	svc := NewCNProviderBalanceCheckService(accountRepo, balanceService, quotaService, cfg, time.Duration(minutes)*time.Minute)
-	svc.Start()
-	return svc
-}
-
 // ProvideClaudeTokenProvider creates ClaudeTokenProvider with OAuthRefreshAPI injection
 func ProvideClaudeTokenProvider(
 	accountRepo AccountRepository,
@@ -195,10 +152,116 @@ func ProvideOpenAIQuotaAutoResetService(
 	return svc
 }
 
-// ProvideAuditLogService starts asynchronous audit persistence and retention
-// cleanup. Shutdown is coordinated by the server cleanup provider.
-func ProvideAuditLogService(repo AuditLogRepository, settingService *SettingService) *AuditLogService {
-	svc := NewAuditLogService(repo, settingService)
+func ProvideAccountUsageService(
+	accountRepo AccountRepository,
+	usageLogRepo UsageLogRepository,
+	usageFetcher ClaudeUsageFetcher,
+	geminiQuotaService *GeminiQuotaService,
+	antigravityQuotaFetcher *AntigravityQuotaFetcher,
+	grokQuotaFetcher *GrokQuotaFetcher,
+	grokQuotaService *GrokQuotaService,
+	openAIQuotaService *OpenAIQuotaService,
+	cache *UsageCache,
+	identityCache IdentityCache,
+	tlsFPProfileService *TLSFingerprintProfileService,
+	openAIGatewayService *OpenAIGatewayService,
+) *AccountUsageService {
+	service := NewAccountUsageService(
+		accountRepo,
+		usageLogRepo,
+		usageFetcher,
+		geminiQuotaService,
+		antigravityQuotaFetcher,
+		grokQuotaFetcher,
+		grokQuotaService,
+		openAIQuotaService,
+		cache,
+		identityCache,
+		tlsFPProfileService,
+	)
+	service.agentIdentityWS = openAIGatewayService
+	return service
+}
+
+func ProvideAccountTestService(
+	accountRepo AccountRepository,
+	geminiTokenProvider *GeminiTokenProvider,
+	claudeTokenProvider *ClaudeTokenProvider,
+	grokTokenProvider *GrokTokenProvider,
+	antigravityGatewayService *AntigravityGatewayService,
+	httpUpstream HTTPUpstream,
+	cfg *config.Config,
+	tlsFPProfileService *TLSFingerprintProfileService,
+	openAIGatewayService *OpenAIGatewayService,
+	settingService *SettingService,
+	pluginManager *PluginManager,
+) *AccountTestService {
+	service := NewAccountTestService(
+		accountRepo,
+		geminiTokenProvider,
+		claudeTokenProvider,
+		grokTokenProvider,
+		antigravityGatewayService,
+		httpUpstream,
+		cfg,
+		tlsFPProfileService,
+	)
+	service.agentIdentityWS = openAIGatewayService
+	service.SetOpenAIGatewayService(openAIGatewayService)
+	service.SetSettingService(settingService)
+	service.SetPluginManager(pluginManager)
+	return service
+}
+
+func ProvideGrokQuotaService(
+	accountRepo AccountRepository,
+	proxyRepo ProxyRepository,
+	tokenProvider *GrokTokenProvider,
+	httpUpstream HTTPUpstream,
+	cfg *config.Config,
+	usageLogRepo UsageLogRepository,
+	settingService *SettingService,
+) *GrokQuotaService {
+	service := NewGrokQuotaService(accountRepo, proxyRepo, tokenProvider, httpUpstream, cfg, usageLogRepo)
+	service.SetSettingService(settingService)
+	return service
+}
+
+// ProvideCNProviderQuotaService 构造国产供应商 Coding Plan 额度探测服务。
+func ProvideCNProviderQuotaService(
+	accountRepo AccountRepository,
+	proxyRepo ProxyRepository,
+	httpUpstream HTTPUpstream,
+	cfg *config.Config,
+) *CNProviderQuotaService {
+	return NewCNProviderQuotaService(accountRepo, proxyRepo, httpUpstream, cfg)
+}
+
+// ProvideCNProviderBalanceService 构造国产供应商余额探测服务。
+func ProvideCNProviderBalanceService(
+	accountRepo AccountRepository,
+	proxyRepo ProxyRepository,
+	httpUpstream HTTPUpstream,
+	cfg *config.Config,
+) *CNProviderBalanceService {
+	return NewCNProviderBalanceService(accountRepo, proxyRepo, httpUpstream, cfg)
+}
+
+// ProvideCNProviderBalanceCheckService 构造并启动周期余额/额度检测任务。
+// payg 账号探余额（低余额停调）；coding plan 账号探 5h/weekly 滚动窗口
+// （落 extra 快照供调度阈值评估自动停调）。
+// 间隔取自 gateway.cn_providers.balance_check_interval_minutes；<=0 或关闭时不启动。
+func ProvideCNProviderBalanceCheckService(
+	accountRepo AccountRepository,
+	balanceService *CNProviderBalanceService,
+	quotaService *CNProviderQuotaService,
+	cfg *config.Config,
+) *CNProviderBalanceCheckService {
+	minutes := 10
+	if cfg != nil && cfg.Gateway.CNProviders.BalanceCheckIntervalMinutes > 0 {
+		minutes = cfg.Gateway.CNProviders.BalanceCheckIntervalMinutes
+	}
+	svc := NewCNProviderBalanceCheckService(accountRepo, balanceService, quotaService, cfg, time.Duration(minutes)*time.Minute)
 	svc.Start()
 	return svc
 }
@@ -246,33 +309,6 @@ func ProvideGrokTokenProvider(
 	p.SetRefreshPolicy(GrokProviderRefreshPolicy())
 	p.SetTempUnschedCache(tempUnschedCache)
 	return p
-}
-
-// ProvideAccountTestService attaches the runtime settings dependency used by
-// provider-specific admin probes while preserving the constructor's test seam.
-func ProvideAccountTestService(
-	accountRepo AccountRepository,
-	geminiTokenProvider *GeminiTokenProvider,
-	claudeTokenProvider *ClaudeTokenProvider,
-	grokTokenProvider *GrokTokenProvider,
-	antigravityGatewayService *AntigravityGatewayService,
-	httpUpstream HTTPUpstream,
-	cfg *config.Config,
-	tlsFPProfileService *TLSFingerprintProfileService,
-	settingService *SettingService,
-) *AccountTestService {
-	svc := NewAccountTestService(
-		accountRepo,
-		geminiTokenProvider,
-		claudeTokenProvider,
-		grokTokenProvider,
-		antigravityGatewayService,
-		httpUpstream,
-		cfg,
-		tlsFPProfileService,
-	)
-	svc.SetSettingService(settingService)
-	return svc
 }
 
 // ProvideDashboardAggregationService 创建并启动仪表盘聚合服务
@@ -458,8 +494,9 @@ func ProvideOpsCleanupService(
 	redisClient *redis.Client,
 	cfg *config.Config,
 	channelMonitorSvc *ChannelMonitorService,
+	settingRepo SettingRepository,
 ) *OpsCleanupService {
-	svc := NewOpsCleanupService(opsRepo, db, redisClient, cfg, channelMonitorSvc)
+	svc := NewOpsCleanupService(opsRepo, db, redisClient, cfg, channelMonitorSvc, settingRepo)
 	svc.Start()
 	return svc
 }
@@ -625,7 +662,7 @@ func ProvideSettingService(settingRepo SettingRepository, groupRepo GroupReposit
 	svc := NewSettingService(settingRepo, cfg)
 	svc.SetDefaultSubscriptionGroupReader(groupRepo)
 	svc.SetProxyRepository(proxyRepo)
-	if err := svc.LoadAPIKeyACLTrustForwardedIPSetting(context.Background()); err != nil {
+	if err := svc.LoadForwardedClientIPSettings(context.Background()); err != nil {
 		logger.LegacyPrintf("service.setting", "Warning: load api key acl forwarded ip setting failed: %v", err)
 	}
 	if err := svc.MigrateOpenAIAllowClaudeCodeCodexPluginSetting(context.Background()); err != nil {
@@ -684,8 +721,19 @@ func ProvideTrafficCaptureService(client *dbent.Client) *TrafficCaptureService {
 
 // ProviderSet is the Wire provider set for all services
 var ProviderSet = wire.NewSet(
+	ProvideAuthCacheInvalidationWorker,
+	ProvideImageStorageSettingService,
+	ProvideImageTaskService,
+	ProvideBatchImageModelPricingResolver,
+	NewBatchImagePublicService,
+	NewBatchImageDownloadService,
+	ProvideBatchImageCleanupService,
+	ProvideBatchImageWorkerRuntime,
 	// Core services
-	NewAuthService,
+	ProvideAuthService,
+	NewPasskeyService,
+	NewTencentCaptchaService,
+	NewAliyunCaptchaService,
 	NewUserService,
 	ProvideTrafficCaptureService,
 	ProvideOllamaCloudUsageService,
@@ -695,7 +743,7 @@ var ProviderSet = wire.NewSet(
 	NewCompositeRouteResolver,
 	NewAccountService,
 	NewProxyService,
-	NewRedeemService,
+	ProvideRedeemService,
 	NewPromoService,
 	NewUsageService,
 	NewDashboardService,
@@ -791,7 +839,7 @@ var ProviderSet = wire.NewSet(
 	NewContentModerationService,
 	NewAffiliateService,
 	ProvidePaymentConfigService,
-	NewPaymentService,
+	ProvidePaymentService,
 	ProvidePaymentOrderExpiryService,
 	ProvideBalanceNotifyService,
 	ProvideChannelMonitorService,
@@ -884,4 +932,101 @@ func ProvideChannelMonitorV2Aggregator(repo ChannelMonitorV2Repository, db *sql.
 	}
 	aggregator.Start()
 	return aggregator
+}
+
+// ProvideAuditLogService starts asynchronous audit persistence and retention
+// cleanup. Shutdown is coordinated by the server cleanup provider.
+func ProvideAuditLogService(repo AuditLogRepository, settingService *SettingService) *AuditLogService {
+	svc := NewAuditLogService(repo, settingService)
+	svc.Start()
+	return svc
+}
+
+func ProvideBatchImageModelPricingResolver(resolver *ModelPricingResolver) *BatchImageModelPricingResolver {
+	return &BatchImageModelPricingResolver{Resolver: resolver}
+}
+
+func ProvideBatchImageCleanupService(repo BatchImageRepository, accountRepo AccountRepository, cfg *config.Config) *BatchImageCleanupService {
+	svc := NewBatchImageCleanupService(repo, accountRepo, cfg)
+	svc.Start()
+	return svc
+}
+
+func ProvideRedeemService(redeemRepo RedeemCodeRepository, userRepo UserRepository, subscriptionService *SubscriptionService, cache RedeemCache, billingCacheService *BillingCacheService, entClient *dbent.Client, authCacheInvalidator APIKeyAuthCacheInvalidator, affiliateService *AffiliateService) *RedeemService {
+	return NewRedeemService(redeemRepo, userRepo, subscriptionService, cache, billingCacheService, entClient, authCacheInvalidator, affiliateService)
+}
+
+// ProvideImageStorageSettingService 构造异步生图对象存储的后台设置服务。
+//
+// config.yaml 里的 image_storage 作为回落：后台从未保存过设置时沿用它，
+// 使升级前已通过配置文件开启该功能的部署不被打断。
+func ProvideImageStorageSettingService(
+	settingRepo SettingRepository,
+	encryptor SecretEncryptor,
+	backup *BackupService,
+	factory ImageStorageFactory,
+	cfg *config.Config,
+) *ImageStorageSettingService {
+	if cfg.ImageStorage.Enabled && !cfg.ImageStorage.Active() {
+		// 列出具体缺失的键。若这些键其实已在环境变量里设过，说明它们没被读进来，
+		// 请确认 setDefaults 中已为其注册默认值（见 config.setEnvReachableDefaults）。
+		logger.L().Warn("image_storage.enabled is true in config but object storage is not fully configured; configure it in the admin UI or complete the config file",
+			zap.Strings("missing_keys", cfg.ImageStorage.MissingCredentialKeys()))
+	}
+	return NewImageStorageSettingService(settingRepo, encryptor, backup, factory, cfg.ImageStorage)
+}
+
+// ProvideImageTaskService 构造异步图片任务服务。
+//
+// 对象存储是异步图片任务的启用前提：仅当开关打开且凭证齐全时功能才可用，否则整体禁用
+// （handler 返回 404，不创建任务、不写 Redis），从而避免大 base64 结果撑爆 Redis。
+// 启用状态由 settings 服务在运行时解析，因此后台改开关后无需重启即可生效。
+func ProvideImageTaskService(store ImageTaskStore, settings *ImageStorageSettingService) *ImageTaskService {
+	return NewImageTaskServiceWithResolver(store, settings.Resolver(), defaultImageTaskTTL, defaultImageTaskExecutionTimeout)
+}
+
+// ProvidePaymentService creates PaymentService and attaches notification email delivery.
+func ProvidePaymentService(entClient *dbent.Client, registry *payment.Registry, loadBalancer payment.LoadBalancer, redeemService *RedeemService, subscriptionSvc *SubscriptionService, configService *PaymentConfigService, userRepo UserRepository, groupRepo GroupRepository, affiliateService *AffiliateService, notificationEmailService *NotificationEmailService) *PaymentService {
+	svc := NewPaymentService(entClient, registry, loadBalancer, redeemService, subscriptionSvc, configService, userRepo, groupRepo, affiliateService)
+	svc.SetNotificationEmailService(notificationEmailService)
+	return svc
+}
+
+// ProvideAuthService wires the optional captcha providers into AuthService while
+// keeping NewAuthService's public constructor compatible with existing tests.
+func ProvideAuthService(
+	entClient *dbent.Client,
+	userRepo UserRepository,
+	redeemRepo RedeemCodeRepository,
+	refreshTokenCache RefreshTokenCache,
+	cfg *config.Config,
+	settingService *SettingService,
+	emailService *EmailService,
+	turnstileService *TurnstileService,
+	tencentCaptchaService *TencentCaptchaService,
+	aliyunCaptchaService *AliyunCaptchaService,
+	emailQueueService *EmailQueueService,
+	promoService *PromoService,
+	defaultSubAssigner DefaultSubscriptionAssigner,
+	affiliateService *AffiliateService,
+	userPlatformQuotaRepo UserPlatformQuotaRepository,
+) *AuthService {
+	svc := NewAuthService(
+		entClient,
+		userRepo,
+		redeemRepo,
+		refreshTokenCache,
+		cfg,
+		settingService,
+		emailService,
+		turnstileService,
+		emailQueueService,
+		promoService,
+		defaultSubAssigner,
+		affiliateService,
+		userPlatformQuotaRepo,
+	)
+	svc.SetTencentCaptchaService(tencentCaptchaService)
+	svc.SetAliyunCaptchaService(aliyunCaptchaService)
+	return svc
 }

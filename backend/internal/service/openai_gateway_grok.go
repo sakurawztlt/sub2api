@@ -103,7 +103,7 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	defer releaseUpstreamCtx()
 
 	proxyURL := ""
-	if account.ProxyID != nil && account.Proxy != nil {
+	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
 
@@ -170,6 +170,8 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 			kind = "failover"
 		}
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			ProxyID:            opsUpstreamProxyID(account),
+			ProxyName:          opsUpstreamProxyName(account),
 			Platform:           account.Platform,
 			AccountID:          account.ID,
 			AccountName:        account.Name,
@@ -248,6 +250,7 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	reasoningEffort := extractOpenAIReasoningEffortFromBody(patchedBody, originalModel)
 	result := &OpenAIForwardResult{
 		RequestID:       firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("xai-request-id")),
+		UpstreamHeaders: resp.Header,
 		ResponseID:      responseID,
 		Usage:           *usage,
 		Model:           originalModel,
@@ -721,25 +724,6 @@ func grokSupportsReasoningEffort(model string) bool {
 	default:
 		return false
 	}
-}
-
-var grokResponsesUnsupportedRecursiveFields = map[string]struct{}{
-	"external_web_access": {},
-}
-
-func sanitizeGrokResponsesUnsupportedFields(body []byte) ([]byte, error) {
-	if !bytes.Contains(body, []byte(`"external_web_access"`)) {
-		return body, nil
-	}
-
-	var payload any
-	if err := decodeOpenAIJSONUseNumber(body, &payload); err != nil {
-		return nil, err
-	}
-	if !deleteJSONFields(payload, grokResponsesUnsupportedRecursiveFields) {
-		return body, nil
-	}
-	return marshalOpenAIUpstreamJSON(payload)
 }
 
 func deleteJSONFields(value any, fields map[string]struct{}) bool {
@@ -1372,6 +1356,8 @@ func (s *OpenAIGatewayService) describeGrokComposerImage(
 			kind = "failover"
 		}
 		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			ProxyID:            opsUpstreamProxyID(account),
+			ProxyName:          opsUpstreamProxyName(account),
 			Platform:           account.Platform,
 			AccountID:          account.ID,
 			AccountName:        account.Name,
@@ -2059,3 +2045,53 @@ func (s *OpenAIGatewayService) tempUnscheduleGrok(ctx context.Context, account *
 		_ = s.accountRepo.SetTempUnschedulable(stateCtx, account.ID, until, reason)
 	}
 }
+
+// requestHasGrokEncryptedReasoning reports whether the outbound Responses body
+// still carries reasoning.encrypted_content that can be stripped for retry.
+func requestHasGrokEncryptedReasoning(body []byte) bool {
+	input := gjson.GetBytes(body, "input")
+	if !input.Exists() {
+		return false
+	}
+	items := input.Array()
+	if input.IsObject() {
+		items = []gjson.Result{input}
+	}
+	for _, item := range items {
+		if strings.TrimSpace(item.Get("type").String()) != "reasoning" {
+			continue
+		}
+		enc := item.Get("encrypted_content")
+		if enc.Exists() && enc.Type != gjson.Null && strings.TrimSpace(enc.String()) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// sanitizeGrokUnsupportedFields 递归移除 Grok 平台不支持的字段
+// 适用于 Responses API 和 Chat Completions API
+func sanitizeGrokUnsupportedFields(body []byte) ([]byte, error) {
+	if !bytes.Contains(body, []byte(`"external_web_access"`)) {
+		return body, nil
+	}
+
+	var payload any
+	if err := decodeOpenAIJSONUseNumber(body, &payload); err != nil {
+		return nil, err
+	}
+	if !deleteJSONFields(payload, grokUnsupportedRecursiveFields) {
+		return body, nil
+	}
+	return marshalOpenAIUpstreamJSON(payload)
+}
+
+type grokEncryptedContentStripRetriedKey struct{}
+
+// grokUnsupportedRecursiveFields 定义 Grok 平台（Responses 和 Chat Completions）不支持的字段
+var grokUnsupportedRecursiveFields = map[string]struct{}{
+	"external_web_access": {},
+}
+
+// sanitizeGrokResponsesUnsupportedFields 保留旧函数名作为别名，向后兼容
+var sanitizeGrokResponsesUnsupportedFields = sanitizeGrokUnsupportedFields

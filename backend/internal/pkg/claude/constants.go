@@ -44,11 +44,12 @@ const (
 	BetaFastMode                 = "fast-mode-2026-02-01"
 
 	// 新增（对齐官方 CLI 2.1.9x 以来的流量）
-	BetaPromptCachingScope = "prompt-caching-scope-2026-01-05"
-	BetaEffort             = "effort-2025-11-24"
-	BetaRedactThinking     = "redact-thinking-2026-02-12"
-	BetaContextManagement  = "context-management-2025-06-27"
-	BetaExtendedCacheTTL   = "extended-cache-ttl-2025-04-11"
+	BetaPromptCachingScope      = "prompt-caching-scope-2026-01-05"
+	BetaEffort                  = "effort-2025-11-24"
+	BetaRedactThinking          = "redact-thinking-2026-02-12"
+	BetaContextManagement       = "context-management-2025-06-27"
+	BetaThinkingBindingControls = "thinking-binding-controls-2026-08-01"
+	BetaExtendedCacheTTL        = "extended-cache-ttl-2025-04-11"
 
 	// Fallback beta tokens are only used to decide whether client-supplied
 	// beta-only fields may survive sanitization. They must never be injected
@@ -104,14 +105,11 @@ const APIKeyHaikuBetaHeader = BetaInterleavedThinking
 // 客户端缺省时统一使用 5m"，这样既不浪费 1h 缓存额度，也保留客户端自定义能力。
 const DefaultCacheControlTTL = "5m"
 
-// CLICurrentVersion 是 sub2api 当前对外伪装的 Claude Code CLI 版本号（三段 semver）。
+// CLICurrentVersion 是内置的 Claude Code CLI 伪装版本号基线（三段 semver）。
 // 用于 billing attribution block 中的 cc_version=X.Y.Z.{fp} 前缀以及 fingerprint 计算。
 // 必须与 DefaultHeaders["User-Agent"] 中的版本号严格一致；不一致会被 Anthropic 判第三方。
 //
-// 2026-05-08 codex disguise round 3: 之前 2.1.92 跟 UA 2.1.119 不一致,
-// billing attribution block 会写 cc_version=2.1.92.{fp} 但 header
-// claude-cli/2.1.119 — Anthropic 后端可能据此判第三方. 同步到 2.1.119
-// 配合 UA. 后续重抓真实 CLI 时再统一更新.
+// Keep the captured relay baseline; CLIVersion applies an optional process-stable override.
 const CLICurrentVersion = "2.1.119"
 
 // FullClaudeCodeMimicryBetas 返回最"像"真实 Claude Code CLI 的完整 beta 列表，
@@ -147,7 +145,7 @@ func FullClaudeCodeMimicryBetas() []string {
 var DefaultHeaders = map[string]string{
 	// Keep these in sync with recent Claude CLI traffic to reduce the chance
 	// that Claude Code-scoped OAuth credentials are rejected as "non-CLI" usage.
-	"User-Agent":                                "claude-cli/2.1.119 (external, sdk-cli)",
+	"User-Agent":                                "claude-cli/" + CLIVersion() + " (external, sdk-cli)",
 	"X-Stainless-Lang":                          "js",
 	"X-Stainless-Package-Version":               "0.81.0",
 	"X-Stainless-OS":                            "Linux",

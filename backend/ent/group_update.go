@@ -353,6 +353,20 @@ func (_u *GroupUpdate) SetNillableAllowImageGeneration(v *bool) *GroupUpdate {
 	return _u
 }
 
+// SetAllowBatchImageGeneration sets the "allow_batch_image_generation" field.
+func (_u *GroupUpdate) SetAllowBatchImageGeneration(v bool) *GroupUpdate {
+	_u.mutation.SetAllowBatchImageGeneration(v)
+	return _u
+}
+
+// SetNillableAllowBatchImageGeneration sets the "allow_batch_image_generation" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableAllowBatchImageGeneration(v *bool) *GroupUpdate {
+	if v != nil {
+		_u.SetAllowBatchImageGeneration(*v)
+	}
+	return _u
+}
+
 // SetImageRateIndependent sets the "image_rate_independent" field.
 func (_u *GroupUpdate) SetImageRateIndependent(v bool) *GroupUpdate {
 	_u.mutation.SetImageRateIndependent(v)
@@ -466,6 +480,48 @@ func (_u *GroupUpdate) AddImagePrice4k(v float64) *GroupUpdate {
 // ClearImagePrice4k clears the value of the "image_price_4k" field.
 func (_u *GroupUpdate) ClearImagePrice4k() *GroupUpdate {
 	_u.mutation.ClearImagePrice4k()
+	return _u
+}
+
+// SetBatchImageDiscountMultiplier sets the "batch_image_discount_multiplier" field.
+func (_u *GroupUpdate) SetBatchImageDiscountMultiplier(v float64) *GroupUpdate {
+	_u.mutation.ResetBatchImageDiscountMultiplier()
+	_u.mutation.SetBatchImageDiscountMultiplier(v)
+	return _u
+}
+
+// SetNillableBatchImageDiscountMultiplier sets the "batch_image_discount_multiplier" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableBatchImageDiscountMultiplier(v *float64) *GroupUpdate {
+	if v != nil {
+		_u.SetBatchImageDiscountMultiplier(*v)
+	}
+	return _u
+}
+
+// AddBatchImageDiscountMultiplier adds value to the "batch_image_discount_multiplier" field.
+func (_u *GroupUpdate) AddBatchImageDiscountMultiplier(v float64) *GroupUpdate {
+	_u.mutation.AddBatchImageDiscountMultiplier(v)
+	return _u
+}
+
+// SetBatchImageHoldMultiplier sets the "batch_image_hold_multiplier" field.
+func (_u *GroupUpdate) SetBatchImageHoldMultiplier(v float64) *GroupUpdate {
+	_u.mutation.ResetBatchImageHoldMultiplier()
+	_u.mutation.SetBatchImageHoldMultiplier(v)
+	return _u
+}
+
+// SetNillableBatchImageHoldMultiplier sets the "batch_image_hold_multiplier" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableBatchImageHoldMultiplier(v *float64) *GroupUpdate {
+	if v != nil {
+		_u.SetBatchImageHoldMultiplier(*v)
+	}
+	return _u
+}
+
+// AddBatchImageHoldMultiplier adds value to the "batch_image_hold_multiplier" field.
+func (_u *GroupUpdate) AddBatchImageHoldMultiplier(v float64) *GroupUpdate {
+	_u.mutation.AddBatchImageHoldMultiplier(v)
 	return _u
 }
 
@@ -594,6 +650,33 @@ func (_u *GroupUpdate) SetVideoModelPrices(v map[string]map[string]float64) *Gro
 // ClearVideoModelPrices clears the value of the "video_model_prices" field.
 func (_u *GroupUpdate) ClearVideoModelPrices() *GroupUpdate {
 	_u.mutation.ClearVideoModelPrices()
+	return _u
+}
+
+// SetWebSearchPricePerCall sets the "web_search_price_per_call" field.
+func (_u *GroupUpdate) SetWebSearchPricePerCall(v float64) *GroupUpdate {
+	_u.mutation.ResetWebSearchPricePerCall()
+	_u.mutation.SetWebSearchPricePerCall(v)
+	return _u
+}
+
+// SetNillableWebSearchPricePerCall sets the "web_search_price_per_call" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableWebSearchPricePerCall(v *float64) *GroupUpdate {
+	if v != nil {
+		_u.SetWebSearchPricePerCall(*v)
+	}
+	return _u
+}
+
+// AddWebSearchPricePerCall adds value to the "web_search_price_per_call" field.
+func (_u *GroupUpdate) AddWebSearchPricePerCall(v float64) *GroupUpdate {
+	_u.mutation.AddWebSearchPricePerCall(v)
+	return _u
+}
+
+// ClearWebSearchPricePerCall clears the value of the "web_search_price_per_call" field.
+func (_u *GroupUpdate) ClearWebSearchPricePerCall() *GroupUpdate {
+	_u.mutation.ClearWebSearchPricePerCall()
 	return _u
 }
 
@@ -892,6 +975,20 @@ func (_u *GroupUpdate) SetNillableAllowMessagesDispatch(v *bool) *GroupUpdate {
 	return _u
 }
 
+// SetAllowLive sets the "allow_live" field.
+func (_u *GroupUpdate) SetAllowLive(v bool) *GroupUpdate {
+	_u.mutation.SetAllowLive(v)
+	return _u
+}
+
+// SetNillableAllowLive sets the "allow_live" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableAllowLive(v *bool) *GroupUpdate {
+	if v != nil {
+		_u.SetAllowLive(*v)
+	}
+	return _u
+}
+
 // SetForceOpenaiFast sets the "force_openai_fast" field.
 func (_u *GroupUpdate) SetForceOpenaiFast(v bool) *GroupUpdate {
 	_u.mutation.SetForceOpenaiFast(v)
@@ -976,16 +1073,30 @@ func (_u *GroupUpdate) SetNillableMessagesDispatchModelConfig(v *domain.OpenAIMe
 	return _u
 }
 
-// SetModelsListConfig sets the "models_list_config" field.
-func (_u *GroupUpdate) SetModelsListConfig(v domain.GroupModelsListConfig) *GroupUpdate {
-	_u.mutation.SetModelsListConfig(v)
+// SetModelAllowlist sets the "model_allowlist" field.
+func (_u *GroupUpdate) SetModelAllowlist(v domain.GroupModelAllowlist) *GroupUpdate {
+	_u.mutation.SetModelAllowlist(v)
 	return _u
 }
 
-// SetNillableModelsListConfig sets the "models_list_config" field if the given value is not nil.
-func (_u *GroupUpdate) SetNillableModelsListConfig(v *domain.GroupModelsListConfig) *GroupUpdate {
+// SetNillableModelAllowlist sets the "model_allowlist" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableModelAllowlist(v *domain.GroupModelAllowlist) *GroupUpdate {
 	if v != nil {
-		_u.SetModelsListConfig(*v)
+		_u.SetModelAllowlist(*v)
+	}
+	return _u
+}
+
+// SetCodexModelsManifestConfig sets the "codex_models_manifest_config" field.
+func (_u *GroupUpdate) SetCodexModelsManifestConfig(v domain.GroupCodexModelsManifestConfig) *GroupUpdate {
+	_u.mutation.SetCodexModelsManifestConfig(v)
+	return _u
+}
+
+// SetNillableCodexModelsManifestConfig sets the "codex_models_manifest_config" field if the given value is not nil.
+func (_u *GroupUpdate) SetNillableCodexModelsManifestConfig(v *domain.GroupCodexModelsManifestConfig) *GroupUpdate {
+	if v != nil {
+		_u.SetCodexModelsManifestConfig(*v)
 	}
 	return _u
 }
@@ -1542,6 +1653,9 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.AllowImageGeneration(); ok {
 		_spec.SetField(group.FieldAllowImageGeneration, field.TypeBool, value)
 	}
+	if value, ok := _u.mutation.AllowBatchImageGeneration(); ok {
+		_spec.SetField(group.FieldAllowBatchImageGeneration, field.TypeBool, value)
+	}
 	if value, ok := _u.mutation.ImageRateIndependent(); ok {
 		_spec.SetField(group.FieldImageRateIndependent, field.TypeBool, value)
 	}
@@ -1577,6 +1691,18 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.ImagePrice4kCleared() {
 		_spec.ClearField(group.FieldImagePrice4k, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.BatchImageDiscountMultiplier(); ok {
+		_spec.SetField(group.FieldBatchImageDiscountMultiplier, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedBatchImageDiscountMultiplier(); ok {
+		_spec.AddField(group.FieldBatchImageDiscountMultiplier, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.BatchImageHoldMultiplier(); ok {
+		_spec.SetField(group.FieldBatchImageHoldMultiplier, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedBatchImageHoldMultiplier(); ok {
+		_spec.AddField(group.FieldBatchImageHoldMultiplier, field.TypeFloat64, value)
 	}
 	if value, ok := _u.mutation.VideoRateIndependent(); ok {
 		_spec.SetField(group.FieldVideoRateIndependent, field.TypeBool, value)
@@ -1619,6 +1745,15 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.VideoModelPricesCleared() {
 		_spec.ClearField(group.FieldVideoModelPrices, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.WebSearchPricePerCall(); ok {
+		_spec.SetField(group.FieldWebSearchPricePerCall, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedWebSearchPricePerCall(); ok {
+		_spec.AddField(group.FieldWebSearchPricePerCall, field.TypeFloat64, value)
+	}
+	if _u.mutation.WebSearchPricePerCallCleared() {
+		_spec.ClearField(group.FieldWebSearchPricePerCall, field.TypeFloat64)
 	}
 	if value, ok := _u.mutation.SearchPricePer1k(); ok {
 		_spec.SetField(group.FieldSearchPricePer1k, field.TypeFloat64, value)
@@ -1720,6 +1855,9 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.AllowMessagesDispatch(); ok {
 		_spec.SetField(group.FieldAllowMessagesDispatch, field.TypeBool, value)
 	}
+	if value, ok := _u.mutation.AllowLive(); ok {
+		_spec.SetField(group.FieldAllowLive, field.TypeBool, value)
+	}
 	if value, ok := _u.mutation.ForceOpenaiFast(); ok {
 		_spec.SetField(group.FieldForceOpenaiFast, field.TypeBool, value)
 	}
@@ -1738,8 +1876,11 @@ func (_u *GroupUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.MessagesDispatchModelConfig(); ok {
 		_spec.SetField(group.FieldMessagesDispatchModelConfig, field.TypeJSON, value)
 	}
-	if value, ok := _u.mutation.ModelsListConfig(); ok {
-		_spec.SetField(group.FieldModelsListConfig, field.TypeJSON, value)
+	if value, ok := _u.mutation.ModelAllowlist(); ok {
+		_spec.SetField(group.FieldModelAllowlist, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.CodexModelsManifestConfig(); ok {
+		_spec.SetField(group.FieldCodexModelsManifestConfig, field.TypeJSON, value)
 	}
 	if value, ok := _u.mutation.RpmLimit(); ok {
 		_spec.SetField(group.FieldRpmLimit, field.TypeInt, value)
@@ -2406,6 +2547,20 @@ func (_u *GroupUpdateOne) SetNillableAllowImageGeneration(v *bool) *GroupUpdateO
 	return _u
 }
 
+// SetAllowBatchImageGeneration sets the "allow_batch_image_generation" field.
+func (_u *GroupUpdateOne) SetAllowBatchImageGeneration(v bool) *GroupUpdateOne {
+	_u.mutation.SetAllowBatchImageGeneration(v)
+	return _u
+}
+
+// SetNillableAllowBatchImageGeneration sets the "allow_batch_image_generation" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableAllowBatchImageGeneration(v *bool) *GroupUpdateOne {
+	if v != nil {
+		_u.SetAllowBatchImageGeneration(*v)
+	}
+	return _u
+}
+
 // SetImageRateIndependent sets the "image_rate_independent" field.
 func (_u *GroupUpdateOne) SetImageRateIndependent(v bool) *GroupUpdateOne {
 	_u.mutation.SetImageRateIndependent(v)
@@ -2519,6 +2674,48 @@ func (_u *GroupUpdateOne) AddImagePrice4k(v float64) *GroupUpdateOne {
 // ClearImagePrice4k clears the value of the "image_price_4k" field.
 func (_u *GroupUpdateOne) ClearImagePrice4k() *GroupUpdateOne {
 	_u.mutation.ClearImagePrice4k()
+	return _u
+}
+
+// SetBatchImageDiscountMultiplier sets the "batch_image_discount_multiplier" field.
+func (_u *GroupUpdateOne) SetBatchImageDiscountMultiplier(v float64) *GroupUpdateOne {
+	_u.mutation.ResetBatchImageDiscountMultiplier()
+	_u.mutation.SetBatchImageDiscountMultiplier(v)
+	return _u
+}
+
+// SetNillableBatchImageDiscountMultiplier sets the "batch_image_discount_multiplier" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableBatchImageDiscountMultiplier(v *float64) *GroupUpdateOne {
+	if v != nil {
+		_u.SetBatchImageDiscountMultiplier(*v)
+	}
+	return _u
+}
+
+// AddBatchImageDiscountMultiplier adds value to the "batch_image_discount_multiplier" field.
+func (_u *GroupUpdateOne) AddBatchImageDiscountMultiplier(v float64) *GroupUpdateOne {
+	_u.mutation.AddBatchImageDiscountMultiplier(v)
+	return _u
+}
+
+// SetBatchImageHoldMultiplier sets the "batch_image_hold_multiplier" field.
+func (_u *GroupUpdateOne) SetBatchImageHoldMultiplier(v float64) *GroupUpdateOne {
+	_u.mutation.ResetBatchImageHoldMultiplier()
+	_u.mutation.SetBatchImageHoldMultiplier(v)
+	return _u
+}
+
+// SetNillableBatchImageHoldMultiplier sets the "batch_image_hold_multiplier" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableBatchImageHoldMultiplier(v *float64) *GroupUpdateOne {
+	if v != nil {
+		_u.SetBatchImageHoldMultiplier(*v)
+	}
+	return _u
+}
+
+// AddBatchImageHoldMultiplier adds value to the "batch_image_hold_multiplier" field.
+func (_u *GroupUpdateOne) AddBatchImageHoldMultiplier(v float64) *GroupUpdateOne {
+	_u.mutation.AddBatchImageHoldMultiplier(v)
 	return _u
 }
 
@@ -2647,6 +2844,33 @@ func (_u *GroupUpdateOne) SetVideoModelPrices(v map[string]map[string]float64) *
 // ClearVideoModelPrices clears the value of the "video_model_prices" field.
 func (_u *GroupUpdateOne) ClearVideoModelPrices() *GroupUpdateOne {
 	_u.mutation.ClearVideoModelPrices()
+	return _u
+}
+
+// SetWebSearchPricePerCall sets the "web_search_price_per_call" field.
+func (_u *GroupUpdateOne) SetWebSearchPricePerCall(v float64) *GroupUpdateOne {
+	_u.mutation.ResetWebSearchPricePerCall()
+	_u.mutation.SetWebSearchPricePerCall(v)
+	return _u
+}
+
+// SetNillableWebSearchPricePerCall sets the "web_search_price_per_call" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableWebSearchPricePerCall(v *float64) *GroupUpdateOne {
+	if v != nil {
+		_u.SetWebSearchPricePerCall(*v)
+	}
+	return _u
+}
+
+// AddWebSearchPricePerCall adds value to the "web_search_price_per_call" field.
+func (_u *GroupUpdateOne) AddWebSearchPricePerCall(v float64) *GroupUpdateOne {
+	_u.mutation.AddWebSearchPricePerCall(v)
+	return _u
+}
+
+// ClearWebSearchPricePerCall clears the value of the "web_search_price_per_call" field.
+func (_u *GroupUpdateOne) ClearWebSearchPricePerCall() *GroupUpdateOne {
+	_u.mutation.ClearWebSearchPricePerCall()
 	return _u
 }
 
@@ -2945,6 +3169,20 @@ func (_u *GroupUpdateOne) SetNillableAllowMessagesDispatch(v *bool) *GroupUpdate
 	return _u
 }
 
+// SetAllowLive sets the "allow_live" field.
+func (_u *GroupUpdateOne) SetAllowLive(v bool) *GroupUpdateOne {
+	_u.mutation.SetAllowLive(v)
+	return _u
+}
+
+// SetNillableAllowLive sets the "allow_live" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableAllowLive(v *bool) *GroupUpdateOne {
+	if v != nil {
+		_u.SetAllowLive(*v)
+	}
+	return _u
+}
+
 // SetForceOpenaiFast sets the "force_openai_fast" field.
 func (_u *GroupUpdateOne) SetForceOpenaiFast(v bool) *GroupUpdateOne {
 	_u.mutation.SetForceOpenaiFast(v)
@@ -3029,16 +3267,30 @@ func (_u *GroupUpdateOne) SetNillableMessagesDispatchModelConfig(v *domain.OpenA
 	return _u
 }
 
-// SetModelsListConfig sets the "models_list_config" field.
-func (_u *GroupUpdateOne) SetModelsListConfig(v domain.GroupModelsListConfig) *GroupUpdateOne {
-	_u.mutation.SetModelsListConfig(v)
+// SetModelAllowlist sets the "model_allowlist" field.
+func (_u *GroupUpdateOne) SetModelAllowlist(v domain.GroupModelAllowlist) *GroupUpdateOne {
+	_u.mutation.SetModelAllowlist(v)
 	return _u
 }
 
-// SetNillableModelsListConfig sets the "models_list_config" field if the given value is not nil.
-func (_u *GroupUpdateOne) SetNillableModelsListConfig(v *domain.GroupModelsListConfig) *GroupUpdateOne {
+// SetNillableModelAllowlist sets the "model_allowlist" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableModelAllowlist(v *domain.GroupModelAllowlist) *GroupUpdateOne {
 	if v != nil {
-		_u.SetModelsListConfig(*v)
+		_u.SetModelAllowlist(*v)
+	}
+	return _u
+}
+
+// SetCodexModelsManifestConfig sets the "codex_models_manifest_config" field.
+func (_u *GroupUpdateOne) SetCodexModelsManifestConfig(v domain.GroupCodexModelsManifestConfig) *GroupUpdateOne {
+	_u.mutation.SetCodexModelsManifestConfig(v)
+	return _u
+}
+
+// SetNillableCodexModelsManifestConfig sets the "codex_models_manifest_config" field if the given value is not nil.
+func (_u *GroupUpdateOne) SetNillableCodexModelsManifestConfig(v *domain.GroupCodexModelsManifestConfig) *GroupUpdateOne {
+	if v != nil {
+		_u.SetCodexModelsManifestConfig(*v)
 	}
 	return _u
 }
@@ -3625,6 +3877,9 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	if value, ok := _u.mutation.AllowImageGeneration(); ok {
 		_spec.SetField(group.FieldAllowImageGeneration, field.TypeBool, value)
 	}
+	if value, ok := _u.mutation.AllowBatchImageGeneration(); ok {
+		_spec.SetField(group.FieldAllowBatchImageGeneration, field.TypeBool, value)
+	}
 	if value, ok := _u.mutation.ImageRateIndependent(); ok {
 		_spec.SetField(group.FieldImageRateIndependent, field.TypeBool, value)
 	}
@@ -3660,6 +3915,18 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if _u.mutation.ImagePrice4kCleared() {
 		_spec.ClearField(group.FieldImagePrice4k, field.TypeFloat64)
+	}
+	if value, ok := _u.mutation.BatchImageDiscountMultiplier(); ok {
+		_spec.SetField(group.FieldBatchImageDiscountMultiplier, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedBatchImageDiscountMultiplier(); ok {
+		_spec.AddField(group.FieldBatchImageDiscountMultiplier, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.BatchImageHoldMultiplier(); ok {
+		_spec.SetField(group.FieldBatchImageHoldMultiplier, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedBatchImageHoldMultiplier(); ok {
+		_spec.AddField(group.FieldBatchImageHoldMultiplier, field.TypeFloat64, value)
 	}
 	if value, ok := _u.mutation.VideoRateIndependent(); ok {
 		_spec.SetField(group.FieldVideoRateIndependent, field.TypeBool, value)
@@ -3702,6 +3969,15 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	}
 	if _u.mutation.VideoModelPricesCleared() {
 		_spec.ClearField(group.FieldVideoModelPrices, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.WebSearchPricePerCall(); ok {
+		_spec.SetField(group.FieldWebSearchPricePerCall, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.AddedWebSearchPricePerCall(); ok {
+		_spec.AddField(group.FieldWebSearchPricePerCall, field.TypeFloat64, value)
+	}
+	if _u.mutation.WebSearchPricePerCallCleared() {
+		_spec.ClearField(group.FieldWebSearchPricePerCall, field.TypeFloat64)
 	}
 	if value, ok := _u.mutation.SearchPricePer1k(); ok {
 		_spec.SetField(group.FieldSearchPricePer1k, field.TypeFloat64, value)
@@ -3803,6 +4079,9 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	if value, ok := _u.mutation.AllowMessagesDispatch(); ok {
 		_spec.SetField(group.FieldAllowMessagesDispatch, field.TypeBool, value)
 	}
+	if value, ok := _u.mutation.AllowLive(); ok {
+		_spec.SetField(group.FieldAllowLive, field.TypeBool, value)
+	}
 	if value, ok := _u.mutation.ForceOpenaiFast(); ok {
 		_spec.SetField(group.FieldForceOpenaiFast, field.TypeBool, value)
 	}
@@ -3821,8 +4100,11 @@ func (_u *GroupUpdateOne) sqlSave(ctx context.Context) (_node *Group, err error)
 	if value, ok := _u.mutation.MessagesDispatchModelConfig(); ok {
 		_spec.SetField(group.FieldMessagesDispatchModelConfig, field.TypeJSON, value)
 	}
-	if value, ok := _u.mutation.ModelsListConfig(); ok {
-		_spec.SetField(group.FieldModelsListConfig, field.TypeJSON, value)
+	if value, ok := _u.mutation.ModelAllowlist(); ok {
+		_spec.SetField(group.FieldModelAllowlist, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.CodexModelsManifestConfig(); ok {
+		_spec.SetField(group.FieldCodexModelsManifestConfig, field.TypeJSON, value)
 	}
 	if value, ok := _u.mutation.RpmLimit(); ok {
 		_spec.SetField(group.FieldRpmLimit, field.TypeInt, value)

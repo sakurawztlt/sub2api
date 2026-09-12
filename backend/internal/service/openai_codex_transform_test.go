@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -1347,6 +1348,10 @@ func TestApplyCodexOAuthTransform_EmptyInput(t *testing.T) {
 
 func TestNormalizeCodexModel_Gpt53(t *testing.T) {
 	cases := map[string]string{
+		"gpt-6-astra":               "gpt-6-astra",
+		"openai/gpt-6-astra":        "gpt-6-astra",
+		"gpt-6":                     "gpt-6-astra",
+		"openai/gpt-6":              "gpt-6-astra",
 		"gpt-5.4":                   "gpt-5.4",
 		"gpt-5.4-high":              "gpt-5.4",
 		"gpt-5.4-chat-latest":       "gpt-5.4",
@@ -1959,4 +1964,278 @@ func TestFilterCodexInput_PreservesReasoningInMixedInput(t *testing.T) {
 			require.Equal(t, "fc_1", byType["function_call_output"][0]["call_id"])
 		})
 	}
+}
+
+func TestApplyCodexOAuthTransform_AllowedToolsKeepsReservedNameReferences(t *testing.T) {
+	declaration := map[string]any{"type": "function", "name": "python"}
+	reference := map[string]any{"type": "function", "name": "python"}
+	choice := map[string]any{"type": "allowed_tools", "mode": "required", "tools": []any{reference}}
+	reqBody := map[string]any{
+		"model": "gpt-6-astra", "tools": []any{declaration}, "tool_choice": choice,
+	}
+	result := applyCodexOAuthTransform(reqBody, true, false, false)
+	require.NoError(t, result.Error)
+	require.Equal(t, choice, reqBody["tool_choice"])
+	require.Equal(t, codexPythonToolAlias, declaration["name"])
+	require.Equal(t, codexPythonToolAlias, reference["name"])
+	require.Equal(t, "python", result.ToolNameReverse[codexPythonToolAlias])
+}
+
+func TestApplyCodexOAuthTransform_GPT6AstraSuppliesModelSpecificInstructions(t *testing.T) {
+	reqBody := map[string]any{
+		"model": "gpt-6-astra",
+	}
+
+	result := applyCodexOAuthTransform(reqBody, true, false, false)
+
+	instructions, ok := reqBody["instructions"].(string)
+	require.True(t, ok)
+	require.True(t, strings.HasPrefix(strings.TrimSpace(instructions), "You are Codex, an agent based on GPT-6."))
+	require.NotContains(t, instructions, "You are Codex, a coding agent based on GPT-5.")
+	require.True(t, result.Modified)
+}
+
+func TestApplyCodexOAuthTransform_JsonObjectKeepsJsonInstructionInInput(t *testing.T) {
+	reqBody := map[string]any{
+		"model": "gpt-5.4",
+		"input": []any{
+			map[string]any{
+				"role":    "system",
+				"content": "You are an assistant. Output JSON only.",
+			},
+			map[string]any{
+				"role":    "user",
+				"content": "symbol data without the keyword",
+			},
+		},
+		"text": map[string]any{
+			"format": map[string]any{
+				"type": "json_object",
+			},
+		},
+	}
+
+	result := applyCodexOAuthTransform(reqBody, false, false, false)
+
+	require.True(t, result.Modified)
+	instructions, ok := reqBody["instructions"].(string)
+	require.True(t, ok)
+	require.Contains(t, instructions, "JSON")
+	input, ok := reqBody["input"].([]any)
+	require.True(t, ok)
+	require.Len(t, input, 2)
+	developer, ok := input[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "developer", developer["role"])
+	require.Contains(t, developer["content"], "JSON")
+}
+
+func TestApplyCodexOAuthTransform_MessagesBridgePromptCacheKeyIsHeaderOnly(t *testing.T) {
+	reqBody := map[string]any{
+		"model":            "gpt-5.5",
+		"prompt_cache_key": "anthropic-metadata-session-1",
+		"input": []any{
+			map[string]any{
+				"type": "message",
+				"role": "developer",
+				"content": []any{
+					map[string]any{
+						"type": "input_text",
+						"text": openAICompatClaudeCodeTodoGuardMarker,
+					},
+				},
+			},
+			map[string]any{
+				"type":    "message",
+				"role":    "user",
+				"content": "hello",
+			},
+		},
+	}
+
+	result := applyCodexOAuthTransformWithOptions(reqBody, codexOAuthTransformOptions{
+		SkipDefaultInstructions: true,
+		PreserveToolCallIDs:     true,
+	})
+
+	require.Equal(t, "anthropic-metadata-session-1", result.PromptCacheKey)
+	require.True(t, result.Modified)
+	require.NotContains(t, reqBody, "prompt_cache_key")
+}
+
+func TestApplyCodexOAuthTransform_PreservesAllowedTools(t *testing.T) {
+	for _, placement := range []string{"top_level", "additional_tools"} {
+		for _, mode := range []string{"auto", "required"} {
+			t.Run(placement+"/"+mode, func(t *testing.T) {
+				decision := map[string]any{"type": "function", "name": "ProbeAccept"}
+				choice := map[string]any{
+					"type": "allowed_tools", "mode": mode,
+					"tools": []any{map[string]any{"type": "function", "name": "ProbeAccept"}},
+				}
+				tools := []any{
+					map[string]any{"type": "function", "name": "ProbeBase"},
+					map[string]any{"type": "web_search"},
+					map[string]any{"type": "image_generation"},
+				}
+				input := []any{map[string]any{"type": "message", "role": "user", "content": "probe"}}
+				if placement == "top_level" {
+					tools = append(tools, decision)
+				} else {
+					input = append(input, map[string]any{
+						"type": "additional_tools", "role": "developer", "tools": []any{decision},
+					})
+				}
+				reqBody := map[string]any{"tools": tools, "input": input, "tool_choice": choice}
+				before, err := json.Marshal(reqBody)
+				require.NoError(t, err)
+				reqBody["model"] = "gpt-6-astra"
+				result := applyCodexOAuthTransform(reqBody, true, false, false)
+				require.NoError(t, result.Error)
+				after, err := json.Marshal(map[string]any{
+					"tools": reqBody["tools"], "input": reqBody["input"], "tool_choice": reqBody["tool_choice"],
+				})
+				require.NoError(t, err)
+				require.JSONEq(t, string(before), string(after))
+			})
+		}
+	}
+}
+
+// TestApplyCodexOAuthTransform_StripsPromptCacheRetention is a regression
+// test: some clients (e.g. Cursor cloud via the Responses-shape compat path)
+// send prompt_cache_retention, but the ChatGPT internal Codex endpoint
+// rejects it with "Unsupported parameter: prompt_cache_retention".
+func TestApplyCodexOAuthTransform_StripsPromptCacheRetention(t *testing.T) {
+	reqBody := map[string]any{
+		"model":                  "gpt-5.1",
+		"prompt_cache_retention": "24h",
+		"input": []any{
+			map[string]any{"role": "user", "content": "hi"},
+		},
+	}
+
+	applyCodexOAuthTransform(reqBody, false, false, false)
+
+	_, stillThere := reqBody["prompt_cache_retention"]
+	require.False(t, stillThere,
+		"prompt_cache_retention must be stripped before forwarding to Codex upstream")
+}
+
+func TestNormalizeCodexToolChoice_InvalidAllowedToolsNeverBecomesAuto(t *testing.T) {
+	for _, choice := range []map[string]any{
+		{"type": "allowed_tools"},
+		{"type": "allowed_tools", "mode": "invalid", "tools": []any{}},
+		{"type": "allowed_tools", "mode": "required", "tools": "invalid"},
+		{"type": "allowed_tools", "mode": "required", "tools": []any{map[string]any{"type": "function", "name": "missing"}}},
+	} {
+		reqBody := map[string]any{"tool_choice": choice}
+		require.False(t, normalizeCodexToolChoice(reqBody))
+		// The upstream owns schema validation. A malformed restriction must never
+		// silently become permission to call every supplied tool.
+		require.Equal(t, choice, reqBody["tool_choice"])
+	}
+}
+
+func TestStripOpenAIImageGenerationTools_KeepsCustomImagegenFunctionChoice(t *testing.T) {
+	reqBody := map[string]any{
+		"tool_choice": map[string]any{
+			"function": map[string]any{"name": "imagegen"},
+		},
+	}
+
+	require.False(t, stripOpenAIImageGenerationTools(reqBody))
+	require.Contains(t, reqBody, "tool_choice")
+}
+
+func TestStripOpenAIImageGenerationTools_KeepsNonImageNamespaces(t *testing.T) {
+	reqBody := map[string]any{
+		"tools": []any{
+			map[string]any{"type": "namespace", "name": "code_tools"},
+		},
+		"input": []any{
+			map[string]any{
+				"type": "additional_tools",
+				"tools": []any{
+					map[string]any{"type": "namespace", "name": "browser_tools"},
+				},
+			},
+		},
+		"tool_choice": "auto",
+	}
+
+	require.False(t, stripOpenAIImageGenerationTools(reqBody))
+	require.Equal(t, "auto", reqBody["tool_choice"])
+	require.False(t, hasOpenAIImageGenerationTool(reqBody))
+}
+
+func TestStripOpenAIImageGenerationTools_StripsNamespaceFormats(t *testing.T) {
+	imageNamespace := func() map[string]any {
+		return map[string]any{
+			"type": "namespace",
+			"name": "image_gen",
+			"tools": []any{
+				map[string]any{"type": "function", "name": "imagegen"},
+			},
+		}
+	}
+	codeNamespace := func() map[string]any {
+		return map[string]any{
+			"type": "namespace",
+			"name": "code_tools",
+			"tools": []any{
+				map[string]any{"type": "function", "name": "run"},
+			},
+		}
+	}
+
+	reqBody := map[string]any{
+		"model": "gpt-5.5",
+		"tools": []any{
+			map[string]any{"type": "function", "name": "shell"},
+			imageNamespace(),
+			codeNamespace(),
+		},
+		"input": []any{
+			map[string]any{"type": "message", "role": "user", "content": "hello"},
+			map[string]any{
+				"type":  "additional_tools",
+				"tools": []any{imageNamespace(), codeNamespace()},
+			},
+			map[string]any{
+				"type":  "additional_tools",
+				"tools": []any{imageNamespace()},
+			},
+		},
+		"tool_choice": map[string]any{"type": "namespace", "name": "image_gen"},
+	}
+
+	require.True(t, stripOpenAIImageGenerationTools(reqBody))
+	require.False(t, hasOpenAIImageGenerationTool(reqBody))
+	require.NotContains(t, reqBody, "tool_choice")
+
+	tools, ok := reqBody["tools"].([]any)
+	require.True(t, ok)
+	require.Len(t, tools, 2)
+	firstTool, ok := tools[0].(map[string]any)
+	require.True(t, ok)
+	secondTool, ok := tools[1].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "shell", firstTool["name"])
+	require.Equal(t, "code_tools", secondTool["name"])
+
+	input, ok := reqBody["input"].([]any)
+	require.True(t, ok)
+	require.Len(t, input, 2)
+	message, ok := input[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "message", message["type"])
+	additionalToolsItem, ok := input[1].(map[string]any)
+	require.True(t, ok)
+	additionalTools, ok := additionalToolsItem["tools"].([]any)
+	require.True(t, ok)
+	require.Len(t, additionalTools, 1)
+	additionalTool, ok := additionalTools[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "code_tools", additionalTool["name"])
+	require.False(t, stripOpenAIImageGenerationTools(reqBody), "stripping should be idempotent")
 }

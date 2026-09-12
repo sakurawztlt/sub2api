@@ -9,9 +9,16 @@ import { getLocale } from '@/i18n'
 import { buildApiUrl, getAPIBaseURL } from '@/api/url'
 import { refreshAuthTokens } from './tokenRefresh'
 
+import {
+  ADMIN_UI_REQUEST_HEADER,
+  USER_UI_REQUEST_HEADER,
+  shouldMarkAdminUIRequest,
+  shouldMarkUserUIRequest,
+} from './adminUIRequest'
 // ==================== Axios Instance Configuration ====================
 
 export { buildApiUrl }
+export { buildGatewayUrl } from './url'
 
 const API_BASE_URL = getAPIBaseURL()
 
@@ -54,6 +61,16 @@ apiClient.interceptors.request.use(
         config.params = {}
       }
       config.params.timezone = getUserTimezone()
+    }
+
+    if (config.headers) {
+      const requestURL = String(config.url || '')
+      if (shouldMarkAdminUIRequest(requestURL)) {
+        config.headers[ADMIN_UI_REQUEST_HEADER] = '1'
+      }
+      if (shouldMarkUserUIRequest(requestURL)) {
+        config.headers[USER_UI_REQUEST_HEADER] = '1'
+      }
     }
 
     return config
@@ -127,6 +144,23 @@ apiClient.interceptors.response.use(
           code: 'OPS_DISABLED',
           message: apiData.message || error.message,
           url
+        })
+      }
+
+      if (status === 423 && apiData.code === 'ADMIN_COMPLIANCE_ACK_REQUIRED') {
+        try {
+          window.dispatchEvent(new CustomEvent('admin-compliance-required', {
+            detail: apiData.metadata || {}
+          }))
+        } catch {
+          // ignore event failures
+        }
+
+        return Promise.reject({
+          status,
+          code: apiData.code,
+          message: apiData.message || error.message,
+          metadata: apiData.metadata,
         })
       }
 

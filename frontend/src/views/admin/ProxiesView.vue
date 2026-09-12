@@ -541,7 +541,7 @@
             class="input mb-2"
             :placeholder="t('admin.proxies.expiryDaysPlaceholder')"
           />
-          <input v-model="createForm.expires_at" type="date" class="input" />
+          <input v-model="createForm.expires_at" type="date" max="9999-12-31" class="input" />
         </div>
         <div>
           <label class="input-label">{{ t('admin.proxies.fallbackMode') }}</label>
@@ -787,7 +787,7 @@
             class="input mb-2"
             :placeholder="t('admin.proxies.expiryDaysPlaceholder')"
           />
-          <input v-model="editForm.expires_at" type="date" class="input" />
+          <input v-model="editForm.expires_at" type="date" max="9999-12-31" class="input" />
         </div>
         <div>
           <label class="input-label">{{ t('admin.proxies.fallbackMode') }}</label>
@@ -1890,6 +1890,16 @@ const qualityTargetLabel = (target: string) => {
       return 'Anthropic'
     case 'gemini':
       return 'Gemini'
+    case 'grok':
+      return 'Grok'
+    case 'kimi':
+      return 'Kimi'
+    case 'zhipu':
+      return 'Zhipu GLM'
+    case 'deepseek':
+      return 'DeepSeek'
+    case 'minimax':
+      return 'MiniMax'
     default:
       return target
   }
