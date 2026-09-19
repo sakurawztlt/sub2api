@@ -596,7 +596,7 @@ export default {
       "responsesWebsocketsV2": "Responses WebSocket v2",
       "responsesWebsocketsV2Desc": "Disabled by default. Enable to allow responses_websockets_v2 capability (still gated by global and account-type switches).",
       "wsMode": "WS mode",
-      "wsModeDesc": "Only applies to the current OpenAI account type.",
+      "wsModeDesc": "Applies only to the current OpenAI account type. Select Off to disable WS. Other modes use the selected connection method only when gateway.openai_ws.mode_router_v2_enabled=true; otherwise, they use the context pool.",
       "wsModeOff": "Off (off)",
       "wsModeCtxPool": "Context Pool (ctx_pool)",
       "wsModePassthrough": "Passthrough (passthrough)",
@@ -604,7 +604,7 @@ export default {
       "wsModeShared": "Shared (shared)",
       "wsModeDedicated": "Dedicated (dedicated)",
       "wsModeConcurrencyHint": "When WS mode is enabled, account concurrency becomes the WS connection pool limit for this account.",
-      "wsModePassthroughHint": "Passthrough and HTTP bridge modes do not use the WS connection pool.",
+      "wsModePassthroughHint": "The gateway opens a separate upstream WS connection for each client session, without using a connection pool.",
       "oauthResponsesWebsocketsV2": "OAuth WebSocket Mode",
       "oauthResponsesWebsocketsV2Desc": "Only applies to OpenAI OAuth. This account can use OpenAI WebSocket Mode only when enabled.",
       "apiKeyResponsesWebsocketsV2": "API Key WebSocket Mode",
@@ -690,7 +690,9 @@ export default {
       "codexImageToolPolicyAllow": "Allow",
       "codexImageToolPolicyAllowDesc": "Default behavior. Keep client-provided image_generation tools.",
       "codexImageToolPolicyStrip": "Remove",
-      "codexImageToolPolicyStripDesc": "Delete image_generation tools and matching tool_choice before forwarding."
+      "codexImageToolPolicyStripDesc": "Delete image_generation tools and matching tool_choice before forwarding.",
+      "wsModeCtxPoolHint": "The gateway gets and reuses upstream WS connections from a pool, with the pool limit determined by gateway configuration.",
+      "wsModeHttpBridgeHint": "The gateway converts client WS requests to upstream HTTP requests, then converts SSE streaming responses back into WS messages."
     },
     "grok": {
       "baseUrlHint": "Grok OAuth accounts forward to the official xAI API base URL.",

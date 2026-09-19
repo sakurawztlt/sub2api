@@ -653,6 +653,12 @@ func extractQuotedLiteralAfterPrint(text string) (string, bool) {
 // Streaming: ResponsesStreamEvent → []AnthropicStreamEvent (stateful converter)
 // ---------------------------------------------------------------------------
 
+// responsesTextPart identifies one output_text part of a streamed response.
+type responsesTextPart struct {
+	OutputIndex  int
+	ContentIndex int
+}
+
 // ResponsesEventToAnthropicState tracks state for converting a sequence of
 // Responses SSE events directly into Anthropic SSE events.
 type responsesTextPartKey struct {
@@ -701,6 +707,10 @@ type ResponsesEventToAnthropicState struct {
 
 	// OutputIndexToBlockIdx maps Responses output_index → Anthropic content block index.
 	OutputIndexToBlockIdx map[int]int
+	textByPart            map[responsesTextPart]*strings.Builder
+	textDelivered         bool
+	textRecoveryDisabled  bool
+	recoveryTextBytes     int
 
 	// Raw OpenAI-side usage as observed on the wire. The Anthropic-side
 	// usage fields (InputTokens / CacheCreation / CacheRead / OutputTokens)
@@ -840,6 +850,7 @@ func (s *ResponsesEventToAnthropicState) SetCodeExecutionFallbackArgs(raw string
 // NewResponsesEventToAnthropicState returns an initialised stream state.
 func NewResponsesEventToAnthropicState() *ResponsesEventToAnthropicState {
 	return &ResponsesEventToAnthropicState{
+		textByPart:               make(map[responsesTextPart]*strings.Builder),
 		OutputIndexToBlockIdx:    make(map[int]int),
 		webSearchCitationSources: make(map[string]webSearchCitationSource),
 		outputTextByPart:         make(map[responsesTextPartKey]*strings.Builder),
@@ -874,7 +885,7 @@ func ResponsesEventToAnthropicEvents(
 		return resToAnthHandleTextDone(evt, state)
 	case "response.content_part.done":
 		return resToAnthHandleContentPartDone(evt, state)
-	case "response.function_call_arguments.delta":
+	case "response.function_call_arguments.delta", "response.custom_tool_call_input.delta":
 		return resToAnthHandleFuncArgsDelta(evt, state)
 	case "response.function_call_arguments.done":
 		return resToAnthHandleFuncArgsDone(evt, state)
@@ -1126,7 +1137,18 @@ func resToAnthHandleOutputItemAdded(evt *ResponsesStreamEvent, state *ResponsesE
 }
 
 func resToAnthHandleTextDelta(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
-	if evt.Delta == "" {
+	return resToAnthEmitText(evt.Delta, resToAnthTextPartOf(evt), state)
+}
+
+func resToAnthTextPartOf(evt *ResponsesStreamEvent) responsesTextPart {
+	return responsesTextPart{OutputIndex: evt.OutputIndex, ContentIndex: evt.ContentIndex}
+}
+
+// resToAnthEmitText opens a text block when needed, emits text, and records it
+// against its part so that a later payload for the same part is reconciled
+// against what the client already received.
+func resToAnthEmitText(text string, part responsesTextPart, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
+	if text == "" {
 		return nil
 	}
 	state.PendingCodeExecutionText = ""
@@ -1139,7 +1161,7 @@ func resToAnthHandleTextDelta(evt *ResponsesStreamEvent, state *ResponsesEventTo
 		idx := state.ContentBlockIndex
 		state.ContentBlockOpen = true
 		state.CurrentBlockType = "text"
-		state.OutputIndexToBlockIdx[evt.OutputIndex] = idx
+		state.OutputIndexToBlockIdx[part.OutputIndex] = idx
 
 		events = append(events, AnthropicStreamEvent{
 			Type:  "content_block_start",
@@ -1151,10 +1173,36 @@ func resToAnthHandleTextDelta(evt *ResponsesStreamEvent, state *ResponsesEventTo
 		})
 	}
 
+	// Recovery must not undo the existing bounded stream-text retention.
+	// Once the budget is exhausted, stream deltas normally and skip recovery
+	// instead of retaining unbounded text or guessing at an emitted prefix.
+	if !state.textRecoveryDisabled {
+		delivered, known := state.textByPart[part]
+		if (!known && len(state.textByPart) >= maxCitationTextParts) ||
+			state.recoveryTextBytes+len(text) > maxCitationTextBytesTotal ||
+			(known && delivered.Len()+len(text) > maxCitationTextBytesPerPart) ||
+			(!known && len(text) > maxCitationTextBytesPerPart) {
+			state.textRecoveryDisabled = true
+			state.textByPart = nil
+			state.recoveryTextBytes = 0
+		} else {
+			if !known {
+				if state.textByPart == nil {
+					state.textByPart = make(map[responsesTextPart]*strings.Builder)
+				}
+				delivered = &strings.Builder{}
+				state.textByPart[part] = delivered
+			}
+			_, _ = delivered.WriteString(text)
+			state.recoveryTextBytes += len(text)
+		}
+	}
+	state.textDelivered = true
+
 	idx := state.ContentBlockIndex
 	partKey := responsesTextPartKey{
-		OutputIndex:  evt.OutputIndex,
-		ContentIndex: evt.ContentIndex,
+		OutputIndex:  part.OutputIndex,
+		ContentIndex: part.ContentIndex,
 	}
 	if !state.citationTrackingDisabled {
 		if state.outputTextByPart == nil {
@@ -1176,8 +1224,8 @@ func resToAnthHandleTextDelta(evt *ResponsesStreamEvent, state *ResponsesEventTo
 				builder = &strings.Builder{}
 				state.outputTextByPart[partKey] = builder
 			}
-			if builder.Len()+len(evt.Delta) > maxCitationTextBytesPerPart ||
-				state.cachedOutputTextBytes+len(evt.Delta) > maxCitationTextBytesTotal {
+			if builder.Len()+len(text) > maxCitationTextBytesPerPart ||
+				state.cachedOutputTextBytes+len(text) > maxCitationTextBytesTotal {
 				if state.overflowedTextParts == nil {
 					state.overflowedTextParts = make(map[responsesTextPartKey]struct{})
 				}
@@ -1185,8 +1233,8 @@ func resToAnthHandleTextDelta(evt *ResponsesStreamEvent, state *ResponsesEventTo
 				state.cachedOutputTextBytes -= builder.Len()
 				delete(state.outputTextByPart, partKey)
 			} else {
-				_, _ = builder.WriteString(evt.Delta)
-				state.cachedOutputTextBytes += len(evt.Delta)
+				_, _ = builder.WriteString(text)
+				state.cachedOutputTextBytes += len(text)
 			}
 		}
 	}
@@ -1195,7 +1243,7 @@ func resToAnthHandleTextDelta(evt *ResponsesStreamEvent, state *ResponsesEventTo
 		Index: &idx,
 		Delta: &AnthropicDelta{
 			Type: "text_delta",
-			Text: evt.Delta,
+			Text: text,
 		},
 	})
 	// Codex-compatible streams sometimes omit annotation events entirely and
@@ -1327,12 +1375,15 @@ func resToAnthHandleTextAnnotationAddedWithRunes(
 }
 
 func resToAnthHandleTextDone(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
-	if len(state.webSearchCitationSources) == 0 {
+	if state.MessageStopSent {
 		return resToAnthHandleBlockDone(state)
 	}
-	var events []AnthropicStreamEvent
+	events := resToAnthRecoverText(evt.Text, resToAnthTextPartOf(evt), state)
+	if len(state.webSearchCitationSources) == 0 {
+		return append(events, resToAnthHandleBlockDone(state)...)
+	}
 	if state.incrementalLiteralCites {
-		events = resToAnthHandleLiteralURLCitationsIncremental(state, true)
+		events = append(events, resToAnthHandleLiteralURLCitationsIncremental(state, true)...)
 	}
 	// The public Responses API normally emits annotation.added before this
 	// event. The Codex-compatible HTTP stream used by the relay can instead
@@ -2390,6 +2441,7 @@ func resToAnthHandleCompleted(evt *ResponsesStreamEvent, state *ResponsesEventTo
 	}
 
 	var events []AnthropicStreamEvent
+	events = append(events, resToAnthRecoverTerminalText(evt, state)...)
 	if evt.Response != nil {
 		events = append(events, resToAnthHandleTerminalResponseAnnotations(evt.Response, state)...)
 	}
@@ -2769,4 +2821,49 @@ func urlEscapeForSynth(s string) string {
 		return "search"
 	}
 	return string(out)
+}
+
+func resToAnthRecoverText(text string, part responsesTextPart, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
+	if state.textRecoveryDisabled {
+		return nil
+	}
+	builder, known := state.textByPart[part]
+	if !known && state.textDelivered {
+		// The payload is indexed differently from every delta seen so far, so
+		// which part it finishes cannot be established. Recovering it could
+		// repeat an answer the client already has, which is worse than leaving
+		// a partially delivered one alone.
+		return nil
+	}
+
+	var delivered string
+	if known {
+		delivered = builder.String()
+	}
+	if text == delivered || !strings.HasPrefix(text, delivered) {
+		return nil
+	}
+	return resToAnthEmitText(text[len(delivered):], part, state)
+}
+
+func resToAnthRecoverTerminalText(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
+	if state.textDelivered || evt.Response == nil {
+		return nil
+	}
+
+	var events []AnthropicStreamEvent
+	for outputIndex, item := range evt.Response.Output {
+		if item.Type != "message" {
+			continue
+		}
+		for contentIndex, content := range item.Content {
+			if content.Type != "output_text" {
+				continue
+			}
+			part := responsesTextPart{OutputIndex: outputIndex, ContentIndex: contentIndex}
+			events = append(events, resToAnthEmitText(content.Text, part, state)...)
+		}
+	}
+	// The caller reconciles citations before closing the recovered text block.
+	return events
 }

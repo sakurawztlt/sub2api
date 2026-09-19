@@ -200,11 +200,10 @@ func (s *TokenRefreshService) processRefresh() {
 
 	for i := range accounts {
 		account := &accounts[i]
-		// Permanently disabled accounts must not be kept alive by the background
-		// OAuth refresher. The local repository still uses the legacy candidate
-		// interface, so enforce this at the service boundary as a fail-safe for
-		// both narrow candidate queries and the ListActive compatibility fallback.
-		if !account.Schedulable {
+		// A paused active account still needs valid credentials for quota probes.
+		// Refreshing its token never re-enables scheduling. Permanently rejected
+		// or KYC-blocked accounts stay excluded even through a legacy repository.
+		if account.Status != StatusActive {
 			skipped++
 			continue
 		}

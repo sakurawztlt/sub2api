@@ -169,6 +169,17 @@ func TestComputeFinalAnthropicBeta_OAuthMimic_IgnoresClientBeta(t *testing.T) {
 	require.True(t, ok)
 	require.False(t, strings.Contains(final, "custom-experimental-beta"),
 		"mimic 路径必须忽略客户端 anthropic-beta header")
+	require.False(t, anthropicBetaTokensContains(final, claude.BetaMidConversationOutputConfig),
+		"new optional betas must not alter the captured default disguise profile")
+
+	// 显式 dropSet 保持该可选 beta 缺席，且不会因此放行客户端未知 beta。
+	dropped, ok := s.computeFinalAnthropicBeta("oauth", true, "claude-sonnet-4-6", hdr, []byte(`{}`),
+		map[string]struct{}{claude.BetaMidConversationOutputConfig: {}})
+	require.True(t, ok)
+	require.False(t, anthropicBetaTokensContains(dropped, claude.BetaMidConversationOutputConfig),
+		"显式 dropSet 后仍不能默认注入可选 beta")
+	require.False(t, strings.Contains(dropped, "custom-experimental-beta"),
+		"dropSet 存在时 mimic 路径仍必须忽略客户端 anthropic-beta header")
 }
 
 func TestComputeFinalAnthropicBeta_OAuthTransparent_NonHaiku_PreservesClientContextManagement(t *testing.T) {

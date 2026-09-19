@@ -751,7 +751,7 @@ export default {
       "validationFieldRequired": "{field} 不能为空",
       "validationEasyPayCustomMethodRequired": "每个易支付自定义方式都必须填写支付方式和上游 type",
       "validationEasyPayCustomMethodTypeInvalid": "易支付自定义支付方式只能包含小写字母、数字、下划线和短横线",
-      "validationEasyPayCustomMethodUpstreamTypeInvalid": "易支付上游 type 只能包含小写字母、数字、下划线和短横线",
+      "validationEasyPayCustomMethodUpstreamTypeInvalid": "易支付上游 type 只能包含小写字母、数字、点号、下划线和短横线",
       "validationEasyPayCustomMethodReserved": "易支付自定义支付方式不能使用内置的 alipay 或 wxpay",
       "validationEasyPayCustomMethodPrefixReserved": "易支付自定义支付方式不能以 alipay 或 wxpay 开头",
       "validationEasyPayCustomMethodDuplicate": "易支付自定义支付方式不能重复",
@@ -1084,7 +1084,7 @@ export default {
     },
     "openaiFastPolicy": {
       "title": "OpenAI Fast/Flex 策略",
-      "description": "基于请求体 service_tier 字段拦截/过滤/透传 OpenAI fast(priority)、ultrafast 与 flex 请求；仅作用于 OpenAI 网关。",
+      "description": "基于请求体 service_tier 字段拦截/过滤/透传 OpenAI fast(priority)、ultrafast 与 flex 请求；仅作用于 OpenAI 网关。“全部 tier 值”仅包含显式传入的 tier。",
       "empty": "尚未配置任何规则。点击下方按钮新增。",
       "ruleHeader": "规则 #{index}",
       "removeRule": "删除规则",
@@ -1130,7 +1130,8 @@ export default {
         "filter": "过滤",
         "block": "拦截",
         "force_priority": "强制 priority"
-      }
+      },
+      "tierMissing": "省略 tier"
     },
     "wechatConnect": {
       "title": "微信登录",

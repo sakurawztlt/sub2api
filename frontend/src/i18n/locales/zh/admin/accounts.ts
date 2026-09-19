@@ -683,7 +683,7 @@ export default {
       "responsesWebsocketsV2": "Responses WebSocket v2",
       "responsesWebsocketsV2Desc": "默认关闭。开启后可启用 responses_websockets_v2 协议能力（受网关全局开关与账号类型开关约束）。",
       "wsMode": "WS mode",
-      "wsModeDesc": "仅对当前 OpenAI 账号类型生效。",
+      "wsModeDesc": "仅对当前 OpenAI 账号类型生效。选择“关闭”可禁用 WS；其余模式需全局 gateway.openai_ws.mode_router_v2_enabled=true 才按所选方式连接，未开启时统一使用上下文池。",
       "wsModeOff": "关闭（off）",
       "wsModeCtxPool": "上下文池（ctx_pool）",
       "wsModePassthrough": "透传（passthrough）",
@@ -691,7 +691,7 @@ export default {
       "wsModeShared": "共享（shared）",
       "wsModeDedicated": "独享（dedicated）",
       "wsModeConcurrencyHint": "启用 WS mode 后，该账号并发数将作为该账号 WS 连接池上限。",
-      "wsModePassthroughHint": "passthrough 与 http_bridge 模式不使用 WS 连接池。",
+      "wsModePassthroughHint": "网关为每个客户端会话单独建立上游 WS 连接，不使用连接池。",
       "oauthResponsesWebsocketsV2": "OAuth WebSocket Mode",
       "oauthResponsesWebsocketsV2Desc": "仅对 OpenAI OAuth 生效。开启后该账号才允许使用 OpenAI WebSocket Mode 协议。",
       "apiKeyResponsesWebsocketsV2": "API Key WebSocket Mode",
@@ -777,7 +777,9 @@ export default {
       "codexImageToolPolicyAllow": "放行",
       "codexImageToolPolicyAllowDesc": "默认行为，保留客户端显式发送的 image_generation tool。",
       "codexImageToolPolicyStrip": "移除",
-      "codexImageToolPolicyStripDesc": "转发前删除 image_generation tool 和指向它的 tool_choice。"
+      "codexImageToolPolicyStripDesc": "转发前删除 image_generation tool 和指向它的 tool_choice。",
+      "wsModeCtxPoolHint": "网关从连接池获取并复用上游 WS 连接，连接池上限由网关配置决定。",
+      "wsModeHttpBridgeHint": "网关将客户端 WS 请求转换为上游 HTTP 请求，再将 SSE 流式响应转换为 WS 消息返回。"
     },
     "grok": {
       "baseUrlHint": "Grok OAuth 账号会转发到官方 xAI API Base URL。",

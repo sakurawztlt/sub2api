@@ -237,6 +237,98 @@ func (s *AccountRepoSuite) TestList() {
 	s.Require().Equal(int64(2), page.Total)
 }
 
+func (s *AccountRepoSuite) TestListOAuthRefreshCandidatePage_GrokCursorAndExclusions() {
+	now := time.Now().UTC()
+	valid1 := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:     "grok-oauth-page-1",
+		Platform: service.PlatformGrok,
+		Type:     service.AccountTypeOAuth,
+		Status:   service.StatusActive,
+		Credentials: map[string]any{
+			"access_token":  "access-1",
+			"refresh_token": "refresh-1",
+			"expires_at":    now.Add(30 * time.Minute).Format(time.RFC3339),
+		},
+	})
+	// Paused but active OAuth accounts (schedulable=false) must remain refresh
+	// candidates so their stored access_token does not silently expire.
+	paused := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:        "grok-oauth-paused-included",
+		Platform:    service.PlatformGrok,
+		Type:        service.AccountTypeOAuth,
+		Status:      service.StatusActive,
+		Credentials: map[string]any{"refresh_token": "refresh-paused"},
+	})
+	s.Require().NoError(s.client.Account.UpdateOneID(paused.ID).SetSchedulable(false).Exec(s.ctx))
+	mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:     "grok-api-key-excluded",
+		Platform: service.PlatformGrok,
+		Type:     service.AccountTypeAPIKey,
+		Status:   service.StatusActive,
+		Credentials: map[string]any{
+			"api_key":       "api-key",
+			"refresh_token": "must-not-make-api-key-eligible",
+		},
+	})
+	valid2 := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:        "grok-oauth-page-2",
+		Platform:    service.PlatformGrok,
+		Type:        service.AccountTypeOAuth,
+		Status:      service.StatusActive,
+		Credentials: map[string]any{"refresh_token": "refresh-2"},
+	})
+	mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:        "grok-oauth-blank-refresh-excluded",
+		Platform:    service.PlatformGrok,
+		Type:        service.AccountTypeOAuth,
+		Status:      service.StatusActive,
+		Credentials: map[string]any{"refresh_token": "   "},
+	})
+	valid3 := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:        "grok-oauth-page-3",
+		Platform:    service.PlatformGrok,
+		Type:        service.AccountTypeOAuth,
+		Status:      service.StatusActive,
+		Credentials: map[string]any{"refresh_token": "refresh-3"},
+	})
+	cooldown := mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:        "grok-oauth-retry-cooldown-excluded",
+		Platform:    service.PlatformGrok,
+		Type:        service.AccountTypeOAuth,
+		Status:      service.StatusActive,
+		Credentials: map[string]any{"refresh_token": "refresh-cooldown"},
+	})
+	s.Require().NoError(s.repo.SetTempUnschedulable(s.ctx, cooldown.ID, now.Add(10*time.Minute), "token refresh retry exhausted: timeout"))
+	mustCreateAccount(s.T(), s.client, &service.Account{
+		Name:        "openai-oauth-excluded",
+		Platform:    service.PlatformOpenAI,
+		Type:        service.AccountTypeOAuth,
+		Status:      service.StatusActive,
+		Credentials: map[string]any{"refresh_token": "refresh-openai"},
+	})
+
+	options := service.OAuthRefreshPageOptions{
+		Platforms:            []string{service.PlatformGrok},
+		Limit:                2,
+		ActiveOnly:           true,
+		RequireRefreshToken:  true,
+		ExcludeRetryCooldown: true,
+	}
+	firstPage, err := s.repo.ListOAuthRefreshCandidatePage(s.ctx, options)
+	s.Require().NoError(err)
+	first := firstPage.Accounts
+	s.Require().Len(first, 2)
+	s.Require().Equal([]int64{valid1.ID, paused.ID}, []int64{first[0].ID, first[1].ID})
+
+	options.AfterID = first[len(first)-1].ID
+	secondPage, err := s.repo.ListOAuthRefreshCandidatePage(s.ctx, options)
+	s.Require().NoError(err)
+	second := secondPage.Accounts
+	s.Require().Len(second, 2)
+	s.Require().Equal([]int64{valid2.ID, valid3.ID}, []int64{second[0].ID, second[1].ID})
+	s.Require().NotContains([]int64{first[0].ID, first[1].ID}, second[0].ID)
+}
+
 func (s *AccountRepoSuite) TestListWithFilters() {
 	tests := []struct {
 		name        string

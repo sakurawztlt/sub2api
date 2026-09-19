@@ -118,3 +118,12 @@ func TestCreateGeminiReqClient_ForceHTTP2Disabled(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "", forceHTTPVersion(t, client))
 }
+
+func TestGetSharedReqClient_ImpersonateUsesFirefoxFingerprint(t *testing.T) {
+	sharedReqClients = sync.Map{}
+	client, err := getSharedReqClient(reqClientOptions{Timeout: time.Second, Impersonate: true})
+	require.NoError(t, err)
+	// chatgpt.com 的 Cloudflare 会质询 req 内置的 Chrome/120 伪装，必须保持 Firefox 指纹。
+	require.Contains(t, client.Headers.Get("User-Agent"), "Firefox/")
+	require.NotContains(t, client.Headers.Get("User-Agent"), "Chrome/")
+}

@@ -118,10 +118,3 @@ func TestIsUpstreamNetworkError_NoFalsePositives(t *testing.T) {
 		})
 	}
 }
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

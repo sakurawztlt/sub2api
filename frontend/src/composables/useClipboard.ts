@@ -23,6 +23,8 @@ function fallbackCopy(text: string): boolean {
   textarea.select()
   try {
     return document.execCommand('copy')
+  } catch {
+    return false
   } finally {
     document.body.removeChild(textarea)
   }
