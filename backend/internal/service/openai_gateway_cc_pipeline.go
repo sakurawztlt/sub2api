@@ -157,6 +157,11 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 	userAgent string,
 	grokCacheIdentity string,
 ) (*http.Response, error) {
+	// DeepSeek thinking mode 要求历史 assistant 回传 reasoning_content。
+	// Responses→CC 回退在加密-only / 缺 reasoning item 且缓存未命中时会漏掉该
+	// 字段，上游 400 "The `reasoning_content` in the thinking mode must be
+	// passed back to the API"。在共用出站点补空格占位，真实明文不覆盖。
+	body = ensureDeepSeekChatReasoningPlaceholders(account, body)
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	upstreamReq, err := http.NewRequestWithContext(upstreamCtx, http.MethodPost, targetURL, bytes.NewReader(body))
 	releaseUpstreamCtx()
@@ -186,21 +191,35 @@ func (s *OpenAIGatewayService) sendCCUpstreamRequest(
 			}
 		}
 	}
-	if userAgent != "" {
+	grokCLITarget := account.Platform == PlatformGrok && isGrokCLIProxyTarget(targetURL)
+	if grokCLITarget {
+		applyGrokCLIHeaders(upstreamReq.Header)
+	} else if userAgent != "" {
 		upstreamReq.Header.Set("user-agent", userAgent)
+	} else if account.Platform != PlatformGrok {
+		applyOpenAIOAuthCodexUserAgentFallback(upstreamReq.Header, account)
 	}
 	if account.Platform == PlatformGrok {
-		if account.IsGrokOAuth() {
+		applyGrokCacheHeaders(upstreamReq.Header, grokCacheIdentity)
+	}
+	// 官方 OpenCode / Command Code 上游收敛为规范客户端 UA：客户端透传的编程库
+	// UA 会命中其前置 Cloudflare bot 拦截（CF 1010/403），并被计入账号 403 strike。
+	applyOpenCodeUpstreamUserAgent(account, targetURL, upstreamReq.Header)
+
+	// Explicit account overrides retain priority on compatible providers. The
+	// official Grok CLI identity and server-derived conversation key are locked.
+	account.ApplyHeaderOverrides(upstreamReq.Header)
+	if account.Platform == PlatformGrok {
+		if grokCLITarget {
 			applyGrokCLIHeaders(upstreamReq.Header)
 		}
 		applyGrokCacheHeaders(upstreamReq.Header, grokCacheIdentity)
 	}
-	account.ApplyHeaderOverrides(upstreamReq.Header)
 	applyOpenCodeSessionHeader(c, account, targetURL, upstreamReq.Header, body)
 
 	proxyURL := ""
 	if account.Proxy != nil {
-		proxyURL = account.Proxy.URL()
+		proxyURL = account.Proxy.ActiveURL()
 	}
 	resp, err := s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 	if err != nil {

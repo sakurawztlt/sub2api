@@ -143,7 +143,8 @@ func ApplyCLIBillingHeaders(req *http.Request, accessToken string) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set(CLITokenAuthHeader, CLITokenAuthValue)
 	req.Header.Set(CLIClientVersionHeader, CLIClientVersion)
-	req.Header.Set("User-Agent", CLIBillingUserAgent)
+	req.Header.Set("User-Agent", CLIUserAgent(CLIClientVersion))
+	req.Header.Set("x-grok-client-mode", CLIClientMode)
 }
 
 // ParseBillingPayload unmarshals a billing API response body.

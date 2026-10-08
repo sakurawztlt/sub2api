@@ -203,7 +203,9 @@ func TestDashboardService_CacheMiss_StoresCache(t *testing.T) {
 	}
 	svc := NewDashboardService(repo, aggRepo, cache, cfg)
 
+	before := time.Now().Unix()
 	got, err := svc.GetDashboardStats(context.Background())
+	after := time.Now().Unix()
 	require.NoError(t, err)
 	require.Equal(t, stats, got)
 	require.Equal(t, int32(1), atomic.LoadInt32(&repo.calls))
@@ -211,7 +213,8 @@ func TestDashboardService_CacheMiss_StoresCache(t *testing.T) {
 	require.Equal(t, int32(1), atomic.LoadInt32(&cache.setCalls))
 	entry := cache.readLastEntry(t)
 	require.Equal(t, stats, entry.Stats)
-	require.WithinDuration(t, time.Now(), time.Unix(entry.UpdatedAt, 0), time.Second)
+	require.GreaterOrEqual(t, entry.UpdatedAt, before)
+	require.LessOrEqual(t, entry.UpdatedAt, after)
 }
 
 func TestDashboardService_CacheDisabled_SkipsCache(t *testing.T) {

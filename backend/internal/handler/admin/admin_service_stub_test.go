@@ -11,6 +11,8 @@ import (
 )
 
 type stubAdminService struct {
+	updateAccountCalls                  int
+	updateAccountExtraCalls             int
 	users                               []service.User
 	apiKeys                             []service.APIKey
 	groups                              []service.Group
@@ -537,6 +539,7 @@ func (s *stubAdminService) RecoverDuplicateAccount(ctx context.Context, id int64
 }
 
 func (s *stubAdminService) UpdateAccount(ctx context.Context, id int64, input *service.UpdateAccountInput) (*service.Account, error) {
+	s.updateAccountCalls++
 	s.lastUpdateAccountInput = input
 	if s.updateAccountErr != nil {
 		return nil, s.updateAccountErr
@@ -546,6 +549,7 @@ func (s *stubAdminService) UpdateAccount(ctx context.Context, id int64, input *s
 }
 
 func (s *stubAdminService) UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error {
+	s.updateAccountExtraCalls++
 	return nil
 }
 

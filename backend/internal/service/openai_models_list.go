@@ -6,26 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
-
-// ApplyPinnedCodexModelsMapping is used by pinned discovery and its scheduler
-// fallback. The ordinary (non-pinned) Codex path retains its local catalog policy.
-func ApplyPinnedCodexModelsMapping(response *OpenAIModelsResponse, account *Account, group *Group) error {
-	if group == nil || group.Platform != PlatformOpenAI || !group.CodexModelsManifestConfig.Enabled {
-		return nil
-	}
-	body, err := projectAccountModelsBody(response.Body, account, group, true)
-	if err != nil {
-		return err
-	}
-	response.Body = body
-	response.ETag = codexModelsManifestBodyETag(body)
-	return nil
-}
 
 // FetchOpenAIModelsList discovers a single account's raw public model catalog.
 // API keys use the standard endpoint; OAuth reuses the authenticated, cached
@@ -84,60 +70,6 @@ func (s *OpenAIGatewayService) FetchOpenAIModelsList(ctx context.Context, accoun
 		return nil, invalidOpenAIModelsList(fmt.Errorf("upstream returned 304 without a cached catalog"))
 	}
 	return response, nil
-}
-
-// FetchPinnedOpenAIModelsList includes explicitly enabled scheduler fallback.
-// An authoritative empty catalog is success, including after group filtering.
-func (s *OpenAIGatewayService) FetchPinnedOpenAIModelsList(ctx context.Context, group *Group, maxAccountSwitches int, ifNoneMatch string) (*OpenAIModelsResponse, *Account, error) {
-	fetch := func(ctx context.Context, account *Account) (*OpenAIModelsResponse, error) {
-		response, err := s.FetchOpenAIModelsList(ctx, account)
-		if err != nil {
-			return nil, err
-		}
-		response.Body, err = projectAccountModelsBody(response.Body, account, group, false)
-		return response, err
-	}
-	results, err := s.fetchPinnedOpenAIModels(ctx, group, fetch)
-	if err != nil && ctx.Err() == nil && group != nil && group.CodexModelsManifestConfig.FallbackToScheduler {
-		results, err = s.fetchScheduledOpenAIModels(ctx, group, maxAccountSwitches, fetch)
-	}
-	if err != nil {
-		return nil, nil, err
-	}
-	models := make([]json.RawMessage, 0)
-	modelIDs := make([]string, 0)
-	byID := make(map[string]json.RawMessage)
-	for _, result := range results {
-		_, entries, err := modelCatalogEntries(result.response.Body, "data")
-		if err != nil {
-			return nil, nil, err
-		}
-		for _, raw := range entries {
-			var model struct {
-				ID string `json:"id"`
-			}
-			if err := json.Unmarshal(raw, &model); err != nil {
-				return nil, nil, err
-			}
-			if _, exists := byID[model.ID]; !exists {
-				byID[model.ID] = raw
-				modelIDs = append(modelIDs, model.ID)
-				models = append(models, raw)
-			}
-		}
-	}
-	if group.ModelAllowlistEnabled() {
-		models = selectModelCatalogEntries(byID, group.ModelAllowlist.FilterForListing(modelIDs))
-	}
-	body, err := json.Marshal(struct {
-		Object string            `json:"object"`
-		Data   []json.RawMessage `json:"data"`
-	}{Object: "list", Data: models})
-	if err != nil {
-		return nil, nil, err
-	}
-	response := &OpenAIModelsResponse{Body: body, ETag: codexModelsManifestBodyETag(body)}
-	return openAIModelsResponseForClient(response, ifNoneMatch), results[0].account, nil
 }
 
 func (s *OpenAIGatewayService) fetchScheduledOpenAIModels(ctx context.Context, group *Group, maxSwitches int, fetch func(context.Context, *Account) (*OpenAIModelsResponse, error)) ([]pinnedOpenAIModelsResult, error) {
@@ -288,6 +220,10 @@ func projectAccountModelsBody(body []byte, account *Account, group *Group, codex
 			continue
 		}
 		seen[id] = struct{}{}
+		if id == target {
+			projected = append(projected, raw)
+			continue
+		}
 		var entry map[string]json.RawMessage
 		if err := json.Unmarshal(raw, &entry); err != nil {
 			return nil, err
@@ -302,11 +238,86 @@ func projectAccountModelsBody(body []byte, account *Account, group *Group, codex
 		}
 		projected = append(projected, encoded)
 	}
+	if slices.EqualFunc(entries, projected, func(a, b json.RawMessage) bool { return bytes.Equal(a, b) }) {
+		return body, nil
+	}
 	envelope[field], err = json.Marshal(projected)
 	if err != nil {
 		return nil, err
 	}
 	return json.Marshal(envelope)
+}
+
+// ApplyPinnedCodexModelsMapping projects all remotely discovered Codex catalogs,
+// including ordinary discovery and pinned scheduler fallback. Locally generated
+// catalogs retain their existing policy and do not pass through this function.
+func ApplyPinnedCodexModelsMapping(response *OpenAIModelsResponse, account *Account, group *Group) error {
+	if group == nil || group.Platform != PlatformOpenAI {
+		return nil
+	}
+	body, err := projectAccountModelsBody(response.Body, account, group, true)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(response.Body, body) {
+		response.Body = body
+		response.ETag = codexModelsManifestBodyETag(body)
+	}
+	return nil
+}
+
+// FetchPinnedOpenAIModelsList includes explicitly enabled scheduler fallback.
+// An authoritative empty catalog is success, including after group filtering.
+func (s *OpenAIGatewayService) FetchPinnedOpenAIModelsList(ctx context.Context, group *Group, maxAccountSwitches int, ifNoneMatch string) (*OpenAIModelsResponse, *Account, error) {
+	fetch := func(ctx context.Context, account *Account) (*OpenAIModelsResponse, error) {
+		response, err := s.FetchOpenAIModelsList(ctx, account)
+		if err != nil {
+			return nil, err
+		}
+		response.Body, err = projectAccountModelsBody(response.Body, account, group, false)
+		return response, err
+	}
+	results, err := s.fetchPinnedOpenAIModels(ctx, group, fetch)
+	if err != nil && ctx.Err() == nil && group != nil && group.CodexModelsManifestConfig.FallbackToScheduler {
+		results, err = s.fetchScheduledOpenAIModels(ctx, group, maxAccountSwitches, fetch)
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	models := make([]json.RawMessage, 0)
+	modelIDs := make([]string, 0)
+	byID := make(map[string]json.RawMessage)
+	for _, result := range results {
+		_, entries, err := modelCatalogEntries(result.response.Body, "data")
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, raw := range entries {
+			var model struct {
+				ID string `json:"id"`
+			}
+			if err := json.Unmarshal(raw, &model); err != nil {
+				return nil, nil, err
+			}
+			if _, exists := byID[model.ID]; !exists {
+				byID[model.ID] = raw
+				modelIDs = append(modelIDs, model.ID)
+				models = append(models, raw)
+			}
+		}
+	}
+	if group.ModelAllowlistEnabled() {
+		models = selectModelCatalogEntries(byID, group.ModelAllowlist.FilterForListing(modelIDs))
+	}
+	body, err := json.Marshal(struct {
+		Object string            `json:"object"`
+		Data   []json.RawMessage `json:"data"`
+	}{Object: "list", Data: models})
+	if err != nil {
+		return nil, nil, err
+	}
+	response := &OpenAIModelsResponse{Body: body, ETag: codexModelsManifestBodyETag(body)}
+	return openAIModelsResponseForClient(response, ifNoneMatch), results[0].account, nil
 }
 
 func selectModelCatalogEntries(byID map[string]json.RawMessage, selected []string) []json.RawMessage {

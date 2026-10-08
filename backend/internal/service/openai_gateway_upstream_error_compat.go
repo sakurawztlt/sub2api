@@ -245,16 +245,5 @@ func IsOpenAICompatibleModelNotFound400(respBody []byte) bool {
 }
 
 func isOpenAICompatibleModelNotFound400(respBody []byte) bool {
-	code := strings.TrimSpace(extractUpstreamErrorCode(respBody))
-	if code != "" {
-		return strings.EqualFold(code, "model_not_found")
-	}
-
-	msg := strings.ToLower(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
-	if msg == "" && !gjson.ValidBytes(respBody) {
-		msg = strings.ToLower(strings.TrimSpace(string(respBody)))
-	}
-	return strings.Contains(msg, "unknown provider for model") ||
-		strings.Contains(msg, "model not found") ||
-		strings.Contains(msg, "model is not supported")
+	return isOpenAICompatibleModelNotFoundBody(respBody)
 }

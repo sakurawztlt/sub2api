@@ -458,6 +458,8 @@ type notificationEmailTestSMTPServer struct {
 	listener net.Listener
 	wg       sync.WaitGroup
 	messages atomic.Int64
+	bodiesMu sync.Mutex
+	bodies   []string
 }
 
 func startNotificationEmailTestSMTPServer(t *testing.T) *notificationEmailTestSMTPServer {
@@ -487,6 +489,12 @@ func (s *notificationEmailTestSMTPServer) settings() map[string]string {
 
 func (s *notificationEmailTestSMTPServer) messageCount() int64 {
 	return s.messages.Load()
+}
+
+func (s *notificationEmailTestSMTPServer) messageBodies() []string {
+	s.bodiesMu.Lock()
+	defer s.bodiesMu.Unlock()
+	return append([]string(nil), s.bodies...)
 }
 
 func (s *notificationEmailTestSMTPServer) close() {
@@ -547,6 +555,7 @@ func (s *notificationEmailTestSMTPServer) handleConn(conn net.Conn) {
 			if !writeLine("354 End data with <CR><LF>.<CR><LF>") {
 				return
 			}
+			var body strings.Builder
 			for {
 				dataLine, err := rw.ReadString('\n')
 				if err != nil {
@@ -555,7 +564,11 @@ func (s *notificationEmailTestSMTPServer) handleConn(conn net.Conn) {
 				if strings.TrimRight(dataLine, "\r\n") == "." {
 					break
 				}
+				body.WriteString(dataLine)
 			}
+			s.bodiesMu.Lock()
+			s.bodies = append(s.bodies, body.String())
+			s.bodiesMu.Unlock()
 			s.messages.Add(1)
 			if !writeLine("250 2.0.0 OK") {
 				return

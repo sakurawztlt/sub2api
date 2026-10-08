@@ -1,10 +1,15 @@
 package repository
 
 import (
+	"context"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
+	"github.com/alicebob/miniredis/v2"
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,4 +51,30 @@ func TestBuildRedisOptions(t *testing.T) {
 	optsTLS := buildRedisOptions(cfgTLS)
 	require.NotNil(t, optsTLS.TLSConfig)
 	require.Equal(t, "localhost", optsTLS.TLSConfig.ServerName)
+}
+
+func TestInitRedisServerTimingIsOptIn(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(strconv.FormatBool(enabled), func(t *testing.T) {
+			server := miniredis.RunT(t)
+			cfg := &config.Config{
+				Redis:  config.RedisConfig{Host: server.Host(), Port: mustRedisTimingPort(t, server.Port())},
+				Server: config.ServerConfig{EnableServerTiming: enabled},
+			}
+			client := InitRedis(cfg)
+			t.Cleanup(func() { _ = client.Close() })
+			collector := servertiming.New(time.Now())
+			ctx := servertiming.WithCollector(context.Background(), collector)
+			require.NoError(t, client.Ping(ctx).Err())
+			header := collector.HeaderValue(time.Now(), "bypass")
+			require.Equal(t, !enabled, strings.Contains(header, "commands=0"), "only opt-in deployments may record Redis commands")
+		})
+	}
+}
+
+func mustRedisTimingPort(t *testing.T, value string) int {
+	t.Helper()
+	port, err := strconv.Atoi(value)
+	require.NoError(t, err)
+	return port
 }

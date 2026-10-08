@@ -3,9 +3,13 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
 )
 
@@ -40,6 +44,14 @@ func TestMergeCodexModelsManifestBodiesHandlesSluglessEntries(t *testing.T) {
 	require.Equal(t, "no slug two", envelope.Models[2]["display_name"])
 }
 
+func TestMergeCodexModelsManifestBodiesSingleBody(t *testing.T) {
+	body := `{ "unknown": true, "models": [ { "slug": "model-a" } ] }`
+
+	merged, err := mergeCodexModelsManifestBodies([][]byte{[]byte(body)})
+	require.NoError(t, err)
+	require.Equal(t, body, string(merged))
+}
+
 func TestMergeCodexModelsManifestBodiesRejectsInvalidInput(t *testing.T) {
 	_, err := mergeCodexModelsManifestBodies(nil)
 	require.Error(t, err)
@@ -51,12 +63,10 @@ func TestMergeCodexModelsManifestBodiesRejectsInvalidInput(t *testing.T) {
 	require.Error(t, err, "models 非数组必须报错")
 }
 
-func TestMergeCodexModelsManifestBodiesSingleBody(t *testing.T) {
-	body := `{"models":[{"slug":"model-a"}]}`
-
-	merged, err := mergeCodexModelsManifestBodies([][]byte{[]byte(body)})
+func TestMergeCodexModelsManifestBodiesSingleBodyDeduplicates(t *testing.T) {
+	merged, err := mergeCodexModelsManifestBodies([][]byte{[]byte(`{"models":[{"slug":"a"},{"slug":"a","extra":true}]}`)})
 	require.NoError(t, err)
-	require.JSONEq(t, body, string(merged))
+	require.JSONEq(t, `{"models":[{"slug":"a"}]}`, string(merged))
 }
 
 func TestMergeCodexModelsManifestBodiesUnionAndOrder(t *testing.T) {
@@ -79,4 +89,28 @@ func TestMergeCodexModelsManifestBodiesUnionAndOrder(t *testing.T) {
 	require.Equal(t, "A from first", models[0]["display_name"], "重复 slug 必须取配置顺序靠前账号的条目")
 	require.Equal(t, "model-b", models[1]["slug"])
 	require.Equal(t, "model-c", models[2]["slug"])
+}
+
+func TestFetchPinnedCodexModelsManifestSingleResponsePreservesCachingMetadata(t *testing.T) {
+	body := []byte(`{ "models": [{ "slug": "gpt-6.1-sol", "future": true }], "vendor": "unchanged" }`)
+	account := Account{ID: 811, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Status: StatusActive, Schedulable: true, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "token", "chatgpt_account_id": "account"}}
+	group := &Group{ID: 812, Platform: PlatformOpenAI, CodexModelsManifestConfig: GroupCodexModelsManifestConfig{Enabled: true, AccountIDs: []int64{account.ID}}}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ETag", `"provider-etag"`)
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(upstream.Close)
+	originalURL := chatgptCodexModelsURL
+	chatgptCodexModelsURL = upstream.URL
+	t.Cleanup(func() { chatgptCodexModelsURL = originalURL })
+	svc := &OpenAIGatewayService{cfg: &config.Config{}, accountRepo: splitCodexModelsAccountRepo{all: map[int64][]Account{group.ID: {account}}}}
+	manifest, selected, err := svc.FetchPinnedCodexModelsManifest(context.Background(), group, "0.146.0")
+	require.NoError(t, err)
+	require.Equal(t, account.ID, selected.ID)
+	require.Equal(t, body, manifest.Body)
+	require.Equal(t, `"provider-etag"`, manifest.ETag)
+	require.Equal(t, `"provider-etag"`, manifest.upstreamETag)
+	require.Equal(t, body, manifest.upstreamSourceBody)
 }

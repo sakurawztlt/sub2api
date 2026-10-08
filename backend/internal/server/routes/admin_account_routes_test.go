@@ -25,4 +25,5 @@ func TestRegisterAccountRoutesIncludesBatchUsage(t *testing.T) {
 	}
 
 	require.True(t, registered[http.MethodPost+" /api/v1/admin/accounts/usage/batch"])
+	require.True(t, registered[http.MethodPost+" /api/v1/admin/accounts/:id/duplicate"])
 }

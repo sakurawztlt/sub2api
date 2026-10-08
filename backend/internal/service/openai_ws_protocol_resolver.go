@@ -10,6 +10,9 @@ const (
 	OpenAIUpstreamTransportHTTPSSE              OpenAIUpstreamTransport = "http_sse"
 	OpenAIUpstreamTransportResponsesWebsocket   OpenAIUpstreamTransport = "responses_websockets"
 	OpenAIUpstreamTransportResponsesWebsocketV2 OpenAIUpstreamTransport = "responses_websockets_v2"
+	// OpenAIUpstreamTransportResponsesWebsocketV2Ingress selects accounts for WS ingress,
+	// including HTTP bridge accounts when mode_router_v2 is enabled.
+	OpenAIUpstreamTransportResponsesWebsocketV2Ingress OpenAIUpstreamTransport = "responses_websockets_v2_ingress"
 )
 
 // OpenAIWSProtocolDecision 表示协议决策结果。

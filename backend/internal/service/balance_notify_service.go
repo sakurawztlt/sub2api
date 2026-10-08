@@ -39,9 +39,10 @@ type AccountQuotaReader interface {
 
 // BalanceNotifyService handles balance and quota threshold notifications.
 type BalanceNotifyService struct {
-	emailService *EmailService
-	settingRepo  SettingRepository
-	accountRepo  AccountQuotaReader
+	emailService             *EmailService
+	settingRepo              SettingRepository
+	accountRepo              AccountQuotaReader
+	notificationEmailService *NotificationEmailService
 }
 
 // NewBalanceNotifyService creates a new BalanceNotifyService.
@@ -125,7 +126,7 @@ func (s *BalanceNotifyService) dispatchBalanceLowEmail(ctx context.Context, user
 				slog.Error("panic in balance notification", "recover", r)
 			}
 		}()
-		s.sendBalanceLowEmails(recipients, user.Username, user.Email, newBalance, threshold, siteName, rechargeURL)
+		s.sendBalanceLowEmails(recipients, user.ID, user.Username, user.Email, newBalance, threshold, siteName, rechargeURL)
 	}()
 }
 
@@ -341,17 +342,6 @@ func (s *BalanceNotifyService) sendEmails(recipients []string, subject, body str
 	}
 }
 
-// sendBalanceLowEmails sends balance low notification to all recipients.
-func (s *BalanceNotifyService) sendBalanceLowEmails(recipients []string, userName, userEmail string, balance, threshold float64, siteName, rechargeURL string) {
-	displayName := userName
-	if displayName == "" {
-		displayName = userEmail
-	}
-	subject := fmt.Sprintf("[%s] 余额不足提醒 / Balance Low Alert", sanitizeEmailHeader(siteName))
-	body := s.buildBalanceLowEmailBody(html.EscapeString(displayName), balance, threshold, html.EscapeString(siteName), rechargeURL)
-	s.sendEmails(recipients, subject, body, "user_email", userEmail, "balance", balance)
-}
-
 // sendQuotaAlertEmails sends quota alert notification to admin emails.
 func (s *BalanceNotifyService) sendQuotaAlertEmails(adminEmails []string, accountID int64, accountName, platform string, dim quotaDim, used float64, siteName string) {
 	dimLabel := quotaDimLabels[dim.name]
@@ -476,4 +466,52 @@ func (s *BalanceNotifyService) buildQuotaAlertEmailBody(accountID int64, account
 		limitStr = "无限制 / Unlimited"
 	}
 	return fmt.Sprintf(quotaAlertEmailTemplate, siteName, accountID, accountName, platform, dimLabel, used, limitStr, remaining, thresholdDisplay)
+}
+
+// sendBalanceLowEmails sends balance low notification to all recipients.
+func (s *BalanceNotifyService) sendBalanceLowEmails(recipients []string, userID int64, userName, userEmail string, balance, threshold float64, siteName, rechargeURL string) {
+	displayName := userName
+	if displayName == "" {
+		displayName = userEmail
+	}
+	if s.notificationEmailService != nil {
+		fallbackRecipients := make([]string, 0, len(recipients))
+		for _, to := range recipients {
+			ctx, cancel := context.WithTimeout(context.Background(), emailSendTimeout)
+			err := s.notificationEmailService.Send(ctx, NotificationEmailSendInput{
+				Event:          NotificationEmailEventBalanceLow,
+				RecipientEmail: to,
+				RecipientName:  displayName,
+				UserID:         userID,
+				SourceType:     "balance_low",
+				SourceID:       firstNonEmpty(strconv.FormatInt(userID, 10), userEmail),
+				ReminderKey:    time.Now().UTC().Format("2006-01-02"),
+				Variables: map[string]string{
+					"current_balance": fmt.Sprintf("%.2f", balance),
+					"threshold":       fmt.Sprintf("%.2f", threshold),
+					"recharge_url":    rechargeURL,
+				},
+			})
+			cancel()
+			if err != nil {
+				if shouldFallbackNotificationEmail(err) {
+					slog.Warn("template balance low notification failed; falling back to built-in body", "to", to, "err", err.Error())
+					fallbackRecipients = append(fallbackRecipients, to)
+				} else {
+					slog.Warn("template balance low notification delivery failed; not sending fallback to avoid duplicates", "to", to, "err", err.Error())
+				}
+			}
+		}
+		if len(fallbackRecipients) == 0 {
+			return
+		}
+		recipients = fallbackRecipients
+	}
+	subject := fmt.Sprintf("[%s] 余额不足提醒 / Balance Low Alert", sanitizeEmailHeader(siteName))
+	body := s.buildBalanceLowEmailBody(html.EscapeString(displayName), balance, threshold, html.EscapeString(siteName), rechargeURL)
+	s.sendEmails(recipients, subject, body, "user_email", userEmail, "balance", balance)
+}
+
+func (s *BalanceNotifyService) SetNotificationEmailService(notificationEmailService *NotificationEmailService) {
+	s.notificationEmailService = notificationEmailService
 }

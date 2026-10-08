@@ -210,3 +210,7 @@ func TestSubscriptionBulkAssign_RejectsInvalidUserIDsBeforeExecution(t *testing.
 		})
 	}
 }
+
+func (r *cancellationAwareBulkActionRepo) GetByIDForUpdate(ctx context.Context, id int64) (*service.UserSubscription, error) {
+	return r.GetByID(ctx, id)
+}

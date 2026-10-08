@@ -222,9 +222,8 @@ func TestBuildOAuthRequest_BillingMatchesWireUserAgent(t *testing.T) {
 				}
 				require.NoError(t, err)
 				defer func() { require.NoError(t, req.Body.Close()) }()
-				// Every OAuth path uses the relay's captured profile, including
-				// passthrough with a newer persisted account fingerprint.
-				wantUA := claude.DefaultHeaders["User-Agent"]
+				// All OAuth paths retain the relay profile, including cached account fingerprints.
+				wantUA := claude.DefaultHeaders()["User-Agent"]
 				require.Equal(t, wantUA, getHeaderRaw(req.Header, "User-Agent"))
 				version := ExtractCLIVersion(wantUA)
 				require.Contains(t, gjson.GetBytes(wireBody, "system.0.text").String(),

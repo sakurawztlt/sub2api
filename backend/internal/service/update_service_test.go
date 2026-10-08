@@ -62,3 +62,14 @@ func TestUpdateServicePerformUpdateNoUpdateReturnsSentinel(t *testing.T) {
 	require.True(t, errors.Is(err, ErrNoUpdateAvailable))
 	require.ErrorIs(t, err, ErrNoUpdateAvailable)
 }
+
+func (s *updateServiceGitHubClientStub) FetchRecentReleases(ctx context.Context, repo string, _ int) ([]*GitHubRelease, error) {
+	release, err := s.FetchLatestRelease(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	if release == nil {
+		return nil, nil
+	}
+	return []*GitHubRelease{release}, nil
+}

@@ -5,7 +5,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/cespare/xxhash/v2"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -19,6 +18,20 @@ var ccVersionInBillingRe = regexp.MustCompile(`cc_version=\d+\.\d+\.\d+`)
 var cchPlaceholderRe = regexp.MustCompile(`(x-anthropic-billing-header:[^"]*?\bcch=)(00000)(;)`)
 
 const cchSeed uint64 = 0x6E52736AC806831E
+
+// effectiveBillingUserAgent 选择写进 x-anthropic-billing-header 的 User-Agent。
+// OAuth mimicry 强制使用调用方传入的 mimicUserAgent（与出站 User-Agent 头同源、
+// 同一次请求内取一次复用，保证 cc_version 与出站头版本严格一致），
+// 其余情况使用账号指纹 UA。
+func effectiveBillingUserAgent(mimicUserAgent, tokenType string, mimicClaudeCode bool, fingerprint *Fingerprint) string {
+	if tokenType == "oauth" {
+		return mimicUserAgent
+	}
+	if fingerprint == nil {
+		return ""
+	}
+	return fingerprint.UserAgent
+}
 
 // syncBillingHeaderVersion rewrites cc_version in x-anthropic-billing-header
 // system text blocks to match the version extracted from userAgent.
@@ -73,17 +86,6 @@ func xxHash64Seeded(data []byte, seed uint64) uint64 {
 	d := xxhash.NewWithSeed(seed)
 	_, _ = d.Write(data)
 	return d.Sum64()
-}
-
-// OAuth mimicry forces the built-in User-Agent after applying account fingerprints.
-func effectiveBillingUserAgent(tokenType string, mimicClaudeCode bool, fingerprint *Fingerprint) string {
-	if tokenType == "oauth" && mimicClaudeCode {
-		return claude.DefaultHeaders["User-Agent"]
-	}
-	if fingerprint == nil {
-		return ""
-	}
-	return fingerprint.UserAgent
 }
 
 var ccVersionWithFingerprintInBillingRe = regexp.MustCompile(`cc_version=\d+\.\d+\.\d+\.[0-9a-fA-F]{3}\b`)

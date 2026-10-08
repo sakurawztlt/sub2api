@@ -231,3 +231,7 @@ func TestSubscriptionExpiryService_SMTPConfigReadErrorSkipsReminderScan(t *testi
 
 	require.Zero(t, repo.listCalls)
 }
+
+func (r *subscriptionExpiryRepoStub) GetByIDForUpdate(ctx context.Context, id int64) (*UserSubscription, error) {
+	return r.GetByID(ctx, id)
+}

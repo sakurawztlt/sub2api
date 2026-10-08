@@ -63,16 +63,16 @@ func (h *OpenAIGatewayHandler) Live(c *gin.Context) {
 		zap.Int64("api_key_id", apiKey.ID),
 		zap.Any("group_id", apiKey.GroupID),
 	)
-	if decision := h.checkContentModeration(
+	if decision := h.checkSecurityAudit(
 		c,
 		reqLog,
 		apiKey,
 		subject,
 		service.ContentModerationProtocolOpenAIResponses,
 		model,
-		liveModerationBody(request.Session),
-	); decision != nil && decision.Blocked {
-		h.errorResponse(c, contentModerationStatus(decision), contentModerationErrorCode(decision), decision.Message)
+		request.Session,
+	); decision != nil && !decision.AllowNextStage {
+		h.openAISecurityAuditError(c, decision)
 		return
 	}
 
@@ -97,10 +97,11 @@ func (h *OpenAIGatewayHandler) Live(c *gin.Context) {
 		return
 	}
 
-	userRelease, acquired, err := h.concurrencyHelper.TryAcquireUserSlot(
+	userRelease, acquired, err := h.concurrencyHelper.TryAcquireUserSlotForAPIKey(
 		c.Request.Context(),
 		subject.UserID,
 		subject.Concurrency,
+		apiKey.ID,
 	)
 	if err != nil {
 		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Live concurrency unavailable")

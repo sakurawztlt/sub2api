@@ -42,6 +42,7 @@ type APIKey struct {
 	LastUsedAt          *time.Time
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
+	CurrentConcurrency  int
 	User                *User
 	Group               *Group
 

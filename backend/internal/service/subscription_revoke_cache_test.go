@@ -170,3 +170,7 @@ func TestRestoreSubscription_LiveSubscriptionConflict(t *testing.T) {
 	require.ErrorIs(t, err, ErrSubscriptionRestoreConflict)
 	require.Zero(t, repo.restoreCalls)
 }
+
+func (r *revokeCacheUserSubRepoStub) GetByIDForUpdate(ctx context.Context, id int64) (*UserSubscription, error) {
+	return r.GetByID(ctx, id)
+}

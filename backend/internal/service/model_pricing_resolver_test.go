@@ -24,54 +24,6 @@ func newTestBillingServiceForResolver() *BillingService {
 	return bs
 }
 
-func TestResolve_GroupPricingOverridesChannel(t *testing.T) {
-	r := newResolverWithChannel(t, []ChannelModelPricing{{
-		Platform: "anthropic", Models: []string{"claude-sonnet-4"}, BillingMode: BillingModeToken,
-		InputPrice: testPtrFloat64(10e-6), OutputPrice: testPtrFloat64(20e-6),
-	}})
-	group := &Group{ID: 100, ModelPricing: []ChannelModelPricing{{
-		Models: []string{"claude-sonnet-*"}, BillingMode: BillingModeToken,
-		InputPrice: testPtrFloat64(1e-6), OutputPrice: testPtrFloat64(2e-6),
-	}}}
-	resolved := r.Resolve(context.Background(), PricingInput{Model: "claude-sonnet-4", GroupID: groupIDPtr(), Group: group})
-	require.Equal(t, PricingSourceGroup, resolved.Source)
-	require.InDelta(t, 1e-6, resolved.BasePricing.InputPricePerToken, 1e-12)
-	require.InDelta(t, 2e-6, resolved.BasePricing.OutputPricePerToken, 1e-12)
-}
-
-func TestResolve_GroupLongContextUsesPresetNotCustomIntervals(t *testing.T) {
-	bs := newTestBillingServiceForResolver()
-	bs.fallbackPrices["claude-sonnet-4"].LongContextInputThreshold = 200000
-	bs.fallbackPrices["claude-sonnet-4"].LongContextThresholdInclusive = true
-	bs.fallbackPrices["claude-sonnet-4"].LongContextInputMultiplier = 2
-	bs.fallbackPrices["claude-sonnet-4"].LongContextOutputMultiplier = 2
-	r := NewModelPricingResolver(nil, bs)
-	group := &Group{ID: 100, ModelPricing: []ChannelModelPricing{{
-		Models: []string{"claude-sonnet-4"}, BillingMode: BillingModeToken,
-		InputPrice: testPtrFloat64(1e-6), OutputPrice: testPtrFloat64(2e-6),
-		Intervals: []PricingInterval{{MinTokens: 0, MaxTokens: testPtrInt(200000), InputPrice: testPtrFloat64(9e-6)}, {MinTokens: 200000, InputPrice: testPtrFloat64(18e-6)}},
-	}}}
-	resolved := r.Resolve(context.Background(), PricingInput{Model: "claude-sonnet-4", Group: group})
-	require.False(t, resolved.longContextPricingEnabled)
-	require.Empty(t, resolved.Intervals)
-	require.InDelta(t, 1e-6, r.GetIntervalPricing(resolved, 300000).InputPricePerToken, 1e-12)
-	group.LongContextPricingEnabled = true
-	resolved = r.Resolve(context.Background(), PricingInput{Model: "claude-sonnet-4", Group: group})
-	require.True(t, resolved.longContextPricingEnabled)
-	require.Empty(t, resolved.Intervals)
-	require.InDelta(t, 2.0, resolved.BasePricing.LongContextInputMultiplier, 1e-12)
-}
-
-func TestCalculateCostUnified_UsesContinuousMediaUnits(t *testing.T) {
-	bs := newTestBillingServiceForResolver()
-	r := NewModelPricingResolver(nil, bs)
-	price := 0.08
-	group := &Group{ModelPricing: []ChannelModelPricing{{Models: []string{"grok-voice-think-fast-2.0"}, BillingMode: BillingModePerRequest, PerRequestPrice: &price}}}
-	cost, err := bs.CalculateCostUnified(CostInput{Ctx: context.Background(), Model: "grok-voice-think-fast-2.0", Group: group, UsageUnits: 1.5, RateMultiplier: 1, Resolver: r})
-	require.NoError(t, err)
-	require.InDelta(t, 0.12, cost.TotalCost, 1e-12)
-}
-
 func TestResolve_NoGroupID(t *testing.T) {
 	bs := newTestBillingServiceForResolver()
 	r := NewModelPricingResolver(&ChannelService{}, bs)
@@ -788,19 +740,50 @@ func TestGPT56ExplicitZeroCacheWritePriceIsPreserved(t *testing.T) {
 	})
 }
 
-func TestApplyTokenOverrides_FlatSetsImageOutputPriceExplicit(t *testing.T) {
-	r := newResolverWithChannel(t, []ChannelModelPricing{{
-		Platform:    PlatformAnthropic,
+// withCatalogImagePrices 给测试基础价补上目录图片价（$8 输入 / $30 输出 per MTok）。
+func withCatalogImagePrices(r *ModelPricingResolver) *ModelPricingResolver {
+	base := r.billingService.fallbackPrices["claude-sonnet-4"]
+	base.ImageInputPricePerToken = 8e-6
+	base.ImageOutputPricePerToken = 30e-6
+	return r
+}
+
+func TestApplyTokenOverrides_FlatUnsetImagePricesInheritCatalog(t *testing.T) {
+	r := withCatalogImagePrices(newResolverWithChannel(t, []ChannelModelPricing{{
+		Platform:    "anthropic",
 		Models:      []string{"claude-sonnet-4"},
 		BillingMode: BillingModeToken,
 		InputPrice:  testPtrFloat64(3e-6),
 		OutputPrice: testPtrFloat64(15e-6),
-	}})
-	resolved := r.Resolve(context.Background(), PricingInput{Model: "claude-sonnet-4", GroupID: groupIDPtr()})
+		// ImageInputPrice / ImageOutputPrice intentionally nil
+	}}))
+	resolved := r.Resolve(context.Background(), PricingInput{
+		Model:   "claude-sonnet-4",
+		GroupID: groupIDPtr(),
+	})
 
 	require.Equal(t, PricingSourceChannel, resolved.Source)
+	require.False(t, resolved.BasePricing.ImageOutputPriceExplicit, "留空不应标记显式")
+	require.InDelta(t, 30e-6, resolved.BasePricing.ImageOutputPricePerToken, 1e-12)
+	require.InDelta(t, 8e-6, resolved.BasePricing.ImageInputPricePerToken, 1e-12)
+}
+
+func TestApplyTokenOverrides_ExplicitZeroImageOutputPriceStaysZero(t *testing.T) {
+	// 渠道显式填 0 仍表示图片输出免费，不回退目录价，也不回退文本输出价。
+	r := withCatalogImagePrices(newResolverWithChannel(t, []ChannelModelPricing{{
+		Platform:         "anthropic",
+		Models:           []string{"claude-sonnet-4"},
+		BillingMode:      BillingModeToken,
+		ImageOutputPrice: testPtrFloat64(0),
+	}}))
+	resolved := r.Resolve(context.Background(), PricingInput{
+		Model:   "claude-sonnet-4",
+		GroupID: groupIDPtr(),
+	})
+
 	require.True(t, resolved.BasePricing.ImageOutputPriceExplicit)
-	require.Zero(t, resolved.BasePricing.ImageOutputPricePerToken)
+	require.Equal(t, 0.0, resolved.BasePricing.ImageOutputPricePerToken)
+	require.InDelta(t, 8e-6, resolved.BasePricing.ImageInputPricePerToken, 1e-12, "图片输入留空仍沿用目录价")
 }
 
 func TestApplyTokenOverrides_FlatWithImageOutputPriceSetsExplicit(t *testing.T) {
@@ -818,25 +801,72 @@ func TestApplyTokenOverrides_FlatWithImageOutputPriceSetsExplicit(t *testing.T) 
 	require.InDelta(t, 50e-6, resolved.BasePricing.ImageOutputPricePerToken, 1e-12)
 }
 
-func TestApplyTokenOverrides_IntervalSetsImageOutputPriceExplicit(t *testing.T) {
-	r := newResolverWithChannel(t, []ChannelModelPricing{{
-		Platform:    PlatformAnthropic,
+func TestApplyTokenOverrides_IntervalUnsetImagePricesInheritCatalog(t *testing.T) {
+	r := withCatalogImagePrices(newResolverWithChannel(t, []ChannelModelPricing{{
+		Platform:    "anthropic",
 		Models:      []string{"claude-sonnet-4"},
 		BillingMode: BillingModeToken,
-		Intervals: []PricingInterval{{
-			MinTokens:   0,
-			MaxTokens:   testPtrInt(100000),
-			InputPrice:  testPtrFloat64(3e-6),
-			OutputPrice: testPtrFloat64(15e-6),
-		}},
-	}})
-	resolved := r.Resolve(context.Background(), PricingInput{Model: "claude-sonnet-4", GroupID: groupIDPtr()})
+		// No ImageInputPrice / ImageOutputPrice
+		Intervals: []PricingInterval{
+			{MinTokens: 0, MaxTokens: testPtrInt(100000), InputPrice: testPtrFloat64(3e-6), OutputPrice: testPtrFloat64(15e-6)},
+		},
+	}}))
+	resolved := r.Resolve(context.Background(), PricingInput{
+		Model:   "claude-sonnet-4",
+		GroupID: groupIDPtr(),
+	})
 
-	require.True(t, resolved.BasePricing.ImageOutputPriceExplicit)
-	require.Zero(t, resolved.BasePricing.ImageOutputPricePerToken)
+	require.False(t, resolved.BasePricing.ImageOutputPriceExplicit)
+	require.InDelta(t, 30e-6, resolved.BasePricing.ImageOutputPricePerToken, 1e-12)
+
+	// 区间命中时同样沿用目录图片价
+	pricing := r.GetIntervalPricing(resolved, 50000)
+	require.False(t, pricing.ImageOutputPriceExplicit)
+	require.InDelta(t, 30e-6, pricing.ImageOutputPricePerToken, 1e-12)
+	require.InDelta(t, 8e-6, pricing.ImageInputPricePerToken, 1e-12)
+}
+
+func TestApplyTokenOverrides_IntervalExplicitImageOutputPrice(t *testing.T) {
+	r := withCatalogImagePrices(newResolverWithChannel(t, []ChannelModelPricing{{
+		Platform:         "anthropic",
+		Models:           []string{"claude-sonnet-4"},
+		BillingMode:      BillingModeToken,
+		ImageOutputPrice: testPtrFloat64(50e-6),
+		Intervals: []PricingInterval{
+			{MinTokens: 0, MaxTokens: testPtrInt(100000), InputPrice: testPtrFloat64(3e-6), OutputPrice: testPtrFloat64(15e-6)},
+		},
+	}}))
+	resolved := r.Resolve(context.Background(), PricingInput{
+		Model:   "claude-sonnet-4",
+		GroupID: groupIDPtr(),
+	})
+
 	pricing := r.GetIntervalPricing(resolved, 50000)
 	require.True(t, pricing.ImageOutputPriceExplicit)
-	require.Zero(t, pricing.ImageOutputPricePerToken)
+	require.InDelta(t, 50e-6, pricing.ImageOutputPricePerToken, 1e-12)
+}
+
+func TestCalculateCostUnified_EmptyChannelEntryBillsCatalogImagePrices(t *testing.T) {
+	// 常见配置：图片模型只建了空价卡（token 模式、价格全留空）。图片输出此前按 0 计费。
+	r := withCatalogImagePrices(newResolverWithChannel(t, []ChannelModelPricing{{
+		Platform:    "anthropic",
+		Models:      []string{"claude-sonnet-4"},
+		BillingMode: BillingModeToken,
+	}}))
+	tokens := UsageTokens{InputTokens: 1000, ImageInputTokens: 600, OutputTokens: 500, ImageOutputTokens: 500}
+	cost, err := r.billingService.CalculateCostUnified(CostInput{
+		Ctx:            context.Background(),
+		Model:          "claude-sonnet-4",
+		GroupID:        groupIDPtr(),
+		Tokens:         tokens,
+		RateMultiplier: 1,
+		Resolver:       r,
+	})
+	require.NoError(t, err)
+	require.InDelta(t, 500*30e-6, cost.ImageOutputCost, 1e-12)
+	require.InDelta(t, 600*8e-6, cost.ImageInputCost, 1e-12)
+	require.InDelta(t, 400*3e-6, cost.InputCost, 1e-12)
+	require.InDelta(t, 0, cost.OutputCost, 1e-12, "输出全部是图片 token")
 }
 
 func TestApplyTokenOverrides_FlatDoesNotPolluteFallbackPrices(t *testing.T) {
@@ -871,9 +901,75 @@ func TestApplyTokenOverrides_IntervalDoesNotPolluteFallbackPrices(t *testing.T) 
 	}})
 	resolved := r.Resolve(context.Background(), PricingInput{Model: "claude-sonnet-4", GroupID: groupIDPtr()})
 
-	require.True(t, resolved.BasePricing.ImageOutputPriceExplicit)
-	fallback := r.billingService.fallbackPrices["claude-sonnet-4"]
-	require.InDelta(t, 3e-6, fallback.InputPricePerToken, 1e-12)
-	require.InDelta(t, 15e-6, fallback.OutputPricePerToken, 1e-12)
-	require.False(t, fallback.ImageOutputPriceExplicit)
+	require.NotNil(t, resolved)
+	require.False(t, resolved.BasePricing.ImageOutputPriceExplicit, "渠道未填图片价，不应标记显式")
+
+	// Global fallbackPrices must NOT be polluted
+	fp := r.billingService.fallbackPrices["claude-sonnet-4"]
+	require.InDelta(t, 3e-6, fp.InputPricePerToken, 1e-12, "fallback InputPricePerToken polluted")
+	require.InDelta(t, 15e-6, fp.OutputPricePerToken, 1e-12, "fallback OutputPricePerToken polluted")
+	require.False(t, fp.ImageOutputPriceExplicit, "fallback ImageOutputPriceExplicit polluted")
+}
+
+func TestResolve_GroupPricingOverridesChannel(t *testing.T) {
+	r := newResolverWithChannel(t, []ChannelModelPricing{{
+		Platform: "anthropic", Models: []string{"claude-sonnet-4"}, BillingMode: BillingModeToken,
+		InputPrice: testPtrFloat64(10e-6), OutputPrice: testPtrFloat64(20e-6),
+	}})
+	group := &Group{ID: 100, ModelPricing: []ChannelModelPricing{{
+		Models: []string{"claude-sonnet-*"}, BillingMode: BillingModeToken,
+		InputPrice: testPtrFloat64(1e-6), OutputPrice: testPtrFloat64(2e-6),
+	}}}
+	resolved := r.Resolve(context.Background(), PricingInput{Model: "claude-sonnet-4", GroupID: groupIDPtr(), Group: group})
+
+	require.Equal(t, PricingSourceGroup, resolved.Source)
+	require.InDelta(t, 1e-6, resolved.BasePricing.InputPricePerToken, 1e-12)
+	require.InDelta(t, 2e-6, resolved.BasePricing.OutputPricePerToken, 1e-12)
+}
+
+func TestResolve_GroupLongContextUsesPresetNotCustomIntervals(t *testing.T) {
+	bs := newTestBillingServiceForResolver()
+	bs.fallbackPrices["claude-sonnet-4"].LongContextInputThreshold = 200000
+	bs.fallbackPrices["claude-sonnet-4"].LongContextThresholdInclusive = true
+	bs.fallbackPrices["claude-sonnet-4"].LongContextInputMultiplier = 2
+	bs.fallbackPrices["claude-sonnet-4"].LongContextOutputMultiplier = 2
+	r := NewModelPricingResolver(nil, bs)
+	group := &Group{ID: 100, ModelPricing: []ChannelModelPricing{{
+		Models: []string{"claude-sonnet-4"}, BillingMode: BillingModeToken,
+		InputPrice: testPtrFloat64(1e-6), OutputPrice: testPtrFloat64(2e-6),
+		Intervals: []PricingInterval{
+			{MinTokens: 0, MaxTokens: testPtrInt(200000), InputPrice: testPtrFloat64(9e-6)},
+			{MinTokens: 200000, InputPrice: testPtrFloat64(18e-6)},
+		},
+	}}}
+
+	resolved := r.Resolve(context.Background(), PricingInput{Model: "claude-sonnet-4", Group: group})
+	require.False(t, resolved.longContextPricingEnabled)
+	require.Empty(t, resolved.Intervals, "group token intervals are not a user-facing long-context ladder")
+	require.InDelta(t, 1e-6, r.GetIntervalPricing(resolved, 300000).InputPricePerToken, 1e-12)
+	require.Equal(t, 200000, resolved.BasePricing.LongContextInputThreshold)
+
+	group.LongContextPricingEnabled = true
+	resolved = r.Resolve(context.Background(), PricingInput{Model: "claude-sonnet-4", Group: group})
+	require.True(t, resolved.longContextPricingEnabled)
+	require.Empty(t, resolved.Intervals)
+	require.InDelta(t, 1e-6, r.GetIntervalPricing(resolved, 300000).InputPricePerToken, 1e-12)
+	require.Equal(t, 200000, resolved.BasePricing.LongContextInputThreshold)
+	require.InDelta(t, 2.0, resolved.BasePricing.LongContextInputMultiplier, 1e-12)
+}
+
+func TestCalculateCostUnified_UsesContinuousMediaUnits(t *testing.T) {
+	bs := newTestBillingServiceForResolver()
+	r := NewModelPricingResolver(nil, bs)
+	price := 0.08
+	group := &Group{ModelPricing: []ChannelModelPricing{{
+		Models: []string{"grok-voice-think-fast-2.0"}, BillingMode: BillingModePerRequest,
+		PerRequestPrice: &price,
+	}}}
+	cost, err := bs.CalculateCostUnified(CostInput{
+		Ctx: context.Background(), Model: "grok-voice-think-fast-2.0", Group: group,
+		UsageUnits: 1.5, RateMultiplier: 1, Resolver: r,
+	})
+	require.NoError(t, err)
+	require.InDelta(t, 0.12, cost.TotalCost, 1e-12)
 }

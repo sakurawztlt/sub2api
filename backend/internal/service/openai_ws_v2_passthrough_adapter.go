@@ -602,9 +602,6 @@ func openAIWSPassthroughIsTerminalOutput(payload []byte) bool {
 	}
 }
 
-var _ openaiwsv2.FrameConn = (*openAIWSClientFrameConn)(nil)
-var _ openaiwsv2.FrameConn = (*openAIWSPassthroughFirstOutputFrameConn)(nil)
-
 func (c *openAIWSClientFrameConn) ReadFrame(ctx context.Context) (coderws.MessageType, []byte, error) {
 	if c == nil || c.conn == nil {
 		return coderws.MessageText, nil, errOpenAIWSConnClosed
@@ -1621,5 +1618,9 @@ func logOpenAIWSV2Passthrough(format string, args ...any) {
 		append([]any{openaiWSV2PassthroughModeFields}, args...)...,
 	)
 }
+
+var _ openaiwsv2.FrameConn = (*openAIWSClientFrameConn)(nil)
+
+var _ openaiwsv2.FrameConn = (*openAIWSPassthroughFirstOutputFrameConn)(nil)
 
 var _ openaiwsv2.FrameConn = (*openAIWSPassthroughFirstOutputFrameConn)(nil)

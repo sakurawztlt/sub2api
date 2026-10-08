@@ -64,7 +64,7 @@ func TestOpenAIGatewayService_APIKeyPassthrough_StripsInvalidInputItemIDs(t *tes
 	require.False(t, gjson.GetBytes(forwarded, "input.9.id").Exists())
 }
 
-func TestOpenAIResponsesInputItemIDPrefixUsesObservedOutputContracts(t *testing.T) {
+func TestOpenAIResponsesInputItemIDPrefixUsesObservedOutputContractsLocalContract(t *testing.T) {
 	tests := []struct {
 		itemType string
 		id       string
@@ -101,7 +101,7 @@ func TestOpenAIResponsesInputItemIDPrefixUsesObservedOutputContracts(t *testing.
 	}
 }
 
-func TestSanitizeOpenAIResponsesInputItemIDsDoesNotCascadeAcrossIDNamespaces(t *testing.T) {
+func TestSanitizeOpenAIResponsesInputItemIDsDoesNotCascadeAcrossIDNamespacesLocalContract(t *testing.T) {
 	body := []byte(`{"input":[
 		{"type":"function_call","id":"item_bad_call","call_id":"call_valid","name":"lookup","arguments":"{}"},
 		{"type":"function_call_output","call_id":"call_valid","output":"preserve paired output"},
@@ -129,7 +129,7 @@ func TestSanitizeOpenAIResponsesInputItemIDsDoesNotCascadeAcrossIDNamespaces(t *
 	require.Equal(t, "ctco_bad_output", items[6].Get("call_id").String())
 }
 
-func TestSanitizeOpenAIResponsesInputItemIDsLeavesUnrelatedReferencesUntouched(t *testing.T) {
+func TestSanitizeOpenAIResponsesInputItemIDsLeavesUnrelatedReferencesUntouchedLocalContract(t *testing.T) {
 	body := []byte(`{"previous_response_id":"resp_1","input":[{"type":"item_reference","id":"remote_item"}]}`)
 
 	sanitized, changed, err := sanitizeOpenAIResponsesInputItemIDs(body)
@@ -139,7 +139,7 @@ func TestSanitizeOpenAIResponsesInputItemIDsLeavesUnrelatedReferencesUntouched(t
 	require.Equal(t, body, sanitized)
 }
 
-func TestSanitizeOpenAIResponsesInputItemIDsPreservesReferenceToDuplicateRetainedID(t *testing.T) {
+func TestSanitizeOpenAIResponsesInputItemIDsPreservesReferenceToDuplicateRetainedIDLocalContract(t *testing.T) {
 	body := []byte(`{"input":[{"type":"function_call","id":"ctc_shared","call_id":"call_1"},{"type":"custom_tool_call","id":"ctc_shared","call_id":"call_2"},{"type":"item_reference","id":"ctc_shared"}]}`)
 
 	sanitized, changed, err := sanitizeOpenAIResponsesInputItemIDs(body)
@@ -151,7 +151,7 @@ func TestSanitizeOpenAIResponsesInputItemIDsPreservesReferenceToDuplicateRetaine
 	require.Equal(t, "ctc_shared", gjson.GetBytes(sanitized, "input.2.id").String())
 }
 
-func TestSanitizeOpenAIResponsesInputItemIDsPreservesOpaqueOutputsAndReferences(t *testing.T) {
+func TestSanitizeOpenAIResponsesInputItemIDsPreservesOpaqueOutputsAndReferencesLocalContract(t *testing.T) {
 	body := []byte(`{"input":[
 		{"type":"function_call","id":"item_shared","call_id":"call_real"},
 		{"type":"function_call_output","id":"item_shared","call_id":"item_shared","output":"dangling"},
@@ -177,7 +177,7 @@ func TestSanitizeOpenAIResponsesInputItemIDsPreservesOpaqueOutputsAndReferences(
 	require.Equal(t, sanitized, second)
 }
 
-func TestSanitizeOpenAIResponsesInputItemIDsStripsEmptyKnownIDsOnly(t *testing.T) {
+func TestSanitizeOpenAIResponsesInputItemIDsStripsEmptyKnownIDsOnlyLocalContract(t *testing.T) {
 	body := []byte(`{"input":[{"type":"message","id":"","content":"hello"},{"type":"future_item","id":""}]}`)
 
 	sanitized, changed, err := sanitizeOpenAIResponsesInputItemIDs(body)
@@ -188,7 +188,7 @@ func TestSanitizeOpenAIResponsesInputItemIDsStripsEmptyKnownIDsOnly(t *testing.T
 	require.True(t, gjson.GetBytes(sanitized, "input.1.id").Exists())
 }
 
-func TestSanitizeOpenAIResponsesInputItemIDsStripsOnlyNonPairCallIDs(t *testing.T) {
+func TestSanitizeOpenAIResponsesInputItemIDsStripsOnlyNonPairCallIDsLocalContract(t *testing.T) {
 	body := []byte(`{"input":[
 		{"type":"message","call_id":"remove_message","content":"hi"},
 		{"type":"reasoning","call_id":"remove_reasoning","id":"rs_keep","encrypted_content":"cipher","summary":[]},

@@ -69,3 +69,13 @@ func TestAuthRoutesRateLimitFailCloseWhenRedisUnavailable(t *testing.T) {
 		require.Contains(t, w.Body.String(), "rate limit exceeded", "path=%s", path)
 	}
 }
+
+func TestAuthRoutesRegistersPublicEmailUnsubscribe(t *testing.T) {
+	router := newAuthRoutesTestRouter(nil)
+	for _, route := range router.Routes() {
+		if route.Method == http.MethodGet && route.Path == "/api/v1/settings/email-unsubscribe" {
+			return
+		}
+	}
+	t.Fatal("signed notification email links must have a public unsubscribe route")
+}

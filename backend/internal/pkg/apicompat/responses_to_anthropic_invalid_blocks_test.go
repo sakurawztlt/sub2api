@@ -111,6 +111,23 @@ func TestResponsesToAnthropic_UnknownItemTypeKeepsRecognizableText(t *testing.T)
 
 // 本地分支会把 input_file 降级为安全文本占位符，而不是丢弃用户已上传文件的语义。
 // 该占位符仍必须满足 Anthropic 可发送约束，且不能透传 Responses 专有 block 类型。
+// data URI 形式的 input_file 要变成 Anthropic document，供后续 Gemini inlineData 使用。
+func TestResponsesToAnthropic_InputFileDataURIBecomesDocument(t *testing.T) {
+	messages := responsesToAnthropicMessages(t, `[
+		{"type":"message","role":"user","content":[
+			{"type":"input_text","text":"read this"},
+			{"type":"input_file","filename":"token.pdf","file_data":"data:application/pdf;base64,JVBERi0="}
+		]}
+	]`)
+
+	requireAnthropicMessagesAreSendable(t, messages)
+	require.Len(t, messages, 1)
+	require.Contains(t, string(messages[0].Content), `"type":"document"`)
+	require.Contains(t, string(messages[0].Content), `"media_type":"application/pdf"`)
+	require.Contains(t, string(messages[0].Content), `"data":"JVBERi0="`)
+}
+
+// 只有 file_id、没有 data URI 的 input_file 仍然无法转换，整条消息丢掉。
 func TestResponsesToAnthropic_UserMessageInputFileKeepsSafePlaceholder(t *testing.T) {
 	messages := responsesToAnthropicMessages(t, `[
 		{"type":"message","role":"user","content":[{"type":"input_file","file_id":"file_1"}]}

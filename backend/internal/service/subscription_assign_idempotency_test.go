@@ -540,3 +540,11 @@ func infraerrorsReason(err error) string {
 func futureSubscriptionStart() time.Time {
 	return time.Now().UTC().AddDate(0, 0, 30).Truncate(time.Second)
 }
+
+func (r userSubRepoNoop) GetByIDForUpdate(ctx context.Context, id int64) (*UserSubscription, error) {
+	return r.GetByID(ctx, id)
+}
+
+func (r *subscriptionUserSubRepoStub) GetByIDForUpdate(ctx context.Context, id int64) (*UserSubscription, error) {
+	return r.GetByID(ctx, id)
+}

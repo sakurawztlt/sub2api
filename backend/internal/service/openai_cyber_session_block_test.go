@@ -170,17 +170,12 @@ func (r *fakeSettingRepo) Delete(_ context.Context, _ string) error {
 	panic("fakeSettingRepo.Delete not implemented")
 }
 
-var _ SettingRepository = (*fakeSettingRepo)(nil)
-
 // comboCacheAndStore implements both GatewayCache (no-op stubs) and
 // CyberSessionBlockStore (delegates to fakeCyberBlockStore) so it can be
 // injected as s.cache and successfully type-asserted to CyberSessionBlockStore.
 type comboCacheAndStore struct {
 	store fakeCyberBlockStore
 }
-
-var _ GatewayCache = (*comboCacheAndStore)(nil)
-var _ CyberSessionBlockStore = (*comboCacheAndStore)(nil)
 
 func (c *comboCacheAndStore) GetSessionAccountID(_ context.Context, _ int64, _ string) (int64, error) {
 	return 0, errors.New("stub")
@@ -330,3 +325,9 @@ func TestCyberSessionScopeKeyNormalizesUserAgentVersion(t *testing.T) {
 	require.NotEqual(t, base, CyberSessionScopeKey(8, "203.0.113.10", "Codex CLI 1.2.3"))
 	require.NotEqual(t, base, CyberSessionScopeKey(7, "203.0.113.11", "Codex CLI 1.2.3"))
 }
+
+var _ SettingRepository = (*fakeSettingRepo)(nil)
+
+var _ GatewayCache = (*comboCacheAndStore)(nil)
+
+var _ CyberSessionBlockStore = (*comboCacheAndStore)(nil)

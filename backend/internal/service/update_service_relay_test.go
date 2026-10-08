@@ -71,3 +71,14 @@ func TestUpdateServiceRelayBuildDisablesGitHubAndSelfUpdate(t *testing.T) {
 		t.Fatalf("relay build update actions should not hit GitHub, fetchCalls=%d", client.fetchCalls)
 	}
 }
+
+func (s *relayGitHubClientStub) FetchRecentReleases(ctx context.Context, repo string, _ int) ([]*GitHubRelease, error) {
+	release, err := s.FetchLatestRelease(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	if release == nil {
+		return nil, nil
+	}
+	return []*GitHubRelease{release}, nil
+}

@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 )
 
 const (
@@ -49,6 +51,9 @@ const multimodalCueText = "Please read/transcribe the attached image(s) / docume
 // Chat Completions intermediary round-trip (e.g. thinking, cache_control,
 // structured system prompts).
 func AnthropicToResponses(req *AnthropicRequest) (*ResponsesRequest, error) {
+	if err := openai.ValidateGPT61SolReasoningEffort(req.Model, anthropicReasoningEffort(req)); err != nil {
+		return nil, err
+	}
 	input, err := convertAnthropicToResponsesInput(req.System, req.Messages)
 	if err != nil {
 		return nil, err
@@ -83,7 +88,7 @@ func AnthropicToResponses(req *AnthropicRequest) (*ResponsesRequest, error) {
 	// Non-reasoning models (gpt-4o etc.) still accept these. Use
 	// isReasoningModel to gate the forward. Both fields are *float64 with
 	// omitempty on the receiving struct, so nil is safely omitted.
-	if !isReasoningModel(req.Model) {
+	if !isReasoningModel(req.Model) || (openai.IsGPT6SolOrLunaModelSpelling(req.Model) && anthropicReasoningEffort(req) == "none") {
 		out.Temperature = req.Temperature
 		out.TopP = req.TopP
 	}
@@ -106,13 +111,10 @@ func AnthropicToResponses(req *AnthropicRequest) (*ResponsesRequest, error) {
 		out.Tools = convertAnthropicToolsToResponses(req.Tools)
 	}
 
-	// Determine reasoning effort: only output_config.effort controls the
-	// level; thinking.type is ignored. Default follows Codex CLI / airgate's
-	// Anthropic bridge shape, which uses medium when unset.
-	// Anthropic levels map 1:1 to OpenAI: low→low, medium→medium, high→high, max→xhigh.
-	effort := "medium"
-	if req.OutputConfig != nil && req.OutputConfig.Effort != "" {
-		effort = req.OutputConfig.Effort
+	// An explicit thinking disable takes precedence over output_config.effort.
+	effort := anthropicReasoningEffort(req)
+	if openai.IsGPT61SolModelSpelling(req.Model) && req.OutputConfig != nil && req.OutputConfig.Effort == "max" && effort != "none" {
+		effort = "max"
 	}
 	// Summary emission: default "auto" (historical behaviour). When the
 	// opt-in env gate is on AND the client did not enable thinking, set
@@ -127,8 +129,11 @@ func AnthropicToResponses(req *AnthropicRequest) (*ResponsesRequest, error) {
 			summary = ""
 		}
 	}
+	if effort == "none" {
+		summary = ""
+	}
 	out.Reasoning = &ResponsesReasoning{
-		Effort:  mapAnthropicEffortToResponses(effort),
+		Effort:  effort,
 		Summary: summary,
 	}
 
@@ -1092,17 +1097,22 @@ func extractAnthropicTextFromBlocks(blocks []AnthropicContentBlock) string {
 	return strings.Join(parts, "\n\n")
 }
 
-// mapAnthropicEffortToResponses converts Anthropic reasoning effort levels to
-// OpenAI Responses API effort levels.
-//
-// Both APIs default to "high". The mapping is 1:1 for shared levels;
-// only Anthropic's "max" (Opus 4.6 exclusive) maps to OpenAI's "xhigh"
-// (GPT-5.2+ exclusive) as both represent the highest reasoning tier.
-//
-//	low    → low
-//	medium → medium
-//	high   → high
-//	max    → xhigh
+// anthropicReasoningEffort resolves the Anthropic request preference for both
+// OpenAI bridges. Explicitly disabled thinking overrides output_config.effort;
+// otherwise the bridge keeps its medium default.
+func anthropicReasoningEffort(req *AnthropicRequest) string {
+	if req.Thinking != nil && req.Thinking.Type == "disabled" {
+		return "none"
+	}
+	effort := "medium"
+	if req.OutputConfig != nil && req.OutputConfig.Effort != "" {
+		effort = req.OutputConfig.Effort
+	}
+	return mapAnthropicEffortToResponses(effort)
+}
+
+// mapAnthropicEffortToResponses maps shared effort levels directly and maps
+// Anthropic's max to OpenAI's xhigh.
 func mapAnthropicEffortToResponses(effort string) string {
 	if effort == "max" {
 		return "xhigh"
@@ -1181,6 +1191,38 @@ func isAnthropicDroppedServerTool(toolType string) bool {
 		return true
 	}
 	return false
+}
+
+// isReasoningModel reports whether model is a reasoning model that does not
+// support sampling parameters (temperature, top_p) via the Responses API.
+// GPT-5 and every later generation are reasoning-only; the Responses API
+// returns "Unsupported parameter: temperature" if these fields are present.
+//
+// Keyed on the generation number instead of a "gpt-5" prefix: pinning the
+// prefix meant each new family (gpt-6-astra and whatever follows) silently
+// fell through to the sampling branch and failed upstream on every compat
+// request until someone edited this line.
+
+// openAIModelGeneration extracts N from a "gpt-N[.M][-suffix]" model id.
+// ok is false for non-GPT ids and for GPT families that carry no numeric
+// generation (gpt-image-1, gpt-audio, ...).
+func openAIModelGeneration(model string) (int, bool) {
+	rest, ok := strings.CutPrefix(strings.ToLower(strings.TrimSpace(model)), "gpt-")
+	if !ok {
+		return 0, false
+	}
+	major, digits := 0, 0
+	for _, r := range rest {
+		if r < '0' || r > '9' {
+			break
+		}
+		major = major*10 + int(r-'0')
+		digits++
+	}
+	if digits == 0 {
+		return 0, false
+	}
+	return major, true
 }
 
 // normalizeToolParameters ensures the tool parameter schema is valid for
@@ -1459,7 +1501,8 @@ func IsReasoningModel(model string) bool {
 		// model id past the first segment is extremely unusual.
 		m = m[idx+1:]
 	}
-	return strings.HasPrefix(m, "gpt-5")
+	major, ok := openAIModelGeneration(m)
+	return (ok && major >= 5) || openai.IsGPT6SolOrLunaModelSpelling(m)
 }
 
 // isReasoningModel is the package-internal alias preserved at converter
