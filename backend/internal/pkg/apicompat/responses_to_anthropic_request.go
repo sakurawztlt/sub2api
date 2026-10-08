@@ -683,12 +683,6 @@ func responsesInputFileToAnthropicBlock(p ResponsesContentPart) AnthropicContent
 	return AnthropicContentBlock{Type: "text", Text: ""}
 }
 
-// dataURIToAnthropicFileSource parses a data URI into a document source.
-// file_id-only parts are not convertible here and stay dropped.
-func dataURIToAnthropicFileSource(fileData string) *AnthropicImageSource {
-	return dataURIToAnthropicImageSource(fileData)
-}
-
 // mergeConsecutiveMessages merges consecutive messages with the same role
 // because Anthropic requires alternating user/assistant turns.
 func mergeConsecutiveMessages(messages []AnthropicMessage) []AnthropicMessage {

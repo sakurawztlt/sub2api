@@ -80,11 +80,15 @@ type Request struct {
 	Protocol   string
 	Model      string
 	Body       []byte
+	// LegacyBody preserves protocol normalization required by the existing
+	// moderation engine while Body remains the full prompt-audit request.
+	LegacyBody []byte
 	Stage      string
 }
 
 func (r Request) Clone() Request {
 	r.Body = append([]byte(nil), r.Body...)
+	r.LegacyBody = append([]byte(nil), r.LegacyBody...)
 	if r.GroupID != nil {
 		id := *r.GroupID
 		r.GroupID = &id

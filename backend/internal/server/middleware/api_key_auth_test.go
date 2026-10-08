@@ -844,6 +844,46 @@ func TestAPIKeyAuthIPRestrictionCanTrustForwardedHeadersWhenConfigured(t *testin
 	require.Equal(t, http.StatusOK, w.Code)
 }
 
+func TestAPIKeyAuthIPRestrictionTracksLiveForwardedSettings(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	user := &service.User{ID: 7, Role: service.RoleUser, Status: service.StatusActive, Balance: 10, Concurrency: 3}
+	apiKey := &service.APIKey{
+		ID: 100, UserID: user.ID, Key: "test-key", Status: service.StatusActive,
+		User: user, IPWhitelist: []string{"1.2.3.4"},
+	}
+	apiKeyRepo := &stubApiKeyRepo{getByKey: func(_ context.Context, key string) (*service.APIKey, error) {
+		if key != apiKey.Key {
+			return nil, service.ErrAPIKeyNotFound
+		}
+		clone := *apiKey
+		return &clone, nil
+	}}
+	cfg := &config.Config{RunMode: config.RunModeSimple}
+	cfg.SetForwardedClientIPSettings(false, []string{"X-Captured-Client-IP"})
+	apiKeyService := service.NewAPIKeyService(apiKeyRepo, nil, nil, nil, nil, nil, cfg)
+	router := gin.New()
+	require.NoError(t, router.SetTrustedProxies(nil))
+	router.Use(SessionBindingContext(cfg), gin.HandlerFunc(NewAPIKeyAuthMiddleware(apiKeyService, nil, cfg)))
+	router.GET("/t", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	for _, enabled := range []bool{false, true, false, true} {
+		cfg.SetTrustForwardedIPForAPIKeyACL(enabled)
+		request := httptest.NewRequest(http.MethodGet, "/t", nil)
+		request.RemoteAddr = "9.9.9.9:12345"
+		request.Header.Set("x-api-key", apiKey.Key)
+		request.Header.Set("X-Captured-Client-IP", "1.2.3.4")
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, request)
+		if enabled {
+			require.Equal(t, http.StatusOK, recorder.Code, "live enable must apply without recreating middleware")
+		} else {
+			require.Equal(t, http.StatusForbidden, recorder.Code, "live disable must reject the spoofable header immediately")
+			require.Contains(t, recorder.Body.String(), "ACCESS_DENIED")
+		}
+		require.False(t, cfg.Security.TrustForwardedIPForAPIKeyACL, "runtime updates intentionally do not mutate the static config field")
+	}
+}
+
 func TestAPIKeyAuthGlobalIPBlocklistRejectsTrustedClientIP(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -1438,4 +1478,6 @@ func (r *stubUserSubscriptionRepo) BatchUpdateExpiredStatus(ctx context.Context)
 	return 0, errors.New("not implemented")
 }
 
-func (r *stubUserSubscriptionRepo) GetByIDForUpdate(ctx context.Context, id int64) (*service.UserSubscription, error) { return r.GetByID(ctx, id) }
+func (r *stubUserSubscriptionRepo) GetByIDForUpdate(ctx context.Context, id int64) (*service.UserSubscription, error) {
+	return r.GetByID(ctx, id)
+}

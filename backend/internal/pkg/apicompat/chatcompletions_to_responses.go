@@ -26,14 +26,6 @@ type chatResponseJSONSchema struct {
 	Strict      *bool           `json:"strict,omitempty"`
 }
 
-type responsesTextFormat struct {
-	Type        string          `json:"type"`
-	Name        string          `json:"name,omitempty"`
-	Description string          `json:"description,omitempty"`
-	Schema      json.RawMessage `json:"schema,omitempty"`
-	Strict      *bool           `json:"strict,omitempty"`
-}
-
 // ChatCompletionsToResponses converts a Chat Completions request into a
 // Responses API request. The upstream always streams, so Stream is forced to
 // true. store is always false and reasoning.encrypted_content is always
@@ -634,34 +626,6 @@ func defaultStrictFalse(src *bool) *bool {
 		return &value
 	}
 	return src
-}
-
-// convertChatToolChoiceToResponses maps a Chat Completions tool_choice to the
-// Responses API shape.
-//
-//	{"type":"function","function":{"name":"X"}} → {"type":"function","name":"X"}
-//
-// Strings ("auto", "none", "required") and objects that already use the
-// Responses shape are returned unchanged.
-func convertChatToolChoiceToResponses(raw json.RawMessage) json.RawMessage {
-	var choice struct {
-		Type     string `json:"type"`
-		Function *struct {
-			Name string `json:"name"`
-		} `json:"function"`
-	}
-	if err := json.Unmarshal(raw, &choice); err != nil || choice.Type != "function" || choice.Function == nil {
-		return raw
-	}
-	name := strings.TrimSpace(choice.Function.Name)
-	if name == "" {
-		return raw
-	}
-	flat, err := json.Marshal(map[string]string{"type": "function", "name": name})
-	if err != nil {
-		return raw
-	}
-	return flat
 }
 
 // convertChatFunctionCallToToolChoice maps the legacy function_call field to a

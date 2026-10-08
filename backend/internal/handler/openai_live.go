@@ -71,6 +71,7 @@ func (h *OpenAIGatewayHandler) Live(c *gin.Context) {
 		service.ContentModerationProtocolOpenAIResponses,
 		model,
 		request.Session,
+		liveModerationBody(request.Session),
 	); decision != nil && !decision.AllowNextStage {
 		h.openAISecurityAuditError(c, decision)
 		return

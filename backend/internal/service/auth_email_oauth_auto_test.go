@@ -60,7 +60,7 @@ func TestEmailOAuthAuto_SnapshotsPlatformQuotaDefaults(t *testing.T) {
 		quotaRepo,
 	)
 
-	user, err := svc.createEmailOAuthUser(
+	user, created, err := svc.createEmailOAuthUserWithCreationResult(
 		context.Background(),
 		"newoauth@example.com",
 		"newoauth",
@@ -71,6 +71,7 @@ func TestEmailOAuthAuto_SnapshotsPlatformQuotaDefaults(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, user)
 	require.Equal(t, int64(88), user.ID)
+	require.True(t, created)
 
 	require.Len(t, quotaRepo.bulkInsertCalls, 1, "createEmailOAuthUser must snapshot platform quotas via BulkInsertInitial")
 
@@ -97,7 +98,7 @@ func TestEmailOAuthAuto_AliasDuplicateRejected(t *testing.T) {
 		nil,
 	)
 
-	user, err := svc.createEmailOAuthUser(
+	user, created, err := svc.createEmailOAuthUserWithCreationResult(
 		context.Background(),
 		"some.one+oauth@gmail.com",
 		"newoauth",
@@ -107,6 +108,7 @@ func TestEmailOAuthAuto_AliasDuplicateRejected(t *testing.T) {
 	)
 
 	require.Nil(t, user)
+	require.False(t, created)
 	require.ErrorIs(t, err, ErrEmailExists)
 	require.Empty(t, userRepo.created)
 	require.Zero(t, userRepo.guardedCreates)
@@ -120,7 +122,7 @@ func TestEmailOAuthAuto_AliasConflictDuringCreateIsNotTreatedAsLogin(t *testing.
 		nil,
 	)
 
-	user, err := svc.createEmailOAuthUser(
+	user, created, err := svc.createEmailOAuthUserWithCreationResult(
 		context.Background(),
 		"some.one+oauth@gmail.com",
 		"newoauth",
@@ -130,6 +132,7 @@ func TestEmailOAuthAuto_AliasConflictDuringCreateIsNotTreatedAsLogin(t *testing.
 	)
 
 	require.Nil(t, user)
+	require.False(t, created)
 	require.ErrorIs(t, err, ErrEmailExists)
 	require.Equal(t, 1, userRepo.guardedCreates)
 }

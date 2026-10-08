@@ -2596,6 +2596,11 @@ func (s *OpenAIGatewayService) recoverOpenAIRateLimitedAccountBeforeNoAvailable(
 	if s == nil || s.accountRepo == nil {
 		return nil
 	}
+	// Compatible-provider images require an API-key account; a non-exhausted
+	// Codex snapshot cannot establish provider image quota or native eligibility.
+	if OpenAIImagesEndpointFromContext(ctx) && isGeminiCompatibleImageModel(requestedModel) {
+		return nil
+	}
 
 	accounts, err := s.listOpenAIAccountsForRateLimitRecovery(ctx, groupID)
 	if err != nil {
@@ -14097,6 +14102,20 @@ func (s *OpenAIGatewayService) selectAccountForModelWithExclusionsStickyHit(ctx 
 	selected, compactBlocked, filterStats := s.selectBestAccount(ctx, groupID, platform, accounts, requestedModel, excludedIDs, requireCompact, requiredCapability, preferLowUpstreamRate)
 
 	if selected == nil {
+		if platform == PlatformOpenAI {
+			if recovered := s.recoverOpenAIRateLimitedAccountBeforeNoAvailable(ctx, groupID, requestedModel, excludedIDs, requireCompact, requiredCapability); recovered != nil {
+				// Recovery returns the fresh DB account after clearing its persisted
+				// rate limit. Recheck all current admission guards without hydrating
+				// an older scheduler snapshot that still carries the cleared limit.
+				recovered = s.recheckSelectedOpenAIAccountFromDB(ctx, recovered, groupID, platform, requestedModel, requireCompact, requiredCapability)
+				if recovered != nil && s.openAIAccountMatchesSchedulingGroup(recovered, groupID) && !s.isOpenAIAccountRequestRuntimeBlocked(recovered, requestedModel) {
+					if sessionHash != "" && !gatewayProfitControlGateActive(ctx) {
+						_ = s.setStickySessionAccountID(ctx, groupID, sessionHash, recovered.ID, openaiStickySessionTTL)
+					}
+					return recovered, false, nil
+				}
+			}
+		}
 		return nil, false, noAvailableOpenAISelectionError(requestedModel, compactBlocked, filterStats.summary(""))
 	}
 

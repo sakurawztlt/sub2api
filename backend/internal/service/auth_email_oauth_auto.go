@@ -147,11 +147,6 @@ func (s *AuthService) loginOrRegisterVerifiedEmailOAuth(
 	return tokenPair, user, nil
 }
 
-func (s *AuthService) createEmailOAuthUser(ctx context.Context, email, username, providerType, invitationCode, affiliateCode string) (*User, error) {
-	user, _, err := s.createEmailOAuthUserWithCreationResult(ctx, email, username, providerType, invitationCode, affiliateCode)
-	return user, err
-}
-
 func (s *AuthService) createEmailOAuthUserWithCreationResult(ctx context.Context, email, username, providerType, invitationCode, affiliateCode string) (*User, bool, error) {
 	if s.settingService == nil || !s.settingService.IsRegistrationEnabled(ctx) {
 		return nil, false, ErrRegDisabled

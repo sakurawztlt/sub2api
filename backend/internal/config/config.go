@@ -624,7 +624,6 @@ type SecurityConfig struct {
 	APIRequestIPBlocklist               []string                                   `mapstructure:"api_request_ip_blocklist"`
 	APIRequestIPBlockAction             string                                     `mapstructure:"api_request_ip_block_action"`
 	APIRequestIPBlockTrustForwardedIP   bool                                       `mapstructure:"api_request_ip_block_trust_forwarded_ip"`
-	trustForwardedIPForAPIKeyACLLive    *atomic.Bool                               `mapstructure:"-"`
 	apiRequestIPBlockRulesLive          atomic.Value                               `mapstructure:"-"`
 	apiRequestIPBlockActionLive         atomic.Value                               `mapstructure:"-"`
 	apiRequestIPBlockTrustForwardedLive *atomic.Bool                               `mapstructure:"-"`

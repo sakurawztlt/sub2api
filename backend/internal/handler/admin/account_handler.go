@@ -454,15 +454,6 @@ func (h *AccountHandler) buildAccountResponseWithRuntime(ctx context.Context, ac
 	return item
 }
 
-func (h *AccountHandler) resolveOllamaCloudUsageAccounts(ctx context.Context, accounts []*service.Account) {
-	if h == nil || h.ollamaCloudUsage == nil || len(accounts) == 0 {
-		return
-	}
-	if err := h.ollamaCloudUsage.ResolveAccounts(ctx, accounts); err != nil {
-		slog.Warn("resolve ollama cloud usage accounts failed", "error", err)
-	}
-}
-
 // scoreOpenAIAccountSchedulerPool 对池内 OpenAI 账号计算调度分数快照。
 // loadMap 为共享的账号负载数据（含池内全部账号即可，多余条目无害）；传 nil 时自行批查。
 func (h *AccountHandler) scoreOpenAIAccountSchedulerPool(ctx context.Context, accounts []service.Account, loadMap map[int64]*service.AccountLoadInfo) map[int64]AccountSchedulerScore {

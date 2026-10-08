@@ -1200,10 +1200,7 @@ func resToAnthEmitText(text string, part responsesTextPart, state *ResponsesEven
 	state.textDelivered = true
 
 	idx := state.ContentBlockIndex
-	partKey := responsesTextPartKey{
-		OutputIndex:  part.OutputIndex,
-		ContentIndex: part.ContentIndex,
-	}
+	partKey := responsesTextPartKey(part)
 	if !state.citationTrackingDisabled {
 		if state.outputTextByPart == nil {
 			state.outputTextByPart = make(map[responsesTextPartKey]*strings.Builder)

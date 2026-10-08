@@ -158,12 +158,3 @@ func (s *openAIAccountModelTransientState) evictOldestLocked() {
 		delete(s.entries, oldestKey)
 	}
 }
-
-func (s *openAIAccountModelTransientState) size() int {
-	if s == nil {
-		return 0
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.entries)
-}

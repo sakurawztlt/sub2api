@@ -128,3 +128,9 @@ func TestNotificationRuntimeOpsAlertTemplateRetainsSilencingAndDeduplication(t *
 	require.Contains(t, smtp.messageBodies()[0], "rule-canary")
 	require.Equal(t, []int64{91, 91}, opsRepo.marked)
 }
+
+func (s *notificationEmailTestSMTPServer) messageBodies() []string {
+	s.bodiesMu.Lock()
+	defer s.bodiesMu.Unlock()
+	return append([]string(nil), s.bodies...)
+}
